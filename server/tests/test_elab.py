@@ -152,6 +152,19 @@ def test_a_message_quoting_latin1_text_keeps_the_other_diagnostics(tmp_path):
     assert found[(4, "UndeclaredIdentifier")] == "use of undeclared identifier 'x'"
 
 
+def test_driver_and_assertion_checks_from_the_analysis_pass(tmp_path):
+    # slang runs these after elaboration, in its analysis pass; simulators reject them too.
+    (tmp_path / "top.sv").write_text("module top(input logic b);\n  logic a, c;\n  assign a = b;\n"
+                                     "  initial a = 0;\n  assign c = b;\n  assign c = ~b;\n"
+                                     "  assert property (b |=> c);\nendmodule\n")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    r = elaborate(request_for(w))
+    assert [(d["line"], d["code"], d["severity"]) for d in r["diagnostics"]] == \
+        [(3, "MixedVarAssigns", "error"), (5, "MultipleContAssigns", "error"), (6, "AssertionNoClock", "error")]
+    assert [(n["line"], n["message"]) for n in r["diagnostics"][0]["related"]] == [(2, "also assigned here")]
+
+
 def test_library_diagnostics_are_never_reported(bundled_ws):
     uvm_driver = os.path.join(BUNDLED_UVM, "comps", "uvm_driver.svh")
     text = edited(uvm_driver, "endclass", "  function void broken(); undefined_thing = 1; endfunction\nendclass")

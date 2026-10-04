@@ -19,7 +19,7 @@ import time
 from collections import Counter
 
 import pyslang as ps
-from pyslang import ast, driver
+from pyslang import analysis, ast, driver
 from pyslang import syntax as S
 
 from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro, slang_text
@@ -279,7 +279,14 @@ def _elaborate(req: dict) -> dict:
         comp = ast.Compilation(d.createOptionBag())
         for tree in trees:
             comp.addSyntaxTree(tree)
-    diags = comp.getAllDiagnostics()
+    diags = list(comp.getAllDiagnostics())
+    # Driver and assertion checks (multiple drivers, mixed assignments, ...) come from slang's
+    # analysis pass, which its driver runs on the frozen compilation after elaboration.
+    comp.freeze()
+    am = analysis.AnalysisManager(d.analysisOptions)
+    am.analyze(comp)
+    comp.unfreeze()
+    diags += am.getDiagnostics()
     eng = d.diagEngine
     notes = _Notes(eng, loc)
     out = [_diag(r, "error", "io", "cannot read file") for r in missing]
