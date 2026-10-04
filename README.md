@@ -80,10 +80,10 @@ On this machine (WSL2, Python 3.14, pyslang 12):
 | Workload | Time |
 |---|---|
 | Bundled Accellera UVM 1.2 (142 files, 75k lines, 323 classes): parse + index | 0.24 s |
-| ALU example (19 classes), full index: bundled UVM 1.2 / built-in model | 0.30 s / 0.013 s |
-| ALU example, re-index after editing one file: bundled UVM 1.2 / built-in model | 0.019 s / 0.004 s |
-| Synthetic project: 2,400 files, 2,002 classes, plus the bundled UVM 1.2 | 3.4 s full index |
-| Same project, re-index after editing one file | 0.05 s |
+| ALU example (19 classes), full index: bundled UVM 1.2 / built-in model | 0.27 s / 0.013 s |
+| ALU example, re-index after editing one file: bundled UVM 1.2 / built-in model | 0.014 s / 0.004 s |
+| Synthetic project: 2,400 files, 2,002 classes, full index: bundled UVM 1.2 / built-in model | 2.6 s / 1.6 s |
+| Same project, re-index after editing one file: bundled UVM 1.2 / built-in model | 0.018 s / 0.011 s |
 | Same project, class graph / topology (800 instances) | 0.07 s / 0.02 s |
 | Webview first render, same project (package overview) | 1.1 s; drill-down 0.2 s; all 2,000 classes in one diagram 11 s |
 | Elaboration, ALU example with the bundled UVM 1.2: compile + elaborate / through the server's worker process / `elab -f` CLI | 0.09 s / 0.16 s / 0.17 s |
@@ -118,7 +118,7 @@ Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this pr
 - References are name-based (all identifier occurrences), not type-resolved.
 - Code inside inactive `` `ifdef `` branches is not indexed. Defines come from the filelist and `uvm.defines`.
 - The bundled library is UVM 1.2. A project on UVM 1.1d or IEEE 1800.2 should set `uvm.uvmHome` (or `$UVM_HOME`) or list its own `uvm_pkg.sv` in the filelist; otherwise navigation and the class graph show the 1.2 declarations.
-- Every full re-index (startup, a settings change, a file created or deleted) parses the UVM library again: about 0.25 s.
+- Every full re-index (startup, a settings change, a file created or deleted) parses the UVM library again (about 0.25 s), and every root that includes `uvm_macros.svh` preprocesses the real macro headers: on the synthetic project a full index takes 2.6 s with the bundled UVM against 1.6 s with the built-in model.
 - With `uvm.useBundledUvm` off, the built-in model knows only the common UVM base classes and a few of their members, has no UVM sources to navigate into, and cannot be elaborated.
 - Elaboration gets the same files, include directories and defines as the index, plus the filelist's `-timescale`. Other options, such as `-y`/`+libext+` library directories or a simulator's compatibility switches, are not passed to slang, which is also stricter than most simulators about non-standard code. A design that depends on them can show errors its simulator would not.
 - Elaboration is skipped in discovery mode when a module, interface or program, or a package, would be defined more than once: in several files, or in one file that several roots include (usually several testbenches in one workspace); set `uvm.filelists`. Discovery leaves out of the compile any `.svh`/`.vh` header that nothing includes and that holds no module, interface, program or package (an old copy, a template). A file that exists only in an unsaved editor cannot be a compilation root.

@@ -164,3 +164,38 @@ def test_type_parameter_bases_are_followed(tmp_path, monkeypatch):
     (tmp_path / "t.sv").write_text("class m #(type B = uvm_sequence_item) extends B;\nendclass\n")
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
     assert w.role(w.find_class("m")) == "item" and not lint(w)
+
+
+def test_user_roots_do_not_repeat_the_library_macros(bundled_ws):
+    # The library's root records the UVM macros once; user roots that include them do not again.
+    assert not [m for idx in bundled_ws.indices.values() if not idx.library
+                for m in idx.macros if m.range.path in bundled_ws.library_files]
+    assert len(bundled_ws.macros_by_name["uvm_info"]) == 1
+
+
+def test_a_configured_uvm_is_not_rescanned_either(tmp_path):
+    src = tmp_path / "uvm" / "src"
+    (src / "macros").mkdir(parents=True)
+    (src / "uvm_pkg.sv").write_text('`include "uvm_macros.svh"\npackage uvm_pkg;\nendpackage\n')
+    (src / "uvm_macros.svh").write_text('`include "macros/m.svh"\n')
+    (src / "macros" / "m.svh").write_text("`define uvm_info(ID, MSG, VERB) $display(MSG);\n")
+    tb = tmp_path / "tb"
+    tb.mkdir()
+    for i in range(3):
+        (tb / f"p{i}.sv").write_text(f'`include "uvm_macros.svh"\npackage p{i};\nendpackage\n')
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tb)], uvm_home=str(tmp_path / "uvm")))
+    assert w.sources.uvm_source == "configured"
+    macros = [m for idx in w.indices.values() for m in idx.macros]
+    assert [(m.name, m.range.line) for m in macros] == [("uvm_info", 0)]
+
+
+def test_macro_definitions_point_at_their_define(bundled_ws):
+    lines = {}
+    for name, defs in bundled_ws.macros_by_name.items():
+        for m in defs:
+            if m.range.path not in lines:
+                with open(m.range.path, encoding="utf-8", errors="replace") as f:
+                    lines[m.range.path] = f.read().split("\n")
+            text = lines[m.range.path][m.range.line]
+            assert text[m.range.col:].startswith(name) and "`define" in text[:m.range.col], (m, text)

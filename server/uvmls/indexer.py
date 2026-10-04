@@ -261,10 +261,12 @@ class Sink:
 
 
 class Indexer:
-    def __init__(self, include_dirs: list[str], defines: dict[str, str], use_shim: bool):
+    def __init__(self, include_dirs: list[str], defines: dict[str, str], use_shim: bool,
+                 library_dirs=()):
         self.include_dirs = list(include_dirs)
         self.defines = dict(defines)
         self.use_shim = use_shim
+        self.library_dirs = tuple(os.path.join(d, "") for d in library_dirs)
         self._shim = _shim_text() if use_shim else ""
         self._real_macros = not use_shim and any(
             os.path.isfile(os.path.join(d, "uvm_macros.svh")) for d in self.include_dirs)
@@ -301,16 +303,18 @@ class Indexer:
             # the compilation unit, or -uvm), so predefine the real ones, as the shim would be.
             prelude = sm.assignText(UVM_MACROS_PRELUDE, '`include "uvm_macros.svh"\n')
             tree = S.SyntaxTree.fromBuffers([prelude] + buffers, sm, bag)
-        return Extractor(tree, sm, root, library, overrides).run()
+        return Extractor(tree, sm, root, library, overrides, self.library_dirs).run()
 
 
 class Extractor:
-    def __init__(self, tree, sm, root: str, library: bool, overrides: dict[str, str]):
+    def __init__(self, tree, sm, root: str, library: bool, overrides: dict[str, str],
+                 library_dirs: tuple[str, ...] = ()):
         self.tree = tree
         self.sm = sm
         self.root = root
         self.library = library
         self.overrides = overrides
+        self.library_dirs = library_dirs
         self.out = FileIndex(root=root, library=library)
         self._paths: dict[int, str | None] = {}
 
@@ -987,6 +991,8 @@ class Extractor:
 
     def collect_macros(self):
         for path in sorted(self.out.files):
+            if not self.library and path != self.root and path.startswith(self.library_dirs):
+                continue  # the library's own root records those
             text = self.overrides.get(path)
             if text is None:
                 try:
@@ -994,8 +1000,10 @@ class Extractor:
                         text = f.read()
                 except OSError:
                     continue
+            line, pos = 0, 0
             for m in DEFINE_RE.finditer(text):
-                line = text.count("\n", 0, m.start())
+                line += text.count("\n", pos, m.start())
+                pos = m.start()
                 col = m.start(1) - (text.rfind("\n", 0, m.start(1)) + 1)
                 self.out.macros.append(MacroDef(
                     m.group(1), m.group(2)[1:-1] if m.group(2) else None,
