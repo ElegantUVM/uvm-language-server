@@ -316,3 +316,21 @@ def test_a_newer_run_supersedes_an_older_one(client):
     # The first run is killed and reports nothing; both requests get the second run's status.
     done = [m["params"] for m in client.notifications if m["method"] == "uvm/elaborationStatus" and finished(m)]
     assert len(done) == 1 and results[ids[0]] == results[ids[1]] == done[0]
+
+
+def test_an_edit_does_not_resend_unchanged_diagnostics(client):
+    u = uri("agent/alu_driver.svh")
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+        text = f.read()
+    client.forget("textDocument/publishDiagnostics", "uvm/indexChanged")
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                             "contentChanges": [{"text": text + "// edited\n"}]})
+    client.wait_for("uvm/indexChanged")  # sent after the flush's diagnostics, if any
+    sent = [m["params"]["uri"] for m in client.notifications if m["method"] == "textDocument/publishDiagnostics"]
+    assert sent == []  # alu_monitor.svh's one warning has not changed
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 3},
+                                             "contentChanges": [{"text": text}]})
+    client.wait_for("uvm/indexChanged")  # closed unchanged: no elaboration either
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})

@@ -83,7 +83,7 @@ class UvmLanguageServer(LanguageServer):
         self.nav = Navigator(self.ws)
         self.settings: dict = {}
         self.workspace_roots: list[str] = []
-        self.published: set[str] = set()
+        self.published: dict[str, list[Diag]] = {}  # what the client was last sent, per file
         self.pending: set[str] = set()
         self._debounce: asyncio.TimerHandle | None = None
         self.elab_diags: dict[str, list[Diag]] = {}
@@ -153,12 +153,13 @@ class UvmLanguageServer(LanguageServer):
                      and (d.range.line, d.code) not in known]
             if extra:
                 per_file.setdefault(path, []).extend(extra)
-        for path in self.published - set(per_file):
+        for path in self.published.keys() - per_file.keys():
             self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), []))
         for path, diags in per_file.items():
-            items = [lsp_diagnostic(d) for d in diags]
-            self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), items))
-        self.published = set(per_file)
+            if self.published.get(path, []) != diags:  # files whose diagnostics did not change are not sent
+                items = [lsp_diagnostic(d) for d in diags]
+                self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), items))
+        self.published = per_file
 
     # -- elaboration -----------------------------------------------------------
 
