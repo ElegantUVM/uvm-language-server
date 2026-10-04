@@ -118,6 +118,7 @@ class UvmLanguageServer(LanguageServer):
         self.elab_status: dict = {"state": "off"}
         self._elab_run = 0  # bumped by every start or stop; older runs discard their results
         self._elab_task: asyncio.Future | None = None
+        self._elab_waiters: list[asyncio.Future] = []  # Elaborate Now requests waiting for a result
         self._elab_proc: asyncio.subprocess.Process | None = None
         self._elab_timer: asyncio.TimerHandle | None = None
 
@@ -291,6 +292,11 @@ class UvmLanguageServer(LanguageServer):
                             "warnings": status.get("warnings", 0), "seconds": status.get("seconds", 0),
                             "message": status.get("message", ""), "uvm": status.get("uvm", "")}
         self.protocol.notify("uvm/elaborationStatus", self.elab_status)
+        if self.elab_status["state"] != "running":
+            waiters, self._elab_waiters = self._elab_waiters, []
+            for w in waiters:
+                if not w.done():  # a cancelled request
+                    w.set_result(self.elab_status)
 
     def elab_overrides(self) -> dict[str, str]:
         """Unsaved editor text the compile uses instead of the files on disk."""
@@ -301,7 +307,11 @@ class UvmLanguageServer(LanguageServer):
         """One run in a worker process; None if a newer run or a stop superseded it."""
         try:
             return await self._elaborate(run)
-        except Exception as e:  # never leave the client showing "running"
+        except asyncio.CancelledError:
+            if run == self._elab_run:  # never leave the client showing "running"
+                self.notify_elaboration({"state": "failed", "message": "stopped"})
+            raise
+        except Exception as e:
             log.exception("elaboration")
             if run != self._elab_run:
                 return None
@@ -477,6 +487,7 @@ def did_open(ls: UvmLanguageServer, params: T.DidOpenTextDocumentParams):
 def did_change(ls: UvmLanguageServer, params: T.DidChangeTextDocumentParams):
     ls.schedule(uri_to_path(params.text_document.uri))
     if ls.elab_mode == "onChange":
+        ls.stop_elaboration()  # a run in progress compiles older text
         ls.schedule_elaboration(ELAB_CHANGE_DELAY)
 
 
@@ -745,13 +756,13 @@ async def uvm_reindex(ls: UvmLanguageServer, params):
 
 @server.feature("uvm/elaborate")
 async def uvm_elaborate(ls: UvmLanguageServer, params):
-    """Elaborate now, whatever the setting; returns the status once the latest run is done."""
-    task = ls.start_elaboration()
-    status = await task
-    while status is None and ls._elab_task is not task:  # superseded: wait for the newer run
-        task = ls._elab_task
-        status = await task
-    return status or ls.elab_status
+    """Elaborate now, whatever the setting; returns the status of the run that ends next: this one,
+    or whichever superseded it (another request, an edit in onChange mode). Cancelling the request
+    stops only the wait, never a run that a save or another request is waiting on."""
+    waiter = asyncio.get_running_loop().create_future()
+    ls._elab_waiters.append(waiter)
+    ls.start_elaboration()
+    return await waiter
 
 
 def main(argv=None):

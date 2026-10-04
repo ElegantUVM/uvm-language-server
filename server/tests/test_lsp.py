@@ -531,3 +531,89 @@ def test_elaboration_off_results_do_not_outlive_a_fix(client):
     client.notify("workspace/didChangeConfiguration",
                   {"settings": {"uvm": {"filelists": [FILELIST], "elaboration": "onSave"}}})
     assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+
+
+def on_change(client, mode="onChange"):
+    client.notify("workspace/didChangeConfiguration",
+                  {"settings": {"uvm": {"filelists": [FILELIST], "elaboration": mode}}})
+
+
+def test_an_edit_in_on_change_mode_supersedes_a_run_in_progress(client):
+    u = uri("agent/alu_driver.svh")
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+        text = f.read()
+    v2 = text.replace("m_cfg.vif", "m_cfg.vfi")
+    line = v2[:v2.index("m_cfg.vfi")].count("\n")
+    on_change(client)
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
+    client.forget("uvm/elaborationStatus", "textDocument/publishDiagnostics")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                             "contentChanges": [{"text": v2}]})
+    client.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "running")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 3},
+                                             "contentChanges": [{"text": "//\n//\n//\n" + v2}]})
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 1
+    time.sleep(1.5)
+    client.request("uvm/stats", {})  # collects whatever else the server sent
+    # The run on the older text was stopped: one result, for the text the editor has.
+    assert not [m for m in client.notifications if m["method"] == "uvm/elaborationStatus" and finished(m)]
+    *_, msg = [m for m in client.notifications
+               if m["method"] == "textDocument/publishDiagnostics" and m["params"]["uri"] == u]
+    assert [d["range"]["start"]["line"] for d in elab_diags(msg)] == [line + 3]
+    client.forget("uvm/elaborationStatus")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 4},
+                                             "contentChanges": [{"text": text}]})
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+    on_change(client, "onSave")
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+
+
+def test_elaborate_now_answers_with_the_run_that_superseded_it(client):
+    u = uri("agent/alu_driver.svh")
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+        text = f.read()
+    on_change(client)
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
+    client.forget("uvm/elaborationStatus")
+    client.next_id += 1
+    rid = client.next_id
+    client.send({"jsonrpc": "2.0", "id": rid, "method": "uvm/elaborate", "params": {}})
+    client.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "running")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                             "contentChanges": [{"text": text.replace("m_cfg.vif", "m_cfg.vfi")}]})
+    while True:
+        msg = client.read()
+        if msg.get("id") == rid:
+            break
+        if "method" in msg:
+            client.notifications.append(msg)
+    assert (msg["result"]["state"], msg["result"]["errors"]) == ("done", 1)
+    client.forget("uvm/elaborationStatus")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 3},
+                                             "contentChanges": [{"text": text}]})
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+    on_change(client, "onSave")
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+
+
+def test_cancelling_elaborate_does_not_stop_a_run_others_wait_on(client):
+    client.forget("uvm/elaborationStatus")
+    ids = []
+    for _ in range(2):  # the second supersedes the first, so both wait on the second run
+        client.next_id += 1
+        ids.append(client.next_id)
+        client.send({"jsonrpc": "2.0", "id": client.next_id, "method": "uvm/elaborate", "params": {}})
+    for _ in range(2):
+        client.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "running")
+    client.notify("$/cancelRequest", {"id": ids[0]})
+    results = {}
+    while len(results) < 2:
+        msg = client.read()
+        if msg.get("id") in ids and "method" not in msg:
+            results[msg["id"]] = msg
+        elif "method" in msg:
+            client.notifications.append(msg)
+    assert "error" not in results[ids[1]], results[ids[1]]
+    assert results[ids[1]]["result"]["state"] == "done"
