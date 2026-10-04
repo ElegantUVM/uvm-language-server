@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import time
+from collections import Counter
 
 import pyslang as ps
 from pyslang import ast, driver
@@ -55,14 +56,20 @@ def skip_reason(ws) -> str | None:
                 "or set uvm.uvmHome (CLI: drop --no-bundled-uvm or pass --uvm-home)")
     if s.mode == "discovery":
         roots = set(s.roots)  # not files merely open in the editor
-        compiled = set().union(*(idx.files for r, idx in ws.indices.items() if r in roots))
+        # How many roots compile each file: one that two tops include is compiled twice.
+        compiled = Counter(f for r, idx in ws.indices.items() if r in roots for f in idx.files)
+
+        def files(units, packages: bool) -> set[str]:  # packages have a name space of their own
+            return {u.range.path for u in units
+                    if u.range.path in compiled and (u.kind == "package") == packages}
         dups = sorted(name for name, units in ws.units_by_name.items()
-                      if len({u.range.path for u in units if u.range.path in compiled}) > 1)
+                      if len(files(units, False)) > 1 or len(files(units, True)) > 1
+                      or any(compiled[u.range.path] > 1 and u.range.path not in ws.library_files
+                             for u in units))
         if dups:
             names = ", ".join(dups[:3]) + (f" and {len(dups) - 3} more" if len(dups) > 3 else "")
-            return (f"{names} {'is' if len(dups) == 1 else 'are'} defined in more than one file, as "
-                    "when a workspace holds several testbenches; list the files to compile in "
-                    "uvm.filelists (CLI: -f)")
+            return (f"{names} would be defined more than once, as when a workspace holds several "
+                    "testbenches; list the files to compile in uvm.filelists (CLI: -f)")
     return None
 
 

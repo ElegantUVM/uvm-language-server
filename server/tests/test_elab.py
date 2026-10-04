@@ -207,7 +207,7 @@ def test_skip_reasons(ws, bundled_ws, tmp_path):
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     reason = skip_reason(w)
-    assert "alu, alu_env_pkg, alu_if and 4 more are defined in more than one file" in reason
+    assert "alu, alu_env_pkg, alu_if and 4 more would be defined more than once" in reason
     assert "uvm.filelists" in reason
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb_a" / "alu_tb.f")]))
     assert skip_reason(w) is None
@@ -215,6 +215,41 @@ def test_skip_reasons(ws, bundled_ws, tmp_path):
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path / "tb_a")]))
     w.update_document(str(tmp_path / "elsewhere.sv"), "module tb_top; endmodule\n")
     assert len(w.units_by_name["tb_top"]) == 2 and skip_reason(w) is None
+
+
+def test_a_package_and_a_module_may_share_a_name(tmp_path):
+    (tmp_path / "uart_pkg.sv").write_text("package uart; typedef logic [7:0] byte_t; endpackage\n")
+    (tmp_path / "uart.sv").write_text("module uart(input logic clk); uart::byte_t data; endmodule\n"
+                                      "module top; logic clk; uart u(.clk(clk)); endmodule\n")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    assert skip_reason(w) is None
+    assert errors(elaborate(request_for(w))) == []
+    # An interface shares the module's name space: that is a real clash.
+    (tmp_path / "uart_if.sv").write_text("interface uart; endinterface\n")
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    assert "uart would be defined more than once" in skip_reason(w)
+
+
+def test_skip_reason_for_a_file_included_by_two_tops(tmp_path):
+    # One clk_gen in the index, but discovery compiles it once for each top that includes it.
+    (tmp_path / "common").mkdir()
+    (tmp_path / "common" / "clk_gen.sv").write_text("module clk_gen; endmodule\n")
+    for name in ("tb_a", "tb_b"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / f"{name}.sv").write_text(f'`include "clk_gen.sv"\nmodule {name}; clk_gen u(); endmodule\n')
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    assert len(w.units_by_name["clk_gen"]) == 1
+    assert skip_reason(w).startswith("clk_gen would be defined more than once")
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], exclude=["**/tb_b/**"]))
+    assert skip_reason(w) is None and errors(elaborate(request_for(w))) == []
+    # A top that includes the UVM package itself reaches it from its own root and the library's.
+    (tmp_path / "uvm_tb").mkdir()
+    (tmp_path / "uvm_tb" / "tb.sv").write_text('`include "uvm_macros.svh"\n`include "uvm_pkg.sv"\n'
+                                              "module tb_top; import uvm_pkg::*; initial run_test(); endmodule\n")
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path / "uvm_tb")]))
+    assert skip_reason(w) is None and errors(elaborate(request_for(w))) == []
 
 
 def run_worker(payload: bytes):
