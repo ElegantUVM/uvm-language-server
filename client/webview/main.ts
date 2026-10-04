@@ -386,15 +386,16 @@ function visibleClassModel(): { nodes: GNode[]; edges: GEdge[] } {
   const directLib = new Set(classData.edges
     .filter((e) => (e.kind === "extends" || e.kind === "typedef") && userIds.has(e.source))
     .map((e) => e.target));
+  // A focused UVM class stays visible whatever the "UVM classes" filter says.
   let nodes = classData.nodes.filter((n) => !n.library || state.uvmBases === "all"
-    || (state.uvmBases === "direct" && directLib.has(n.id)));
+    || (state.uvmBases === "direct" && directLib.has(n.id)) || n.id === focusId);
   let ids = new Set(nodes.map((n) => n.id));
   let edges = classData.edges.filter((e) => state.edgeKinds.has(e.kind) && ids.has(e.source) && ids.has(e.target));
   if (state.uvmBases !== "all") {
     // Library nodes only matter as bases or as targets of user edges.
     const used = new Set<string>();
     for (const e of edges) { used.add(e.source); used.add(e.target); }
-    nodes = nodes.filter((n) => !n.library || used.has(n.id));
+    nodes = nodes.filter((n) => !n.library || used.has(n.id) || n.id === focusId);
     ids = new Set(nodes.map((n) => n.id));
     edges = edges.filter((e) => ids.has(e.source) && ids.has(e.target));
   }
@@ -494,15 +495,18 @@ function classElements(): Elements {
   if (isOverview(model)) return overviewElements(model);
   const nodes: DNode[] = [];
   const edges: DEdge[] = [];
+  // UVM library classes stay outside package boxes and first in layout order, as with the
+  // built-in UVM model, whose classes have no package.
+  const pkgOf = (n: GNode) => (n.library ? "" : n.package ?? "");
   const pkgs = new Set<string>();
   if (state.groupByPackage) {
-    for (const n of model.nodes) if (n.package) pkgs.add(n.package);
+    for (const n of model.nodes) if (pkgOf(n)) pkgs.add(pkgOf(n));
     for (const p of [...pkgs].sort()) {
       nodes.push({ id: `pkg:${p}`, shape: "package", lines: [{ text: p, kind: "name" }], color: "", data: { kind: "package", name: p } });
     }
   }
   const sorted = [...model.nodes].sort((a, b) =>
-    (a.package ?? "").localeCompare(b.package ?? "") || roleRank(a.role) - roleRank(b.role) || a.name.localeCompare(b.name));
+    pkgOf(a).localeCompare(pkgOf(b)) || roleRank(a.role) - roleRank(b.role) || a.name.localeCompare(b.name));
   for (const n of sorted) {
     const lib = n.library || n.external;
     const shape = n.kind === "typedef" ? "typedef" : n.external ? "external" : n.library ? "library" : "class";
@@ -515,7 +519,7 @@ function classElements(): Elements {
     if (n.params && !lib) lines.push({ text: shorten(n.params, 34), kind: "sub" });
     nodes.push({
       id: n.id, shape, lines, compartments: memberCompartments(n), color: familyColor(n.role, lib),
-      parent: n.package && pkgs.has(n.package) ? `pkg:${n.package}` : undefined,
+      parent: pkgs.has(pkgOf(n)) ? `pkg:${pkgOf(n)}` : undefined,
       italic: n.abstract, data: n,
     });
   }
@@ -806,7 +810,7 @@ function renderDetails(note?: string) {
         h("h2", {}, "Class graph"),
         ...(overview ? [h("p", { class: "note" }, `${s.classes} classes is too many to read in one picture, so the graph opens as an overview. Click a ${groupByRole ? "role" : "package"} to see its classes and their direct neighbours.`)] : []),
         h("p", { class: "muted" }, `${s.classes} classes · ${s.files} files · ${s.mode} mode · indexed in ${s.seconds}s`),
-        h("p", { class: "muted" }, s.realUvm ? `UVM library indexed (${s.libraryClasses} classes).` : "UVM library: built-in model. Set uvm.uvmHome to index the real one."),
+        h("p", { class: "muted" }, uvmNote(s)),
         h("ul", { class: "help" },
           h("li", {}, "Click a class for details, double-click to open it."),
           h("li", {}, "Shift-click a second class to highlight everything between them."),
@@ -829,6 +833,16 @@ function renderDetails(note?: string) {
   }
   if (state.tab === "topology") return renderInstanceDetails(data);
   renderClassDetails(data);
+}
+
+/** Which UVM library the index uses: the bundled copy, a directory, or the built-in model. */
+function uvmNote(s: any): string {
+  const u = s.uvm;
+  if (u?.source === "bundled") return `UVM library: bundled Accellera UVM ${u.version ?? "1.2"} (${s.libraryClasses} classes).`;
+  if (u?.dir && (u.source === "configured" || u.source === "project")) {
+    return `UVM library: ${u.dir} (${u.version ? `UVM ${u.version}, ` : ""}${s.libraryClasses} classes).`;
+  }
+  return "UVM library: built-in model. Turn on uvm.useBundledUvm or set uvm.uvmHome to index a real one.";
 }
 
 function renderClassDetails(d: any) {

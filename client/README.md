@@ -9,6 +9,8 @@ UVM-aware SystemVerilog support for VS Code, built on the [slang](https://github
 - **UVM lint.** Unregistered classes created through the factory, `uvm_object_utils` on a component, virtual classes passed to `create()`, and config_db mismatches.
 
 Point `uvm.filelists` at the same `.f` files your simulator uses, or leave it empty and every SystemVerilog file in the workspace is indexed with include paths inferred.
-Set `uvm.uvmHome` (or `$UVM_HOME`) to index the real UVM library; otherwise a built-in UVM model is used.
+The UVM library comes from `uvm.uvmHome` (or `$UVM_HOME`) when set, from the project's own `uvm_pkg.sv` when it compiles one, and otherwise from the Accellera UVM 1.2 that ships with the extension. Turn off `uvm.useBundledUvm` to use a lightweight built-in UVM model instead.
 
 Base syntax highlighting comes from a SystemVerilog syntax extension such as *Verilog-HDL/SystemVerilog* (`mshr-h.veriloghdl`); this extension adds UVM-specific highlighting on top rather than replacing it.
+
+The bundled UVM 1.2 is Accellera's, under the Apache License 2.0. Its `LICENSE.txt` and `NOTICE.txt` are in `server/uvmls/third_party/uvm-1.2/` inside the extension.

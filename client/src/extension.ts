@@ -93,6 +93,7 @@ function settings(): Record<string, unknown> {
     includeDirs: cfg.get("includeDirs"),
     defines: cfg.get("defines"),
     uvmHome: cfg.get("uvmHome") || undefined,
+    useBundledUvm: cfg.get("useBundledUvm"),
     exclude: cfg.get("exclude"),
     lint: { enabled: cfg.get("lint.enabled") },
   };
@@ -255,7 +256,21 @@ interface Stats {
   files: number;
   mode: string;
   realUvm: boolean;
+  uvm?: { source: string; version: string | null; dir: string | null };
   seconds: number;
+}
+
+/** The UVM library in use (Markdown): the bundled copy, a directory, or the built-in model. */
+function uvmLibrary(s: Stats): string {
+  const u = s.uvm;
+  if (u?.source === "bundled") {
+    return `bundled Accellera UVM ${u.version ?? "1.2"} (${s.libraryClasses} classes)`;
+  }
+  if (u?.dir && (u.source === "configured" || u.source === "project")) {
+    const version = u.version ? `UVM ${u.version}, ` : "";
+    return `\`${u.dir}\` (${version}${s.libraryClasses} classes${u.source === "project" ? ", found in the project" : ""})`;
+  }
+  return "built-in model";
 }
 
 function updateStatus(s: Stats) {
@@ -264,7 +279,7 @@ function updateStatus(s: Stats) {
   status.tooltip = new vscode.MarkdownString(
     `**UVM Language Server**\n\n${s.classes} classes in ${s.files} files ` +
       `(${s.mode} mode, indexed in ${s.seconds}s)\n\n` +
-      (s.realUvm ? `UVM library: indexed (${s.libraryClasses} classes)` : "UVM library: built-in model") +
+      `UVM library: ${uvmLibrary(s)}` +
       "\n\nClick to open the class graph.",
   );
 }
