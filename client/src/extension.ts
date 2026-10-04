@@ -309,7 +309,7 @@ function elabSummary(e: ElabStatus): string {
     case "failed":
       return `failed: ${e.message}`;
     default:
-      return "off (uvm.elaboration)";
+      return e.message ? `off: ${e.message}; run UVM: Elaborate Now again` : "off (uvm.elaboration)";
   }
 }
 

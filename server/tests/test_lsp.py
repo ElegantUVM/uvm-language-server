@@ -505,3 +505,29 @@ def test_open_file_changed_by_another_program_is_elaborated(tmp_path):
         assert c.wait_for("uvm/elaborationStatus", finished, timeout=10)["params"]["errors"] == 1
     finally:
         c.close()
+
+
+def test_elaboration_off_results_do_not_outlive_a_fix(client):
+    u = uri("agent/alu_driver.svh")
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+        text = f.read()
+    client.forget("uvm/elaborationStatus", "textDocument/publishDiagnostics")
+    client.notify("workspace/didChangeConfiguration",
+                  {"settings": {"uvm": {"filelists": [FILELIST], "elaboration": "off"}}})
+    assert client.wait_for("uvm/elaborationStatus")["params"]["state"] == "off"
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": text.replace("m_cfg.vif", "m_cfg.vfi")}})
+    assert client.request("uvm/elaborate", {})["errors"] == 1
+    client.wait_for("textDocument/publishDiagnostics", lambda m: m["params"]["uri"] == u and elab_diags(m))
+    client.forget("uvm/elaborationStatus", "textDocument/publishDiagnostics")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                             "contentChanges": [{"text": text}]})
+    client.notify("textDocument/didSave", {"textDocument": {"uri": u}})
+    status = client.wait_for("uvm/elaborationStatus", timeout=10)["params"]
+    assert (status["state"], status["message"]) == ("off", "files changed since Elaborate Now")
+    client.wait_for("textDocument/publishDiagnostics", lambda m: m["params"]["uri"] == u and not elab_diags(m))
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+    client.forget("uvm/elaborationStatus", "textDocument/publishDiagnostics")
+    client.notify("workspace/didChangeConfiguration",
+                  {"settings": {"uvm": {"filelists": [FILELIST], "elaboration": "onSave"}}})
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0

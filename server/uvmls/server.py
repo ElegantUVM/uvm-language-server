@@ -131,6 +131,8 @@ class UvmLanguageServer(LanguageServer):
         await loop.run_in_executor(None, self.ws.configure, self.config())
         for w in self.ws.sources.warnings if self.ws.sources else []:
             self.window_log_message(T.LogMessageParams(T.MessageType.Warning, w))
+        if self.elab_mode == "off":
+            self.outdate_elaboration()
         self.after_index()
         if self.elab_mode != "off":
             self.start_elaboration()
@@ -245,8 +247,10 @@ class UvmLanguageServer(LanguageServer):
         return mode if mode in ELAB_MODES else "onSave"
 
     def schedule_elaboration(self, delay: float):
-        """Elaborate `delay` seconds from now unless the setting is off; a later call resets it."""
+        """Elaborate `delay` seconds from now; a later call resets it. With the setting off, the
+        results of an Elaborate Now are dropped instead: they describe files that have changed."""
         if self.elab_mode == "off":
+            self.outdate_elaboration()
             return
         if self._elab_timer is not None:
             self._elab_timer.cancel()
@@ -274,6 +278,13 @@ class UvmLanguageServer(LanguageServer):
         self.elab_diags, self.elab_texts = {}, {}
         self.publish_diagnostics()
         self.notify_elaboration({"state": "off"})
+
+    def outdate_elaboration(self):
+        """Drop a finished on-demand run's results (a run in progress stays)."""
+        if self.elab_status["state"] in ("done", "failed", "skipped"):
+            self.elab_diags, self.elab_texts = {}, {}
+            self.publish_diagnostics()
+            self.notify_elaboration({"state": "off", "message": "files changed since Elaborate Now"})
 
     def notify_elaboration(self, status: dict):
         self.elab_status = {"state": status["state"], "errors": status.get("errors", 0),
