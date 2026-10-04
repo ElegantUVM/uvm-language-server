@@ -58,6 +58,14 @@ def test_unknown_member_and_argument_count_in_an_unsaved_include(bundled_ws):
     assert read(DRIVER).count("m_cfg.vfi") == 0  # the file on disk is untouched
 
 
+def test_unsaved_root_file(bundled_ws):
+    top = os.path.join(EXAMPLE, "tb", "tb_top.sv")  # a compilation root, not an include
+    r = elaborate(request_for(bundled_ws, {top: edited(top, "rst_n = 1;", "rst_n = no_such_signal;")}))
+    _, line, col, _ = position("tb/tb_top.sv", "rst_n = 1;", len("rst_n = "))
+    assert [(d["file"], d["line"], d["col"], d["code"]) for d in r["diagnostics"]] == \
+        [(top, line, col, "UndeclaredIdentifier")]
+
+
 def test_notes_become_related_information(bundled_ws):
     text = edited(AGENT, "    ap = m_monitor.ap;\n", "    ap = m_monitor.ap;\n    m_driver.drive_itme(null);\n")
     [d] = errors(elaborate(request_for(bundled_ws, {AGENT: text})))
