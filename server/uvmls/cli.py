@@ -1,6 +1,7 @@
 """Command line access to the index, for scripts and CI.
 
     python -m uvmls lint     -f tb.f            # exit 1 if any warning/error
+    python -m uvmls elab     -f tb.f [--top T]  # full slang elaboration; exit 1 if any error
     python -m uvmls graph    -f tb.f -o graph.json
     python -m uvmls topology -f tb.f --test my_test
     python -m uvmls configdb -f tb.f
@@ -17,6 +18,7 @@ import json
 import os
 import sys
 
+from .elab import elaborate, request_for, skip_reason, uvm_label
 from .lints import lint
 from .project import ProjectConfig
 from .views import class_graph, config_db_report, topology
@@ -50,10 +52,32 @@ def _print_tree(node, depth=0, out=sys.stdout):
         _print_tree(c, depth + 1, out)
 
 
+def _elab(ws: Workspace, args) -> int:
+    """Exit status: 0 clean, 1 errors, 2 not elaborated (skipped or failed)."""
+    reason = skip_reason(ws)
+    if reason:
+        print(f"elaboration skipped: {reason}", file=sys.stderr)
+        return 2
+    result = elaborate(request_for(ws, tops=args.top))
+    if args.json:
+        print(json.dumps(result, indent=1))
+    else:
+        for d in result["diagnostics"]:
+            where = f"{os.path.relpath(d['file'])}:{d['line'] + 1}:{d['col'] + 1}: " if d["file"] else ""
+            print(f"{where}{d['severity']}: {d['message']} [{d['code']}]")
+        c = result["counts"]
+        print(f"{c['errors']} error(s), {c['warnings']} warning(s) in {result['seconds']}s "
+              f"(top: {', '.join(result['tops']) or 'none'}; {uvm_label(ws.sources)})", file=sys.stderr)
+    if result["error"]:
+        print(f"elaboration failed: {result['error']}", file=sys.stderr)
+        return 2
+    return 1 if result["counts"]["errors"] else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m uvmls", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["graph", "topology", "configdb", "lint", "stats"])
+    ap.add_argument("command", choices=["graph", "topology", "configdb", "lint", "stats", "elab"])
     ap.add_argument("dir", nargs="?", default=".", help="workspace directory (default: .)")
     ap.add_argument("-f", dest="filelist", action="append", default=[], help="filelist (.f)")
     ap.add_argument("-I", "--incdir", action="append", default=[], help="include directory")
@@ -62,11 +86,14 @@ def main(argv=None):
     ap.add_argument("--no-bundled-uvm", action="store_true",
                     help="use the built-in UVM model instead of the bundled UVM 1.2")
     ap.add_argument("--test", help="test class for topology")
+    ap.add_argument("--top", action="append", default=[], help="top module for elab (default: slang picks)")
     ap.add_argument("--json", action="store_true", help="print JSON instead of text")
     ap.add_argument("-o", "--output", help="write JSON to this file")
     args = ap.parse_args(argv)
     ws = _workspace(args)
 
+    if args.command == "elab":
+        sys.exit(_elab(ws, args))
     if args.command == "stats":
         data = ws.stats()
     elif args.command == "graph":
