@@ -94,6 +94,15 @@ def finished(m):
     return m["params"]["state"] in ("done", "skipped", "failed")
 
 
+def start(root, **settings) -> Client:
+    """A server of its own on `root`, initialized."""
+    c = Client()
+    c.request("initialize", {"processId": None, "rootUri": f"file://{root}", "capabilities": {},
+                             "initializationOptions": {"settings": settings}})
+    c.notify("initialized", {})
+    return c
+
+
 @pytest.fixture(scope="module")
 def client():
     c = Client()
@@ -255,9 +264,9 @@ def test_parse_errors_are_published_once(client):
     *_, msg = [msg] + [m for m in client.notifications
                        if m["method"] == "textDocument/publishDiagnostics" and m["params"]["uri"] == u]
     diags = sorted(msg["params"]["diagnostics"], key=lambda d: d["range"]["start"]["line"])
-    assert [(d["range"]["start"]["line"], d["code"], d["source"]) for d in diags] == \
-        [(0, "CouldNotOpenIncludeFile", "slang"), (line, "ExpectedToken", "slang")]
-    assert "uvm.includeDirs" in diags[0]["message"]
+    assert [(d["range"]["start"]["line"], d["code"], d["source"], d["severity"]) for d in diags] == \
+        [(0, "CouldNotOpenIncludeFile", "slang", 1), (line, "ExpectedToken", "slang", 1)]
+    assert "uvm.includeDirs" in diags[0]["message"]  # the index's copy, an error as slang has it
 
     client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
                                              "contentChanges": [{"text": text}]})
@@ -411,3 +420,20 @@ def test_an_edit_does_not_resend_unchanged_diagnostics(client):
                                              "contentChanges": [{"text": text}]})
     client.wait_for("uvm/indexChanged")  # closed unchanged: no elaboration either
     client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+
+
+def test_elaboration_counts_what_problems_shows(tmp_path):
+    # The index reports a missing include as a warning (with a hint); elaboration, as slang does,
+    # as an error. Problems shows it once, as an error, and the status counts match.
+    (tmp_path / "top.sv").write_text('`include "missing.svh"\nmodule top;\nendmodule\n')
+    (tmp_path / "tb.f").write_text("top.sv\n")
+    c = start(tmp_path, filelists=[str(tmp_path / "tb.f")], elaboration="onSave")
+    try:
+        status = c.wait_for("uvm/elaborationStatus", finished)["params"]
+        *_, msg = [m for m in c.notifications if m["method"] == "textDocument/publishDiagnostics"
+                   and m["params"]["uri"].endswith("/top.sv")]
+        shown = [(d["code"], d["severity"]) for d in msg["params"]["diagnostics"]]
+        assert shown == [("CouldNotOpenIncludeFile", 1)]
+        assert (status["errors"], status["warnings"]) == (1, 0)
+    finally:
+        c.close()

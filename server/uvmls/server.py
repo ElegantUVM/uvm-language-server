@@ -50,6 +50,7 @@ COMPLETION_KINDS = {
 }
 SEVERITY = {"error": T.DiagnosticSeverity.Error, "warning": T.DiagnosticSeverity.Warning,
             "info": T.DiagnosticSeverity.Information, "hint": T.DiagnosticSeverity.Hint}
+RANK = {"hint": 0, "info": 1, "warning": 2, "error": 3}
 
 
 def uri_to_path(uri: str) -> str:
@@ -112,6 +113,7 @@ class UvmLanguageServer(LanguageServer):
         self._debounce: asyncio.TimerHandle | None = None
         self.elab_diags: dict[str, list[Diag]] = {}
         self.elab_texts: dict[str, str] = {}  # the unsaved editor text those diagnostics come from
+        self.elab_shown: list[str] = []  # the severity Problems shows for each of them
         self.elab_status: dict = {"state": "off"}
         self._elab_run = 0  # bumped by every start or stop; older runs discard their results
         self._elab_task: asyncio.Future | None = None
@@ -171,14 +173,26 @@ class UvmLanguageServer(LanguageServer):
                 for path, diags in lint(self.ws).items():
                     per_file.setdefault(path, []).extend(diags)
         docs = self.documents
+        shown = []
         for path, diags in self.elab_diags.items():
-            # Parse errors come from both; keep the index's (it adds hints, e.g. for includes).
-            have = per_file.get(path, [])
-            known = {(d.range.line, d.message) for d in have} | {(d.range.line, d.code) for d in have}
-            extra = [d for d in self.current_elab_diags(path, diags, docs)
-                     if (d.range.line, d.message) not in known and (d.range.line, d.code) not in known]
-            if extra:
-                per_file.setdefault(path, []).extend(extra)
+            # Parse errors come from both: keep the index's (it adds hints, e.g. for includes),
+            # with slang's verdict when elaboration rates it higher.
+            have = per_file.setdefault(path, [])
+            twins: dict = {}
+            for i, d in enumerate(have):
+                twins.setdefault((d.range.line, d.message), i)
+                twins.setdefault((d.range.line, d.code), i)
+            hits = set()
+            for d in self.current_elab_diags(path, diags, docs):
+                i = twins.get((d.range.line, d.message), twins.get((d.range.line, d.code)))
+                if i is None:
+                    i = len(have)
+                    have.append(d)
+                elif RANK[d.severity] > RANK[have[i].severity]:
+                    have[i] = replace(have[i], severity=d.severity)
+                hits.add(i)
+            shown += [have[i].severity for i in hits]
+        self.elab_shown = shown
         for path in self.published.keys() - per_file.keys():
             self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), []))
         for path, diags in per_file.items():
@@ -315,8 +329,12 @@ class UvmLanguageServer(LanguageServer):
                 notes.append(f"{counts['libraryErrors']} error(s) the UVM library reports on its own are not shown")
         self.elab_diags, self.elab_texts = per_file, request["overrides"]
         self.publish_diagnostics()
+        # The counts describe what Problems shows: an error the index already reports is shown once.
+        placed = [d.severity for ds in per_file.values() for d in ds]
+        errors, warnings = (counts.get(s + "s", 0) + self.elab_shown.count(s) - placed.count(s)
+                            for s in ("error", "warning"))
         self.notify_elaboration({"state": "failed" if result.get("error") else "done",
-                                 "errors": counts.get("errors", 0), "warnings": counts.get("warnings", 0),
+                                 "errors": errors, "warnings": warnings,
                                  "seconds": round(time.monotonic() - t0, 2), "message": "; ".join(notes),
                                  "uvm": uvm})
         return self.elab_status
