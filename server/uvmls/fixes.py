@@ -16,7 +16,8 @@ import re
 from dataclasses import dataclass, field
 
 from .lints import (
-    UTILS_RE, ctor_call_problem, ctor_problem, misregistered, new_target, param_problem, swapped_macro,
+    UTILS_RE, body_of, ctor_call_problem, ctor_problem, misregistered, new_target, param_problem,
+    skipped_super, swapped_macro,
 )
 from .model import Range
 from .project import is_bundled
@@ -534,7 +535,48 @@ def _utils_param(ctx: Context, d) -> list[Fix]:
     return [Fix(f"Change to `{new}({arg})", changes, preferred=True)]
 
 
+def _phase_no_super(ctx: Context, d) -> list[Fix]:
+    """A phase method that skips its base's: call super's first, or right after the statements that
+    set factory overrides or config_db values (the base's build_phase creates what they are for)."""
+    ws, data = ctx.ws, d.data or {}
+    cls, name = ws.class_by_qual.get(data.get("cls")), data.get("method")
+    skipped = cls and skipped_super(ws, cls, name)
+    meth = body_of(ws, cls, name) if skipped else None
+    if meth is None or skipped[0].qualname != data.get("base") or meth.generated or not meth.args:
+        return []
+    call = f"super.{name}({meth.args[0].name});"
+    calls = ws.calls_of(cls)
+    marks = [c.range for c in calls.overrides if c.method == name] + \
+        [c.range for c in calls.config_db if c.method == name and c.op == "set"]
+    marks = [r for r in marks if r.path == meth.range.path and meth.decl_range.contains(r.line, r.col)]
+    if marks:
+        last = max(marks, key=lambda r: (r.line, r.col))
+        stmt = next((it for it in meth.body_items if it.contains(last.line, last.col)), None)
+        title = f"Call {call[:-1]} after the factory overrides"
+    else:
+        stmt, title = meth.body_items[0], f"Call {call[:-1]} first"
+    ft = ctx.files.get(meth.range.path)
+    span = ft.span(stmt) if ft and stmt else None
+    if span is None:
+        return []
+    first, last_line = ft.line_at(span[0]), ft.line_at(span[1])
+    indent = indent_of(ft.line(first))
+    if marks:  # after the statement: on a line of its own when nothing follows it on its line
+        rest = ft.text[span[1]:ft.ends[last_line]]
+        if not mask(rest).strip() and not opens_comment(rest) and last_line + 1 < len(ft.starts):
+            at, text = ft.starts[last_line + 1], indent + call + ft.eol(last_line + 1)
+        else:
+            at, text = span[1], " " + call
+    elif not ft.text[ft.starts[first]:span[0]].strip():  # before it, on a line of its own
+        at, text = ft.starts[first], indent + call + ft.eol(first)
+    else:
+        at, text = span[0], call + " "
+    # Preferred, not safe: the base's phase runs from now on, which changes what is built.
+    return [Fix(title, [TextChange(ft.path, at, at, text)], preferred=True)]
+
+
 FIXERS = {
+    ("uvm", "phase-no-super"): _phase_no_super,
     ("uvm", "utils-param"): _utils_param,
     ("uvm", "create-new"): _create_new,
     ("uvm", "factory-ctor"): _factory_ctor,

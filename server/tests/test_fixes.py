@@ -741,6 +741,104 @@ def test_utils_param_fix_compiles(tmp_path):
     assert unchanged(tmp_path) and user_errors(w) == []
 
 
+# -- phase-no-super ----------------------------------------------------------------
+
+PHASES = """import uvm_pkg::*;
+class base_test extends uvm_test;
+  `uvm_component_utils(base_test)
+  uvm_env m_env;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    m_env = uvm_env::type_id::create("m_env", this);
+  endfunction
+endclass
+class plain_test extends base_test;
+  `uvm_component_utils(plain_test)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    int n;
+    super.build_phase(phase);
+    n = 1;
+  endfunction
+endclass
+class override_test extends base_test;
+  `uvm_component_utils(override_test)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    set_type_override_by_type(uvm_env::get_type(), uvm_env::get_type());
+    uvm_config_db #(int)::set(this, "*", "n", 1);
+    super.build_phase(phase);
+    `uvm_info("T", "built", UVM_LOW)
+  endfunction
+endclass
+class inline_test extends base_test;
+  `uvm_component_utils(inline_test)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase); super.build_phase(phase); `uvm_info("T", "x", UVM_LOW) endfunction
+endclass
+"""
+
+
+@pytest.mark.parametrize("old,new,title", [
+    ("    int n;\n    super.build_phase(phase);\n", "    int n;\n", "Call super.build_phase(phase) first"),
+    ("uvm_config_db #(int)::set(this, \"*\", \"n\", 1);\n    super.build_phase(phase);\n",
+     "uvm_config_db #(int)::set(this, \"*\", \"n\", 1);\n", "Call super.build_phase(phase) after the factory overrides"),
+    ("build_phase(uvm_phase phase); super.build_phase(phase); `uvm_info", "build_phase(uvm_phase phase); `uvm_info",
+     "Call super.build_phase(phase) first"),
+])
+def test_phase_no_super(tmp_path, old, new, title):
+    w = index(tmp_path, {"t.sv": PHASES.replace(old, new)})
+    [d] = findings(w, "phase-no-super")
+    assert d.message == "build_phase overrides base_test::build_phase without calling super.build_phase(phase); " \
+                        "the base class's build_phase, which creates m_env, never runs"
+    _, fix = round_trip(tmp_path, {"t.sv": PHASES}, {"t.sv": PHASES.replace(old, new)}, "phase-no-super")
+    assert (fix.title, fix.preferred, fix.safe) == (title, True, False)
+
+
+@pytest.mark.parametrize("old,new", [
+    ("    super.build_phase(phase);\n    m_env", "    m_env"),  # base_test's own base is uvm_test
+    ("    int n;\n    super.build_phase(phase);\n    n = 1;\n", ""),  # an empty override
+    ("    super.build_phase(phase);\n    n = 1;", "    if (n) super.build_phase(phase);\n    n = 1;"),
+    ("    super.build_phase(phase);\n    n = 1;", "    base_test::build_phase(phase);\n    n = 1;"),
+    ("    super.build_phase(phase);\n    n = 1;", "    uvm_test::build_phase(phase);\n    n = 1;"),  # skips on purpose
+])
+def test_phase_no_super_quiet(tmp_path, old, new):
+    assert old in PHASES
+    assert findings(index(tmp_path, {"t.sv": PHASES.replace(old, new)}), "phase-no-super") == []
+
+
+def test_phase_no_super_through_an_intermediate_class(tmp_path):
+    text = PHASES.replace("class plain_test extends base_test;", "class mid_test extends base_test;\n"
+                          "  `uvm_component_utils(mid_test)\n"
+                          "  function new(string name, uvm_component parent); super.new(name, parent); endfunction\n"
+                          "endclass\nclass plain_test extends mid_test;") \
+        .replace("    int n;\n    super.build_phase(phase);\n", "    int n;\n")
+    w = index(tmp_path, {"t.sv": text})
+    [d] = findings(w, "phase-no-super")
+    assert d.data == {"cls": "plain_test", "method": "build_phase", "base": "base_test"}
+    # What the base's phase does, when it creates nothing.
+    w = index(tmp_path, {"t.sv": text.replace('m_env = uvm_env::type_id::create("m_env", this);',
+                                              'void\'(uvm_config_db #(int)::get(this, "", "cfg", n));')
+                                     .replace("  uvm_env m_env;", "  int n;")})
+    [d] = findings(w, "phase-no-super")
+    assert d.message.endswith("the base class's build_phase, which gets 'cfg' from uvm_config_db, never runs")
+
+
+@pytest.mark.parametrize("override", [
+    "alu_random_seq::type_id::set_type_override(alu_add_only_seq::get_type());",  # alu_add_test
+    "set_type_override_by_type(alu_driver::get_type(), alu_error_driver::get_type());",  # alu_error_test
+])
+def test_phase_no_super_fix_compiles(tmp_path, override):
+    w = example(tmp_path, {"tests/alu_tests.svh": (
+        f"    {override}\n    super.build_phase(phase);\n", f"    {override}\n")})
+    [d] = findings(w, "phase-no-super")
+    assert d.message == "build_phase overrides alu_base_test::build_phase without calling super.build_phase(phase); " \
+                        "the base class's build_phase, which creates m_env, never runs"
+    fix_once(w, "phase-no-super")
+    assert unchanged(tmp_path) and user_errors(w) == []
+
+
 # -- fix-all -------------------------------------------------------------------------------
 
 

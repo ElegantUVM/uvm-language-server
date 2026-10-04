@@ -209,6 +209,37 @@ def new_target(ws: Workspace, cls, cr):
     return (t, written) if role in COMPONENT_ROLES and role != "tlm" else None
 
 
+PHASES_WITH_SUPER = ("build_phase", "connect_phase")
+
+
+def body_of(ws: Workspace, cls, name: str):
+    """A class's own method with its body (the out-of-block one for an extern method), or None."""
+    return ws.impls.get((cls.qualname, name)) or \
+        next((m for m in cls.methods if m.name == name and not m.is_prototype), None)
+
+
+def skipped_super(ws: Workspace, cls, name: str):
+    """(base class, its method) when the class's phase method overrides one of a base class of the
+    project's that does something, without calling it: super.build_phase() is missing."""
+    if name not in PHASES_WITH_SUPER or not ws.is_component(cls):
+        return None
+    meth = body_of(ws, cls, name)
+    if meth is None or not meth.body_items:  # an empty override is deliberate
+        return None
+    chain = ws.chain(cls)
+    called = {c for c in meth.super_calls if c == name or c.endswith("::" + name)}
+    if name in called or any(f"{e.spec.name}::{name}" in called for e in chain[1:]):
+        return None
+    for entry in chain[1:]:
+        base = entry.spec.cls
+        if base is None or base.library:
+            return None  # a UVM base: skipping its build_phase is common and harmless
+        found = body_of(ws, base, name)
+        if found is not None:
+            return (base, found) if found.body_items else None
+    return None
+
+
 def lint(ws: Workspace) -> dict[str, list[Diag]]:
     out: dict[str, list[Diag]] = {}
 
@@ -248,6 +279,21 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
         if problem:
             ctor = next((m for m in cls.methods if m.name == "new"), None)
             add(ctor.range if ctor else cls.range, problem[1], "error", "factory-ctor", cls=cls.qualname)
+        for name in PHASES_WITH_SUPER:
+            skipped = skipped_super(ws, cls, name)
+            if skipped:
+                base = skipped[0]
+                meth = body_of(ws, cls, name)
+                arg = meth.args[0].name if meth.args else ""
+                made = [cr for cr in ws.calls_of(base).creates if cr.method == name]
+                made = [cr.inst_name or cr.target for cr in [c for c in made if c.parent_expr] or made]
+                gets = [f"'{c.field_name}'" for c in ws.calls_of(base).config_db
+                        if c.method == name and c.op == "get" and c.field_literal]
+                what = f", which creates {_names(made)}," if made else \
+                    f", which gets {_names(list(dict.fromkeys(gets)))} from uvm_config_db," if gets else ""
+                add(meth.range, f"{name} overrides {base.name}::{name} without calling super.{name}({arg}); "
+                                f"the base class's {name}{what} never runs", "warning", "phase-no-super",
+                    cls=cls.qualname, method=name, base=base.qualname)
         wrong = param_problem(ws, cls, specs)
         if wrong:
             add(cls.range, wrong[1], "warning", "utils-param", cls=cls.qualname)
@@ -294,6 +340,13 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
                 add(cr.range, f"component {target.name} is created without a parent", no_parent,
                     "create-no-parent", cls=cls.qualname, at=at)
     return out
+
+
+def _names(names: list) -> str:
+    names = [n for n in names if n][:4]
+    if len(names) > 3:
+        return ", ".join(names[:3]) + " and more"
+    return " and ".join(names) if len(names) < 3 else f"{names[0]}, {names[1]} and {names[2]}"
 
 
 def _parent_required(ws: Workspace) -> bool:
