@@ -30,6 +30,7 @@ Node = S.SyntaxNode
 SHIM_DIR = os.path.join(os.path.dirname(__file__), "shim")
 SHIM_FILE = os.path.join(SHIM_DIR, "uvm_macros.svh")
 SHIM_BUFFER_NAME = "<uvm-macro-shim>"
+UVM_MACROS_PRELUDE = "<uvm-macros-prelude>"
 
 FUNC_DECLS = (K.FunctionDeclaration, K.TaskDeclaration)
 LOOP_KINDS = {
@@ -58,6 +59,12 @@ RESOURCE_DB_OPS = {"set": "set", "read_by_name": "get", "read_by_type": "get",
 def _shim_text() -> str:
     with open(SHIM_FILE, encoding="utf-8") as f:
         return f.read()
+
+
+def _uses_unknown_uvm_macro(tree) -> bool:
+    """True when the file uses a UVM macro that nothing it includes defines."""
+    return any(d.code == ps.Diags.UnknownDirective and d.args and
+               str(d.args[0]).startswith(("`uvm_", "`UVM_")) for d in tree.diagnostics)
 
 
 # ----------------------------------------------------------------------------
@@ -250,6 +257,8 @@ class Indexer:
         self.defines = dict(defines)
         self.use_shim = use_shim
         self._shim = _shim_text() if use_shim else ""
+        self._real_macros = not use_shim and any(
+            os.path.isfile(os.path.join(d, "uvm_macros.svh")) for d in self.include_dirs)
 
     def parse(self, root: str, overrides: dict[str, str] | None = None,
               library: bool = False) -> FileIndex:
@@ -278,6 +287,11 @@ class Indexer:
             idx.diagnostics.append(Diag(Range(root, 0, 0, 0, 0), f"cannot read file: {e}", "error", "io"))
             return idx
         tree = S.SyntaxTree.fromBuffers(buffers, sm, bag)
+        if self._real_macros and not library and _uses_unknown_uvm_macro(tree):
+            # Simulators usually have the UVM macros in scope already (from an earlier file in
+            # the compilation unit, or -uvm), so predefine the real ones, as the shim would be.
+            prelude = sm.assignText(UVM_MACROS_PRELUDE, '`include "uvm_macros.svh"\n')
+            tree = S.SyntaxTree.fromBuffers([prelude] + buffers, sm, bag)
         return Extractor(tree, sm, root, library, overrides).run()
 
 

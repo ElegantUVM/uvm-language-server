@@ -15,8 +15,9 @@ FILELIST = os.path.join(EXAMPLE, "alu_tb.f")
 
 @pytest.fixture(scope="session")
 def ws():
+    """The example on the built-in UVM model (macro shim + class table)."""
     w = Workspace()
-    w.configure(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST]))
+    w.configure(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST], bundled_uvm=False))
     return w
 
 

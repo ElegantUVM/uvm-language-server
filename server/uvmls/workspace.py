@@ -10,10 +10,10 @@ from dataclasses import dataclass, field
 
 from .indexer import Indexer
 from .model import (
-    ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, FileIndex, MacroDef,
+    ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex, MacroDef,
     Method, OverrideCall, Range, SeqStart, Typedef, TypeRef, Variable,
 )
-from .project import ProjectConfig, SourceSet, build_source_set, is_sv_file, norm
+from .project import ProjectConfig, SourceSet, build_source_set, is_bundled, is_sv_file, norm
 from .uvm import (
     BUILTIN_CLASSES, BUILTIN_MEMBERS, COMPONENT_ROLES, ROLE_OF_BASE, builtin_params,
     looks_like_config,
@@ -97,6 +97,20 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
     return out
 
 
+def _same_text(path: str, a: str | None, b: str | None) -> bool:
+    """Whether two versions of a file are equal; None stands for the file on disk."""
+    if a is None and b is None:
+        return False  # changed on disk
+    if a is None or b is None:
+        try:
+            with open(path, encoding="utf-8", errors="replace", newline="") as f:
+                disk = f.read()
+        except OSError:
+            return False
+        a, b = (disk if a is None else a), (disk if b is None else b)
+    return a == b
+
+
 class Workspace:
     def __init__(self):
         self.lock = threading.RLock()
@@ -124,6 +138,7 @@ class Workspace:
         self.impls: dict[tuple[str, str], Method] = {}
         self.subclasses: dict[str, list[ClassInfo]] = {}
         self.by_path: dict[str, list] = {}
+        self.library_files: set[str] = set()
         self._role_cache: dict[str, str] = {}
         self._spec_cache: dict = {}
 
@@ -144,7 +159,7 @@ class Workspace:
                     root, self.overrides, library=root in self.sources.library_roots)
             self.ephemeral = set()
             for path in self.overrides:
-                if not self.roots_for(path) and is_sv_file(path):
+                if not self.roots_for(path) and is_sv_file(path) and not is_bundled(path):
                     self.indices[path] = self.indexer.parse(path, self.overrides)
                     self.ephemeral.add(path)
             self._rebuild()
@@ -159,12 +174,15 @@ class Workspace:
         with self.lock:
             if self.indexer is None:
                 self.reindex_all()
+            before = self.overrides.get(path)
             if text is None:
                 self.overrides.pop(path, None)
             else:
                 self.overrides[path] = text
             roots = self.roots_for(path)
-            if not roots and is_sv_file(path):
+            if path in self.library_files and _same_text(path, before, text):
+                return roots  # a library file opened or closed unchanged: skip re-parsing the library
+            if not roots and is_sv_file(path) and not is_bundled(path):
                 if text is None:
                     if path in self.ephemeral:
                         self.indices.pop(path, None)
@@ -184,6 +202,8 @@ class Workspace:
         self.version += 1
         seen_decl: set[tuple[str, int, str]] = set()
         for idx in self.indices.values():
+            if idx.library:
+                self.library_files |= idx.files
             for cls in idx.classes:
                 key = (cls.range.path, cls.range.line, cls.name)
                 if key in seen_decl:
@@ -488,14 +508,33 @@ class Workspace:
             out |= idx.files
         return out
 
+    def user_diagnostics(self) -> list[Diag]:
+        """Parse diagnostics of user roots, each once, never inside a library file."""
+        out, seen = [], set()
+        for idx in self.indices.values():
+            if idx.library:
+                continue
+            for d in idx.diagnostics:
+                key = (d.range.path, d.range.line, d.range.col, d.message)
+                if key not in seen and d.range.path not in self.library_files:
+                    seen.add(key)
+                    out.append(d)
+        return out
+
     def stats(self) -> dict:
         user = [c for c in self.classes if not c.library]
+        files = self.files()
+        s = self.sources
         return {
             "classes": len(user),
             "libraryClasses": len(self.classes) - len(user),
-            "files": len(self.files()),
+            "files": len(files - self.library_files),
+            "libraryFiles": len(files & self.library_files),
             "roots": len(self.indices),
-            "mode": self.sources.mode if self.sources else "none",
-            "realUvm": bool(self.sources and self.sources.has_real_uvm_macros),
+            "mode": s.mode if s else "none",
+            "realUvm": bool(s and s.has_real_uvm_macros),
+            "uvm": {"source": s.uvm_source if s else "none",
+                    "version": s.uvm_version if s else None,
+                    "dir": s.uvm_dir if s else None},
             "seconds": round(self.last_index_seconds, 3),
         }

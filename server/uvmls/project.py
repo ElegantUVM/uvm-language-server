@@ -6,6 +6,10 @@ Two modes:
   * discovery mode - no configuration at all. Every SystemVerilog file in the
     workspace is found, every directory holding one becomes an include directory,
     and the roots are the files that no other file includes.
+
+The UVM library is, in order of preference: uvm.uvmHome or $UVM_HOME, the UVM
+the project already compiles, the Accellera UVM 1.2 bundled with this package,
+or (with the bundled copy turned off) the built-in model in uvm.py.
 """
 
 from __future__ import annotations
@@ -22,8 +26,12 @@ DEFAULT_EXCLUDES = [
     "**/csrc/**", "**/simv.daidir/**", "**/xcelium.d/**", "**/INCA_libs/**",
     "**/work/**", "**/obj_dir/**",
     "**/uvmls/shim/**",  # this server's own UVM macro stand-ins
+    "**/uvmls/third_party/**",  # and its bundled UVM library
 ]
 INCLUDE_RE = re.compile(r'^\s*`include\s+["<]([^">]+)[">]', re.MULTILINE)
+BUNDLED_UVM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party", "uvm-1.2", "src")
+UVM_REV_RE = re.compile(r"^[ \t]*`define[ \t]+UVM_(MAJOR|MINOR|FIX)_REV[ \t]+(\S+)", re.MULTILINE)
+IEEE_UVM_RE = re.compile(r'"Accellera:(1800\.2[^:"]*):UVM:([^"]+)"')
 
 
 @dataclass
@@ -33,6 +41,7 @@ class ProjectConfig:
     include_dirs: list[str] = field(default_factory=list)
     defines: dict[str, str] = field(default_factory=dict)
     uvm_home: str | None = None
+    bundled_uvm: bool = True
     exclude: list[str] = field(default_factory=list)
 
     @classmethod
@@ -62,6 +71,7 @@ class ProjectConfig:
             include_dirs=[expand(d) for d in s.get("includeDirs") or []],
             defines=defines,
             uvm_home=expand(uvm_home) if uvm_home else None,
+            bundled_uvm=s.get("useBundledUvm") is not False,
             exclude=list(s.get("exclude") or []),
         )
 
@@ -75,6 +85,9 @@ class SourceSet:
     has_real_uvm_macros: bool
     mode: str  # filelist | discovery
     warnings: list[str] = field(default_factory=list)
+    uvm_source: str = "builtin"  # configured | project | bundled | builtin
+    uvm_dir: str | None = None  # the UVM src directory in use
+    uvm_version: str | None = None
 
 
 def norm(p: str) -> str:
@@ -83,6 +96,11 @@ def norm(p: str) -> str:
 
 def is_sv_file(path: str) -> bool:
     return path.endswith(SV_EXTENSIONS)
+
+
+def is_bundled(path: str) -> bool:
+    """Part of the UVM copy shipped with this package (library code even when not in use)."""
+    return path.startswith(os.path.dirname(BUNDLED_UVM) + os.sep)
 
 
 def _excluded(path: str, patterns: list[str]) -> bool:
@@ -222,6 +240,38 @@ def _uvm_src_dir(uvm_home: str | None) -> str | None:
     return None
 
 
+def _is_uvm_src(d: str) -> bool:
+    """A real UVM source directory has both files; a lone uvm_macros.svh is usually a stand-in."""
+    return os.path.isfile(os.path.join(d, "uvm_macros.svh")) and os.path.isfile(os.path.join(d, "uvm_pkg.sv"))
+
+
+def _is_uvm_pkg(path: str) -> bool:
+    """uvm_pkg.sv, or the uvm.sv wrapper that includes it."""
+    name = os.path.basename(path)
+    return name == "uvm_pkg.sv" or (name == "uvm.sv" and
+                                    os.path.isfile(os.path.join(os.path.dirname(path), "uvm_pkg.sv")))
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def uvm_version(src_dir: str) -> str | None:
+    """'1.2', '1.1d' or '1800.2-2020 2.0' for a UVM source directory; None if unknown."""
+    ieee = IEEE_UVM_RE.search(_read(os.path.join(src_dir, "base", "uvm_version.svh")))
+    if ieee:
+        return f"{ieee.group(1)} {ieee.group(2)}"
+    rev = dict(m.groups() for m in UVM_REV_RE.finditer(
+        _read(os.path.join(src_dir, "macros", "uvm_version_defines.svh"))))
+    if "MAJOR" in rev and "MINOR" in rev:
+        return f"{rev['MAJOR']}.{rev['MINOR']}{rev.get('FIX', '')}"
+    return None
+
+
 def build_source_set(config: ProjectConfig) -> SourceSet:
     warnings: list[str] = []
     include_dirs = list(config.include_dirs)
@@ -234,9 +284,7 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
         warnings.append(f"uvmHome {config.uvm_home} does not contain uvm_pkg.sv")
     if uvm_src:
         include_dirs.append(uvm_src)
-        uvm_pkg = os.path.join(uvm_src, "uvm_pkg.sv")
-        roots.append(uvm_pkg)
-        library_roots.add(uvm_pkg)
+        roots.append(os.path.join(uvm_src, "uvm_pkg.sv"))
 
     if config.filelists:
         mode = "filelist"
@@ -263,22 +311,43 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
                     included.add(target)
         roots += [f for f in files if f not in included]
 
-    # A uvm_pkg.sv anywhere in the roots means the real library is present.
+    # UVM the project compiles itself: a uvm_pkg.sv (or uvm.sv) among its roots,
+    # or else a UVM source directory on its include path.
+    uvm_dirs = list(dict.fromkeys(os.path.dirname(r) for r in roots if _is_uvm_pkg(r)))
+    project_uvm = next((d for d in uvm_dirs if d != uvm_src), None)
+    if not uvm_src and project_uvm is None:
+        project_uvm = next((norm(d) for d in include_dirs if _is_uvm_src(d)), None)
+        if project_uvm:
+            roots.append(os.path.join(project_uvm, "uvm_pkg.sv"))
+            uvm_dirs.append(project_uvm)
+    if uvm_src:
+        uvm_source, uvm_dir = "configured", uvm_src
+    elif project_uvm:
+        uvm_source, uvm_dir = "project", project_uvm
+    elif config.bundled_uvm and _is_uvm_src(BUNDLED_UVM):
+        uvm_source, uvm_dir = "bundled", BUNDLED_UVM
+        # Where a configured uvmHome would go: after includeDirs, before the project's own.
+        include_dirs.insert(len(config.include_dirs), BUNDLED_UVM)
+        roots.append(os.path.join(BUNDLED_UVM, "uvm_pkg.sv"))
+        uvm_dirs.append(BUNDLED_UVM)
+    else:
+        uvm_source, uvm_dir = "builtin", None
+        if config.bundled_uvm:
+            warnings.append(f"bundled UVM library not found in {BUNDLED_UVM}")
     for r in roots:
-        if os.path.basename(r) == "uvm_pkg.sv":
+        if any(r.startswith(d + os.sep) for d in uvm_dirs):
             library_roots.add(r)
-            d = os.path.dirname(r)
-            if d not in include_dirs:
-                include_dirs.append(d)
+    for d in uvm_dirs:
+        if d not in include_dirs:
+            include_dirs.append(d)
 
     seen = set()
     roots = [r for r in roots if not (r in seen or seen.add(r))]
     include_dirs = [d for d in dict.fromkeys(norm(d) for d in include_dirs) if os.path.isdir(d)]
-    # A real UVM source directory has both files; a lone uvm_macros.svh is usually a stand-in.
-    has_real = any(os.path.isfile(os.path.join(d, "uvm_macros.svh")) and
-                   os.path.isfile(os.path.join(d, "uvm_pkg.sv")) for d in include_dirs)
+    has_real = any(_is_uvm_src(d) for d in include_dirs)
     # Library first so its classes exist before user code refers to them.
     roots.sort(key=lambda r: r not in library_roots)
     return SourceSet(roots=roots, include_dirs=include_dirs, defines=defines,
                      library_roots=library_roots, has_real_uvm_macros=has_real,
-                     mode=mode, warnings=warnings)
+                     mode=mode, warnings=warnings, uvm_source=uvm_source, uvm_dir=uvm_dir,
+                     uvm_version=uvm_version(uvm_dir) if uvm_dir else None)

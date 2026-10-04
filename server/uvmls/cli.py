@@ -5,6 +5,9 @@
     python -m uvmls topology -f tb.f --test my_test
     python -m uvmls configdb -f tb.f
     python -m uvmls stats    [DIR]
+
+The UVM library is --uvm-home or $UVM_HOME, else a uvm_pkg.sv the project already
+compiles, else the bundled Accellera UVM 1.2 (--no-bundled-uvm: the built-in model).
 """
 
 from __future__ import annotations
@@ -26,9 +29,12 @@ def _workspace(args) -> Workspace:
                         filelists=[os.path.abspath(f) for f in args.filelist],
                         include_dirs=[os.path.abspath(d) for d in args.incdir],
                         defines=dict(d.partition("=")[::2] for d in args.define),
-                        uvm_home=args.uvm_home or os.environ.get("UVM_HOME"))
+                        uvm_home=args.uvm_home or os.environ.get("UVM_HOME"),
+                        bundled_uvm=not args.no_bundled_uvm)
     ws = Workspace()
     ws.configure(cfg)
+    for w in ws.sources.warnings:
+        print(f"warning: {w}", file=sys.stderr)
     return ws
 
 
@@ -53,6 +59,8 @@ def main(argv=None):
     ap.add_argument("-I", "--incdir", action="append", default=[], help="include directory")
     ap.add_argument("-D", "--define", action="append", default=[], help="macro define NAME[=VALUE]")
     ap.add_argument("--uvm-home", help="UVM installation (defaults to $UVM_HOME)")
+    ap.add_argument("--no-bundled-uvm", action="store_true",
+                    help="use the built-in UVM model instead of the bundled UVM 1.2")
     ap.add_argument("--test", help="test class for topology")
     ap.add_argument("--json", action="store_true", help="print JSON instead of text")
     ap.add_argument("-o", "--output", help="write JSON to this file")
@@ -68,10 +76,7 @@ def main(argv=None):
     elif args.command == "configdb":
         data = config_db_report(ws)
     else:
-        diags = []
-        for idx in ws.indices.values():
-            if not idx.library:
-                diags += [d for d in idx.diagnostics if d.severity in ("error", "warning")]
+        diags = [d for d in ws.user_diagnostics() if d.severity in ("error", "warning")]
         for ds in lint(ws).values():
             diags += ds
         seen = set()

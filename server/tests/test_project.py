@@ -6,7 +6,7 @@ from conftest import EXAMPLE, FILELIST
 
 
 def test_filelist_mode_uses_listed_files_as_roots():
-    ss = build_source_set(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST]))
+    ss = build_source_set(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST], bundled_uvm=False))
     assert ss.mode == "filelist"
     assert [os.path.relpath(r, EXAMPLE) for r in ss.roots][:2] == ["rtl/alu.sv", "agent/alu_if.sv"]
     assert os.path.join(EXAMPLE, "agent") in ss.include_dirs
@@ -46,6 +46,6 @@ def test_repo_root_discovery_ignores_macro_shims(tmp_path):
     other.mkdir()
     (other / "uvm_macros.svh").write_text("`define uvm_info(A,B,C)\n")
     (tmp_path / "tb.sv").write_text("module tb; endmodule\n")
-    ss = build_source_set(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    ss = build_source_set(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
     assert not ss.has_real_uvm_macros
     assert all("uvmls" not in r for r in ss.roots)

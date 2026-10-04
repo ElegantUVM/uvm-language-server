@@ -115,16 +115,8 @@ class UvmLanguageServer(LanguageServer):
     def publish_diagnostics(self):
         with self.ws.lock:
             per_file: dict[str, list] = {}
-            seen = set()
-            for idx in self.ws.indices.values():
-                if idx.library:
-                    continue
-                for d in idx.diagnostics:
-                    key = (d.range.path, d.range.line, d.range.col, d.message)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    per_file.setdefault(d.range.path, []).append(d)
+            for d in self.ws.user_diagnostics():
+                per_file.setdefault(d.range.path, []).append(d)
             lint_cfg = self.settings.get("lint")
             if not isinstance(lint_cfg, dict) or lint_cfg.get("enabled", True):
                 for path, diags in lint(self.ws).items():
