@@ -165,6 +165,10 @@ def test_cli_exit_codes(capsys, monkeypatch, broken_example):
             cli(["elab", *args])
         return e.value.code, capsys.readouterr()
 
+    code, out = elab(EXAMPLE)  # discovery mode: indexed first, to look for duplicate design units
+    assert code == 0 and "0 error(s), 0 warning(s)" in out.err
+    # With a filelist nothing needs the index, so it is not built.
+    monkeypatch.setattr(Workspace, "reindex_all", lambda self: pytest.fail("indexed"))
     code, out = elab(EXAMPLE, "-f", FILELIST)
     assert code == 0 and out.out == "" and "0 error(s), 0 warning(s)" in out.err
     code, out = elab(str(broken_example), "-f", str(broken_example / "alu_tb.f"), "--top", "tb_top")

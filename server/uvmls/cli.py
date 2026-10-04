@@ -20,12 +20,13 @@ import sys
 
 from .elab import elaborate, request_for, skip_reason, uvm_label
 from .lints import lint
-from .project import ProjectConfig
+from .project import ProjectConfig, build_source_set
 from .views import class_graph, config_db_report, topology
 from .workspace import Workspace
 
 
-def _workspace(args) -> Workspace:
+def _workspace(args, index: bool = True) -> Workspace:
+    """index=False only works out the sources (all `elab` needs with a filelist)."""
     root = os.path.abspath(args.dir)
     cfg = ProjectConfig(workspace_roots=[root],
                         filelists=[os.path.abspath(f) for f in args.filelist],
@@ -34,7 +35,10 @@ def _workspace(args) -> Workspace:
                         uvm_home=args.uvm_home or os.environ.get("UVM_HOME"),
                         bundled_uvm=not args.no_bundled_uvm)
     ws = Workspace()
-    ws.configure(cfg)
+    if index:
+        ws.configure(cfg)
+    else:
+        ws.config, ws.sources = cfg, build_source_set(cfg)
     for w in ws.sources.warnings:
         print(f"warning: {w}", file=sys.stderr)
     return ws
@@ -90,7 +94,8 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print JSON instead of text")
     ap.add_argument("-o", "--output", help="write JSON to this file")
     args = ap.parse_args(argv)
-    ws = _workspace(args)
+    # Without a filelist, elab needs the index to spot several testbenches in one tree.
+    ws = _workspace(args, index=not (args.command == "elab" and args.filelist))
 
     if args.command == "elab":
         sys.exit(_elab(ws, args))
