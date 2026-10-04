@@ -898,12 +898,13 @@ def test_config_db_typo_candidates(tmp_path):
     text = CONFIG.replace('"*", "checks_enable", 0);', '"*", "Checks_Enable", 0);\n'
                           '    uvm_config_db #(bit)::set(this, "*", "checks_enabl", 0);\n'
                           '    uvm_config_db #(int)::set(this, "*", "checks_enablee", 0);')
+    at = line_no(text, '"checks_enabl"')
     w = index(tmp_path, {"t.sv": text})
     [d] = findings(w, "config-db-no-set")
     # Two of the same type, none preferred; the int one is no candidate.
     assert [(f.title, f.preferred) for f in offered(w, d)] == [
         (f"Change 'checks_enable' to 'Checks_Enable' (set in t.sv:{line_no(text, 'Checks_Enable')})", False),
-        (f"Change 'checks_enable' to 'checks_enabl' (set in t.sv:{line_no(text, 'checks_enabl"')})", False)]
+        (f"Change 'checks_enable' to 'checks_enabl' (set in t.sv:{at})", False)]
     assert "did you mean" not in d.message
 
 

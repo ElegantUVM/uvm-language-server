@@ -428,7 +428,7 @@ def _bound(params: list, args: list[str]) -> str | None:
     if len([a for a in args if not a.startswith(".")]) > len(params):
         return None
     bound = bind_params([(p.name, p.default) for p in params], args, {})
-    return " #(" + ", ".join(f"{p.name}={re.sub(r'(\w+::)|\s+', '', bound[p.name])}" for p in params) + ")"
+    return " #(" + ", ".join(p.name + "=" + re.sub(r"(\w+::)|\s+", "", bound[p.name]) for p in params) + ")"
 
 
 def mismatched(row: dict) -> list[dict]:
