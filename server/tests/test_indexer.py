@@ -1,3 +1,5 @@
+import pyslang
+
 from uvmls.indexer import Indexer
 from uvmls.project import ProjectConfig
 from uvmls.workspace import Workspace
@@ -85,7 +87,9 @@ def test_include_skipped_by_its_guard(tmp_path):
     idx = Indexer([], {}, use_shim=True).parse(str(tmp_path / "a.sv"))
     h = str(tmp_path / "h.svh")
     assert idx.files == {str(tmp_path / "a.sv"), h}
-    assert [(t, r.line) for t, r in idx.includes[str(tmp_path / "a.sv")]] == [(h, 0), (h, 1)]
+    # pyslang 12 reports the include its guard skips, with no buffer; 11 (the last for Python 3.10) leaves it out.
+    skipped = [(h, 1)] if int(pyslang.__version__.split(".")[0]) >= 12 else []
+    assert [(t, r.line) for t, r in idx.includes[str(tmp_path / "a.sv")]] == [(h, 0)] + skipped
 
 
 def test_latin1_source_text_is_indexed(tmp_path):

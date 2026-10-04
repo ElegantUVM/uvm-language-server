@@ -43,6 +43,14 @@ PYTHONPATH=../../server ../../.venv/bin/python -m uvmls elab -f alu_tb.f
 
 Tests: `cd server && ../.venv/bin/python -m pytest -q`. The example tests run on the built-in model, the bundled UVM 1.2, or both. With `UVM_HOME` set, the real-library navigation test uses that UVM instead of the bundled one.
 
+Python 3.10 is the oldest version supported, and pip gives it pyslang 11. `tests/test_py_compat.py` catches syntax newer than 3.10 on any Python; the full check runs the tests on 3.10, for example:
+
+```bash
+micromamba create -y -p /tmp/py310 -c conda-forge python=3.10 pip
+/tmp/py310/bin/python -m pip install pyslang 'pygls>=2,<3' pytest
+cd server && /tmp/py310/bin/python -m pytest -q
+```
+
 ## Layout
 
 ```
