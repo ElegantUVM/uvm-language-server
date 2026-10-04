@@ -1,0 +1,278 @@
+"""Plain data produced by the indexer and consumed by the semantic layer.
+
+Everything here is derived from a single parse of one root file (plus the files
+it includes) and holds no references to pyslang objects, so it can be cached,
+compared and serialised freely.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class Range:
+    """A span in a file. Lines and columns are 0-based, like LSP."""
+
+    path: str
+    line: int
+    col: int
+    end_line: int
+    end_col: int
+
+    def contains(self, line: int, col: int) -> bool:
+        if line < self.line or line > self.end_line:
+            return False
+        if line == self.line and col < self.col:
+            return False
+        if line == self.end_line and col > self.end_col:
+            return False
+        return True
+
+    def to_json(self) -> dict:
+        return {"file": self.path, "line": self.line, "col": self.col,
+                "endLine": self.end_line, "endCol": self.end_col}
+
+
+@dataclass
+class TypeRef:
+    """A reference to a named type, e.g. `pkg::uvm_driver #(alu_item)`."""
+
+    name: str
+    text: str
+    scope: str | None = None
+    args: list[str] = field(default_factory=list)
+    range: Range | None = None
+
+
+@dataclass
+class Variable:
+    """A class property, method argument, local variable or module signal."""
+
+    name: str
+    kind: str  # property | argument | local | port | signal
+    type_text: str
+    type: TypeRef | None
+    range: Range
+    decl_text: str
+    qualifiers: list[str] = field(default_factory=list)
+    generated: bool = False  # produced by a macro expansion (e.g. p_sequencer)
+    doc: str = ""
+
+
+@dataclass
+class Method:
+    name: str
+    kind: str  # function | task
+    return_type: str
+    signature: str
+    range: Range
+    decl_range: Range
+    args: list[Variable] = field(default_factory=list)
+    locals: list[Variable] = field(default_factory=list)
+    qualifiers: list[str] = field(default_factory=list)
+    is_prototype: bool = False  # extern / pure virtual declaration without a body
+    generated: bool = False
+    doc: str = ""
+
+
+@dataclass
+class Typedef:
+    name: str
+    target_text: str
+    target: TypeRef | None
+    range: Range
+    decl_text: str
+    package: str | None = None
+    owner_class: str | None = None
+
+
+@dataclass
+class CreateCall:
+    """`x = T::type_id::create("x", this)` or `x = new(...)`."""
+
+    kind: str  # factory | new
+    type: TypeRef | None  # None for a bare `new` whose type comes from the target
+    target: str | None  # full left-hand side text
+    target_base: str | None  # first identifier of the left-hand side
+    inst_name: str | None  # string literal passed as the name, when it is a literal
+    name_expr: str | None
+    parent_expr: str | None
+    method: str
+    conditional: bool
+    condition: str | None
+    in_loop: bool
+    range: Range
+
+
+@dataclass
+class ConfigDbCall:
+    op: str  # set | get | exists | wait_modified
+    db: str  # uvm_config_db | uvm_resource_db
+    type_text: str
+    context: str
+    inst: str
+    inst_literal: bool
+    field_name: str
+    field_literal: bool
+    value: str
+    owner: str
+    method: str
+    conditional: bool
+    range: Range
+
+
+@dataclass
+class OverrideCall:
+    kind: str  # type | inst
+    original: str
+    override: str
+    inst_path: str | None
+    owner: str
+    method: str
+    range: Range
+
+
+@dataclass
+class ConnectCall:
+    """`a.b.port.connect(c.export)`, or a port alias `ap = m_monitor.ap`."""
+
+    kind: str  # connect | alias
+    source: str
+    target: str
+    owner: str
+    method: str
+    conditional: bool
+    range: Range
+
+
+@dataclass
+class SeqStart:
+    """`seq.start(sequencer)` - the receiver may or may not be a sequence."""
+
+    receiver: str
+    sequencer: str
+    owner: str
+    method: str
+    range: Range
+
+
+@dataclass
+class Param:
+    name: str
+    default: str
+    is_type: bool
+
+
+@dataclass
+class ClassInfo:
+    name: str
+    package: str | None
+    kind: str  # class | interface class
+    range: Range  # the name token
+    decl_range: Range  # whole declaration
+    is_virtual: bool = False
+    params: list[Param] = field(default_factory=list)
+    base: TypeRef | None = None
+    implements: list[TypeRef] = field(default_factory=list)
+    properties: list[Variable] = field(default_factory=list)
+    methods: list[Method] = field(default_factory=list)
+    typedefs: list[Typedef] = field(default_factory=list)
+    constraints: list[tuple[str, Range]] = field(default_factory=list)
+    covergroups: list[tuple[str, Range]] = field(default_factory=list)
+    registration: str | None = None  # component | object (factory registration)
+    creates: list[CreateCall] = field(default_factory=list)
+    config_db: list[ConfigDbCall] = field(default_factory=list)
+    overrides: list[OverrideCall] = field(default_factory=list)
+    connects: list[ConnectCall] = field(default_factory=list)
+    seq_starts: list[SeqStart] = field(default_factory=list)
+    imports: list[str] = field(default_factory=list)
+    outer_class: str | None = None
+    library: bool = False
+    doc: str = ""
+
+    @property
+    def qualname(self) -> str:
+        prefix = f"{self.package}::" if self.package else ""
+        if self.outer_class:
+            prefix += f"{self.outer_class}::"
+        return prefix + self.name
+
+    @property
+    def path(self) -> str:
+        return self.range.path
+
+
+@dataclass
+class OutOfBlockMethod:
+    """A method body defined outside its class: `task cls::run_phase(...)`."""
+
+    class_name: str
+    package: str | None
+    method: Method
+    creates: list[CreateCall] = field(default_factory=list)
+    config_db: list[ConfigDbCall] = field(default_factory=list)
+    overrides: list[OverrideCall] = field(default_factory=list)
+    connects: list[ConnectCall] = field(default_factory=list)
+    seq_starts: list[SeqStart] = field(default_factory=list)
+
+
+@dataclass
+class Instance:
+    module: str
+    name: str
+    range: Range
+
+
+@dataclass
+class DesignUnit:
+    """A module, interface, program or package."""
+
+    name: str
+    kind: str  # module | interface | program | package
+    range: Range
+    decl_range: Range
+    params: list[Param] = field(default_factory=list)
+    ports: list[Variable] = field(default_factory=list)
+    variables: list[Variable] = field(default_factory=list)
+    methods: list[Method] = field(default_factory=list)
+    instances: list[Instance] = field(default_factory=list)
+    config_db: list[ConfigDbCall] = field(default_factory=list)
+    run_tests: list[tuple[str, Range]] = field(default_factory=list)
+    imports: list[str] = field(default_factory=list)
+    library: bool = False
+    doc: str = ""
+
+
+@dataclass
+class MacroDef:
+    name: str
+    params: str | None
+    range: Range
+    text: str
+
+
+@dataclass
+class Diag:
+    range: Range
+    message: str
+    severity: str  # error | warning | info | hint
+    code: str
+    source: str = "slang"
+
+
+@dataclass
+class FileIndex:
+    """Everything extracted from one root file and the files it includes."""
+
+    root: str
+    files: set[str] = field(default_factory=set)
+    classes: list[ClassInfo] = field(default_factory=list)
+    typedefs: list[Typedef] = field(default_factory=list)
+    units: list[DesignUnit] = field(default_factory=list)
+    out_of_block: list[OutOfBlockMethod] = field(default_factory=list)
+    macros: list[MacroDef] = field(default_factory=list)
+    diagnostics: list[Diag] = field(default_factory=list)
+    includes: dict[str, list[tuple[str, Range]]] = field(default_factory=dict)
+    identifiers: dict[str, list[Range]] = field(default_factory=dict)
+    library: bool = False

@@ -1,0 +1,205 @@
+{
+  "name": "uvm-language-server",
+  "displayName": "UVM Language Server",
+  "description": "UVM-aware SystemVerilog: one-click class graph, component topology, config_db cross-reference, factory overrides and UVM lint, built on slang.",
+  "version": "0.1.0",
+  "publisher": "uvmls",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Visualization"
+  ],
+  "keywords": [
+    "uvm",
+    "systemverilog",
+    "verilog",
+    "verification",
+    "slang"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:systemverilog",
+    "onLanguage:verilog",
+    "workspaceContains:**/*.{sv,svh,v,vh}"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "systemverilog",
+        "aliases": [
+          "SystemVerilog",
+          "systemverilog"
+        ],
+        "extensions": [
+          ".sv",
+          ".svh",
+          ".svi",
+          ".sva",
+          ".svp"
+        ]
+      },
+      {
+        "id": "verilog",
+        "aliases": [
+          "Verilog",
+          "verilog"
+        ],
+        "extensions": [
+          ".v",
+          ".vh"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "scopeName": "source.systemverilog.uvm-injection",
+        "path": "./syntaxes/uvm.injection.tmLanguage.json",
+        "injectTo": [
+          "source.systemverilog",
+          "source.verilog"
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "uvm.showClassGraph",
+        "title": "Show Class Graph",
+        "category": "UVM",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "uvm.showClassGraphForSymbol",
+        "title": "Show Class in Graph",
+        "category": "UVM"
+      },
+      {
+        "command": "uvm.showTopology",
+        "title": "Show Component Topology",
+        "category": "UVM",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "uvm.showConfigDb",
+        "title": "Show config_db Cross-Reference",
+        "category": "UVM"
+      },
+      {
+        "command": "uvm.reindex",
+        "title": "Re-index Workspace",
+        "category": "UVM"
+      },
+      {
+        "command": "uvm.restartServer",
+        "title": "Restart Language Server",
+        "category": "UVM"
+      },
+      {
+        "command": "uvm.setup",
+        "title": "Set Up Python Environment",
+        "category": "UVM"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "uvm.showClassGraph",
+          "when": "editorLangId == systemverilog || editorLangId == verilog",
+          "group": "navigation@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "uvm.showClassGraphForSymbol",
+          "when": "editorLangId == systemverilog || editorLangId == verilog",
+          "group": "navigation@9"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "uvm.showClassGraph",
+        "key": "ctrl+alt+g",
+        "mac": "cmd+alt+g",
+        "when": "editorLangId == systemverilog || editorLangId == verilog"
+      }
+    ],
+    "configuration": {
+      "title": "UVM",
+      "properties": {
+        "uvm.filelists": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Simulator filelists (.f) to index, e.g. [\"sim/tb.f\"]. Empty: every SystemVerilog file in the workspace is indexed and include paths are inferred."
+        },
+        "uvm.includeDirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra include directories."
+        },
+        "uvm.defines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Preprocessor defines, e.g. {\"SIM\": \"1\"}."
+        },
+        "uvm.uvmHome": {
+          "type": "string",
+          "default": "",
+          "description": "UVM installation to index (the directory containing src/uvm_pkg.sv). Defaults to $UVM_HOME. Without it a built-in UVM model is used."
+        },
+        "uvm.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Glob patterns to skip in discovery mode."
+        },
+        "uvm.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python interpreter with pyslang and pygls installed. Supports ${workspaceFolder} and ~. Empty: auto-detect (a .venv/venv in the workspace or its parent folders, then the extension's own environment, then python3)."
+        },
+        "uvm.lint.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report UVM lint findings (config_db mismatches, unregistered classes, ...)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p .",
+    "package": "node scripts/bundle-server.mjs && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository --skip-license"
+  },
+  "dependencies": {
+    "elkjs": "^0.12.0",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "~1.90.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.6.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "The UVM language server runs a Python interpreter, which may come from the workspace (.venv or uvm.pythonPath). Trust the folder to enable it."
+    }
+  }
+}

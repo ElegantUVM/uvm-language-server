@@ -1,0 +1,109 @@
+# UVM Language Server
+
+A UVM-aware SystemVerilog language server and VS Code extension built on [slang](https://github.com/MikePopoloski/slang) (through `pyslang`).
+The goal is a DVT-class experience for UVM testbenches that is open, fast, and visual.
+
+## What works today
+
+| Area | Feature |
+|---|---|
+| **Class graph** | One click (editor title button, `Ctrl+Alt+G`, or the status bar). A UML class diagram: orthogonal edge routing, shared inheritance trunks with hollow triangles, aggregation/composition diamonds (filled when the owner creates the member), «create» and «override» dependencies, optional member compartments and package boxes. UVM roles (test/env/agent/driver/monitor/…) are detected from the inheritance chain and shown as stereotypes. Includes search, focus-on-neighbourhood, "everything between A and B", a details panel with clickable members, and PNG export. Projects with more than 300 classes open as a package overview you drill into. |
+| **Topology** | The `uvm_test_top` tree for any test, built from `type_id::create()` calls (inherited ones included). The test's factory overrides are applied, components created under an `if` are marked conditional, and `connect()` calls plus port aliases are drawn between instances. |
+| **config_db** | Every `set`/`get` grouped by field. Flags a get with no set, and a set/get type mismatch (an exact-type miss that fails silently at runtime). |
+| **Navigation** | Definition, type definition, hover, references, completion, document/workspace symbols, type hierarchy, `` `include `` links and code lenses. Resolution follows class type parameters (`req` in `extends uvm_driver #(my_item)` is a `my_item`), virtual interfaces, clocking blocks, `extern` methods and package scopes. |
+| **Diagnostics** | slang parse errors, plus UVM lint: unregistered class created through the factory, `uvm_object_utils` on a component (or the reverse), `create()` on a virtual class, a config_db get without a set, config_db type mismatch, and a component created without a parent. |
+| **Projects** | Reads simulator filelists (`-f`/`-F`, `+incdir+`, `+define+`, `-D`, `$VAR`, and unknown VCS/Xcelium/Questa options are ignored), or works with zero configuration by indexing every `.sv/.svh` file and inferring include paths. Uses the real UVM library when `uvm.uvmHome`/`$UVM_HOME` is set; otherwise a built-in UVM macro shim and class model. |
+| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on findings), `graph`, `topology`, `configdb`, `stats`, all with `--json`. |
+
+## Try it
+
+```bash
+# Python side (once)
+python3 -m venv .venv && .venv/bin/pip install pyslang pygls pytest
+
+# Extension side (once)
+cd client && npm install && npm run build && cd ..
+```
+
+Then open this folder in VS Code and press **F5** ("Run extension on the ALU example").
+A second VS Code window opens on `examples/alu_tb`. Open any `.svh` file and click the graph icon in the editor title bar.
+
+To install it like a normal extension instead: `cd client && npm run package`, then **Extensions → … → Install from VSIX** and pick `client/uvm-language-server-0.1.0.vsix`.
+On first start the extension offers to create its own Python environment with pyslang and pygls.
+
+Command line on the example:
+
+```bash
+cd examples/alu_tb
+PYTHONPATH=../../server ../../.venv/bin/python -m uvmls topology -f alu_tb.f --test alu_error_test
+PYTHONPATH=../../server ../../.venv/bin/python -m uvmls lint -f alu_tb.f
+```
+
+Tests: `cd server && ../.venv/bin/python -m pytest -q`. Set `UVM_HOME` to also run against the real UVM library.
+
+## Layout
+
+```
+server/uvmls/
+  project.py     which files to parse: filelists or workspace discovery, include dirs, defines
+  indexer.py     slang syntax tree -> plain data (classes, members, creates, config_db, overrides, connects, ...)
+  shim/          UVM macro stand-ins, used when the real UVM library is not configured
+  workspace.py   cross-file semantic layer: name resolution, typedefs, inheritance chains with
+                 type-parameter binding, UVM roles, incremental re-indexing
+  views.py       class graph, topology and config_db report (JSON for the webview and CLI)
+  lints.py       UVM checks
+  navigation.py  definition / hover / references / completion / symbols
+  server.py      LSP over stdio (pygls) plus custom requests uvm/classGraph, uvm/topology, uvm/configDb
+  cli.py         command line
+server/tools/gen_uvm_shim.py   regenerates the macro shim from a UVM source tree
+server/tests/                  unit tests and an end-to-end LSP test over stdio
+client/                        VS Code extension (TypeScript); webview/diagram.ts renders ELK layouts as SVG
+examples/alu_tb/               a complete small UVM testbench (it elaborates cleanly with slang + UVM)
+```
+
+### Why syntax-level indexing
+
+The indexer works on slang's syntax trees, not on an elaborated design. That makes it fast, tolerant of code that does not compile yet, and incremental: an edit re-parses only the root file that includes the edited file.
+UVM macros matter here. Without definitions, slang drops `` `uvm_fatal(...) `` and the statement after `if (...) `uvm_fatal(...)` silently becomes the `if` body.
+The shim in `server/uvmls/shim/` keeps every UVM macro's name and arity with a minimal body. Factory registration is visible through the same `type_id` typedef the real macros produce, so the rest of the code does not care which one is in use.
+
+## Measured performance
+
+On this machine (WSL2, Python 3.14, pyslang 12):
+
+| Workload | Time |
+|---|---|
+| Full Accellera UVM library (86k lines, 353 classes): parse + index | 0.46 s |
+| ALU example (19 classes) | 0.03 s |
+| Synthetic project: 2,400 files, 2,002 classes, plus real UVM | 3.7 s full index |
+| Same project, re-index after editing one file | 0.07 s |
+| Same project, class graph / topology (800 instances) | 0.11 s / 0.03 s |
+| Webview first render, same project (package overview) | 1.4 s; drill-down 0.5 s; all 2,000 classes in one diagram 14 s |
+
+The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench.
+
+## Where this stands against DVT
+
+Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this project only starts to cover: a UVM Browser, ConfigDB and Factory Overrides views, **runtime-accurate UVM elaboration** (it handles loops and conditions), an AI assistant with an agentic mode, and an MCP server.
+"Outshine DVT in every way" is not a realistic near-term target. Being better on specific axes is:
+
+1. **Speed and zero setup.** Sub-second incremental updates, and reading the simulator filelist as-is.
+2. **Visual exploration.** A live, searchable class graph and topology that update as you type, with drill-down that scales.
+3. **Open and scriptable.** CLI and JSON for CI gates, plus an index others can build on.
+4. **Static analysis people can trust.** Every finding links to source; approximations are labelled ("conditional", "static view").
+
+## Roadmap (suggested order)
+
+1. Run it on one or two real testbenches and fix what breaks: macros, `ifdef` configurations, parameterized classes.
+2. Topology precision: resolve `config_db` scopes against instance paths (which `set` reaches which `get`), propagate simple constant knobs (`is_active = UVM_PASSIVE`), and handle loop-created arrays of components.
+3. Sequence ↔ sequencer view (`start()`, `` `uvm_do_on ``, `p_sequencer`) and a register-model view.
+4. Rename, semantic tokens and signature help. Scale work: cache parsed roots on disk, and move the identifier/body walks to C++ (a fork of slang-server, or pyslang visitors).
+5. MCP server over the same index, so AI assistants can query real facts ("where is this agent's config set?").
+6. Optional full elaboration with slang when the design compiles, to replace the static topology with an exact one.
+
+## Known limitations
+
+- Topology and config_db matching are static approximations. Runtime-computed instance names, `for` loops creating arrays, and knobs set in derived tests are shown as conditional or by expression, not evaluated.
+- References are name-based (all identifier occurrences), not type-resolved.
+- Code inside inactive `` `ifdef `` branches is not indexed. Defines come from the filelist and `uvm.defines`.
+- No license has been chosen yet (`UNLICENSED` in the manifests); pick one before publishing.

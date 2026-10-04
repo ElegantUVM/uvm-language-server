@@ -1,0 +1,11 @@
+src/**
+webview/**
+node_modules/**
+dist/**/*.map
+tsconfig.json
+esbuild.mjs
+scripts/**
+server/**/__pycache__/**
+server/tests/**
+server/.venv/**
+**/*.ts

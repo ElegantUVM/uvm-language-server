@@ -1,0 +1,23 @@
+{
+ "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+ "scopeName": "source.systemverilog.uvm-injection",
+ "injectionSelector": "L:source.systemverilog -comment -string, L:source.verilog -comment -string",
+ "patterns": [
+  {
+   "name": "support.function.macro.uvm.systemverilog",
+   "match": "`uvm_\\w+"
+  },
+  {
+   "name": "support.class.uvm.systemverilog",
+   "match": "\\b(uvm_object|uvm_component|uvm_test|uvm_env|uvm_agent|uvm_driver|uvm_monitor|uvm_sequencer|uvm_sequence|uvm_sequence_item|uvm_sequence_base|uvm_scoreboard|uvm_subscriber|uvm_transaction|uvm_phase|uvm_config_db|uvm_resource_db|uvm_factory|uvm_root|uvm_report_object|uvm_analysis_port|uvm_analysis_export|uvm_analysis_imp|uvm_tlm_fifo|uvm_tlm_analysis_fifo|uvm_seq_item_pull_port|uvm_seq_item_pull_export|uvm_seq_item_pull_imp|uvm_reg|uvm_reg_block|uvm_reg_field|uvm_reg_map|uvm_reg_adapter|uvm_reg_predictor|uvm_reg_sequence|uvm_mem|uvm_callback|uvm_event|uvm_barrier|uvm_objection|uvm_report_catcher|uvm_report_server|uvm_push_driver|uvm_push_sequencer|uvm_sequence_library|uvm_in_order_comparator|uvm_void|uvm_active_passive_enum)\\b"
+  },
+  {
+   "name": "constant.language.uvm.systemverilog",
+   "match": "\\b(UVM_ACTIVE|UVM_PASSIVE|UVM_NONE|UVM_LOW|UVM_MEDIUM|UVM_HIGH|UVM_FULL|UVM_DEBUG|UVM_ALL_ON|UVM_DEFAULT|UVM_NOCOMPARE|UVM_NOPRINT|UVM_NOCOPY|UVM_NOPACK|UVM_READONLY|UVM_INFO|UVM_WARNING|UVM_ERROR|UVM_FATAL|UVM_IS_OK|UVM_NOT_OK|UVM_FRONTDOOR|UVM_BACKDOOR|UVM_HEX|UVM_DEC|UVM_BIN)\\b"
+  },
+  {
+   "name": "support.function.uvm.systemverilog",
+   "match": "\\b(type_id|get_type|create|set_type_override(_by_type|_by_name)?|set_inst_override(_by_type|_by_name)?|raise_objection|drop_objection|start_item|finish_item|get_next_item|item_done)\\b(?=\\s*\\()"
+  }
+ ]
+}
