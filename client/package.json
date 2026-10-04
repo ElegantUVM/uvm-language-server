@@ -132,6 +132,11 @@
         "when": "editorLangId == systemverilog || editorLangId == verilog"
       }
     ],
+    "configurationDefaults": {
+      "files.readonlyInclude": {
+        "**/uvmls/third_party/**": true
+      }
+    },
     "configuration": {
       "title": "UVM",
       "properties": {
