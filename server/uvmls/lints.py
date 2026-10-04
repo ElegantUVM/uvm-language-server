@@ -8,7 +8,7 @@ import re
 from .model import Diag, Variable
 from .uvm import COMPONENT_ROLES
 from .views import config_db_report
-from .workspace import Workspace, parse_type_text
+from .workspace import Workspace, bind_params, parse_type_text
 
 
 UTILS_RE = re.compile(r"^uvm_(object|component)(_abstract)?(_param)?_utils(_begin)?$")
@@ -98,6 +98,88 @@ def ctor_problem(ws: Workspace, cls) -> tuple[str, str] | None:
     return None
 
 
+LITERAL_RE = re.compile(r"^(\s*[-+*/()]*\s*(\d*'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ?_]+|\d[\d_]*|\"[^\"]*\")\s*[-+*/()]*)*$")
+
+
+def type_refs(ws: Workspace):
+    """Every type named in the project's code, with the class it is named in (None outside one)."""
+    for c in ws.classes:
+        if c.library:
+            continue
+        refs = [c.base] + [v.type for v in c.properties] + [td.target for td in c.typedefs] + \
+            [cr.type for cr in ws.calls_of(c).creates]
+        for m in c.methods + [ws.impls[(c.qualname, m.name)] for m in c.methods if (c.qualname, m.name) in ws.impls]:
+            refs += [v.type for v in m.args + m.locals]
+        for r in refs:
+            if r is not None:
+                yield r.name, r.scope, r.args, c
+    for tds in ws.typedefs_by_name.values():
+        for td in tds:
+            if td.owner_class is None and td.target is not None and td.range.path not in ws.library_files:
+                yield td.target.name, td.target.scope, td.target.args, None
+
+
+def specializations(ws: Workspace, classes: dict[str, object]) -> dict[str, dict[tuple, str]]:
+    """For parameterized classes (by name): the distinct specializations the code names with arguments
+    whose values are known (a type, a literal), each as written once. One named through a parameter of
+    another class (`item #(T)`) is not known here and is left out."""
+    out: dict[str, dict[tuple, str]] = {}
+
+    def named(refs):
+        for name, scope, args, ctx in refs:
+            yield name, scope, args, ctx
+            # uvm_config_db #(cfg #(int)): cfg #(int) is named too
+            yield from named((p[1], p[0], p[2], ctx) for p in map(parse_type_text, args) if p and p[2])
+
+    for name, scope, args, ctx in named(type_refs(ws)):
+        t = classes.get(name)
+        if t is None or ctx is t or (ctx is not None and ctx.outer_class == t.name):
+            continue  # inside its own body the name is the specialization being declared
+        spec = ws.resolve_spec(name, scope, args, ctx)
+        if spec is None or spec.cls is not t:
+            continue
+        bound = bind_params([(p.name, p.default) for p in t.params], args, {})
+        key = []
+        for p in t.params:
+            value = bound.get(p.name, "")
+            if p.is_type:
+                vspec = ws.resolve_type_text(value, ctx)
+                head = re.split(r"[\s\[]", value.strip(), maxsplit=1)[0]
+                key.append(vspec.key if vspec else re.sub(r"\s+", "", value) if head in BUILTIN_TYPES else None)
+            else:
+                key.append(re.sub(r"\s+", "", value) if value and LITERAL_RE.match(value) else None)
+        if None not in key:
+            out.setdefault(t.qualname, {}).setdefault(tuple(key), f"{name} #({', '.join(args)})" if args else name)
+    return out
+
+
+def param_problem(ws: Workspace, cls, specs: dict[str, dict[tuple, str]] | None = None) -> tuple[str, str] | None:
+    """(macro to use, message) when a registration macro does not fit whether the class is
+    parameterized: a test with a _param macro, whose name is then not registered; or a parameterized
+    class with a plain one when the code has two of its specializations, which then both register
+    the same name."""
+    m = UTILS_RE.match(cls.registration_macro or "")
+    if not m:
+        return None
+    macro = cls.registration_macro
+    if cls.params and not m.group(3):
+        if specs is None:
+            specs = specializations(ws, {cls.name: cls})
+        named = list(specs.get(cls.qualname, {}).values())
+        if len(named) < 2:
+            return None  # one specialization: its name is its own, and lookup by name works
+        use = macro.replace("_utils", "_param_utils", 1)
+        more = f" (and {len(named) - 2} more)" if len(named) > 2 else ""
+        return use, (f"{cls.name} is parameterized but registered with `{macro}, so {named[0]} and {named[1]}{more} "
+                     f"{'all' if more else 'both'} register the name \"{cls.registration_arg}\": UVM warns TPRGED and "
+                     f"a lookup by name gets one of them; use `{use}")
+    if not cls.params and m.group(3) and ws.role(cls) == "test":
+        return macro.replace("_param", "", 1), (
+            f"{cls.name} is registered with `{macro}, which does not register its name: "
+            f"run_test(\"{cls.name}\") and +UVM_TESTNAME={cls.name} cannot find it")
+    return None
+
+
 NEW_TARGET_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_$]*)(\[[^\]]*\])*$")  # x, or an element x[i]
 
 
@@ -154,6 +236,9 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
     for d in ws.user_diagnostics():
         if d.code == "UnknownDirective":
             bisect.insort(unknown_macros.setdefault(d.range.path, []), d.range.line)
+    # Parameterized classes registered by name: which of their specializations the code names.
+    specs = specializations(ws, {c.name: c for c in ws.classes if not c.library and c.params and
+                                 UTILS_RE.match(c.registration_macro or "") and "_param" not in c.registration_macro})
     for cls in ws.classes:
         if cls.library:
             continue
@@ -163,6 +248,9 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
         if problem:
             ctor = next((m for m in cls.methods if m.name == "new"), None)
             add(ctor.range if ctor else cls.range, problem[1], "error", "factory-ctor", cls=cls.qualname)
+        wrong = param_problem(ws, cls, specs)
+        if wrong:
+            add(cls.range, wrong[1], "warning", "utils-param", cls=cls.qualname)
         kind = misregistered(ws, cls)
         if kind:
             used = f"`{cls.registration_macro}" if cls.registration_macro else \

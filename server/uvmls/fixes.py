@@ -15,7 +15,9 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from .lints import UTILS_RE, ctor_call_problem, ctor_problem, misregistered, new_target, swapped_macro
+from .lints import (
+    UTILS_RE, ctor_call_problem, ctor_problem, misregistered, new_target, param_problem, swapped_macro,
+)
 from .model import Range
 from .project import is_bundled
 
@@ -504,7 +506,36 @@ def _create_new(ctx: Context, d) -> list[Fix]:
                 [TextChange(ft.path, start, start + 3, text)], preferred=True)]
 
 
+def _utils_param(ctx: Context, d) -> list[Fix]:
+    """A parameterized class registered with `uvm_*_utils, or a test with `uvm_*_param_utils: the other
+    macro, and for a bare class name the parameters with it."""
+    ws = ctx.ws
+    cls = ws.class_by_qual.get((d.data or {}).get("cls"))
+    wrong = cls and not cls.library and cls.registration_range and param_problem(ws, cls)
+    if not wrong or not macro_defined(ws, wrong[0]):
+        return []
+    old, new = cls.registration_macro, wrong[0]
+    ft = ctx.files.get(cls.registration_range.path)
+    span = ft and ft.span(cls.registration_range)
+    if span is None or not ft.text.startswith("`" + old, span[0]):
+        return []
+    masked = mask(ft.text[span[0]:span[1]])
+    parsed = call_args(masked)
+    if parsed is None or len(parsed[1]) != 1:
+        return []
+    a, b = parsed[1][0]
+    arg = ft.text[span[0] + a:span[0] + b].strip()
+    changes = [TextChange(ft.path, span[0] + 1, span[0] + 1 + len(old), new)]
+    if cls.params and arg == cls.name:
+        arg = f"{cls.name} #(" + ", ".join(p.name for p in cls.params) + ")"
+        lead = len(masked[a:b]) - len(masked[a:b].lstrip())
+        changes.append(TextChange(ft.path, span[0] + a + lead, span[0] + a + lead + len(cls.name), arg))
+    # Preferred, not safe: which name the class is registered under changes.
+    return [Fix(f"Change to `{new}({arg})", changes, preferred=True)]
+
+
 FIXERS = {
+    ("uvm", "utils-param"): _utils_param,
     ("uvm", "create-new"): _create_new,
     ("uvm", "factory-ctor"): _factory_ctor,
     ("uvm", "utils-mismatch"): _utils_mismatch,

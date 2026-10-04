@@ -667,6 +667,80 @@ def test_create_new_fix_compiles(tmp_path):
     assert unchanged(tmp_path) and user_errors(w) == []
 
 
+# -- utils-param -----------------------------------------------------------------------
+
+PARAMS = """import uvm_pkg::*;
+class drv #(type T = int, int N = 2) extends uvm_driver;
+  `uvm_component_param_utils(drv #(T, N))
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class item #(type T = int) extends uvm_sequence_item;
+  T x;
+  `uvm_object_param_utils_begin(item #(T))
+  `uvm_object_utils_end
+  function new(string name = "item"); super.new(name); endfunction
+endclass
+class my_test extends uvm_test;
+  `uvm_component_utils(my_test)
+  drv #(int, 4) d4;
+  drv #(bit [7:0], 8) d8;
+  typedef item #(byte) byte_item;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    item #(int) i = item #(int)::type_id::create("i");
+  endfunction
+endclass
+"""
+
+
+@pytest.mark.parametrize("old,new,title", [
+    ("`uvm_component_param_utils(drv #(T, N))", "`uvm_component_utils(drv)",
+     "Change to `uvm_component_param_utils(drv #(T, N))"),
+    ("`uvm_component_param_utils(drv #(T, N))", "`uvm_component_utils(drv #(T, N))",
+     "Change to `uvm_component_param_utils(drv #(T, N))"),
+    ("`uvm_object_param_utils_begin(item #(T))", "`uvm_object_utils_begin(item)",
+     "Change to `uvm_object_param_utils_begin(item #(T))"),
+    ("`uvm_component_utils(my_test)", "`uvm_component_param_utils(my_test)", "Change to `uvm_component_utils(my_test)"),
+])
+def test_utils_param(tmp_path, old, new, title):
+    w = index(tmp_path, {"t.sv": PARAMS.replace(old, new)})
+    [d] = findings(w, "utils-param")
+    if "my_test" in old:
+        assert d.message == "my_test is registered with `uvm_component_param_utils, which does not register its " \
+                            'name: run_test("my_test") and +UVM_TESTNAME=my_test cannot find it'
+    elif "drv" in old:
+        arg = "drv" if new.endswith("(drv)") else "drv#(T,N)"
+        assert d.message == "drv is parameterized but registered with `uvm_component_utils, so drv #(int, 4) and " \
+                            f'drv #(bit[7:0], 8) both register the name "{arg}": UVM warns TPRGED and a lookup by ' \
+                            "name gets one of them; use `uvm_component_param_utils"
+    _, fix = round_trip(tmp_path, {"t.sv": PARAMS}, {"t.sv": PARAMS.replace(old, new)}, "utils-param")
+    assert (fix.title, fix.preferred, fix.safe) == (title, True, False)
+
+
+def test_utils_param_one_specialization_is_fine(tmp_path):
+    # Named once (or only through another class's parameter): its name is its own.
+    text = PARAMS.replace("`uvm_component_param_utils(drv #(T, N))", "`uvm_component_utils(drv)") \
+        .replace("  drv #(bit [7:0], 8) d8;\n", "  drv #(int, 4) d8;\n  drv #(.N(4)) d4b;\n") \
+        .replace("`uvm_object_param_utils_begin(item #(T))", "`uvm_object_utils_begin(item #(T))") \
+        .replace("  typedef item #(byte) byte_item;\n", "")
+    text += "class wrap #(type X = int) extends uvm_object;\n  item #(X) it;\nendclass\n"
+    assert findings(index(tmp_path, {"t.sv": text}), "utils-param") == []
+
+
+def test_utils_param_only_tests_need_their_name(tmp_path):
+    text = PARAMS + "class env extends uvm_env;\n  `uvm_component_param_utils(env)\n" \
+                    "  function new(string name, uvm_component parent); super.new(name, parent); endfunction\nendclass\n"
+    assert findings(index(tmp_path, {"t.sv": text}), "utils-param") == []
+
+
+def test_utils_param_fix_compiles(tmp_path):
+    w = example(tmp_path, {"tests/alu_tests.svh": ("`uvm_component_utils(alu_random_test)",
+                                                   "`uvm_component_param_utils(alu_random_test)")})
+    assert user_errors(w) == []  # it compiles; run_test("alu_random_test") fails when it runs
+    fix_once(w, "utils-param")
+    assert unchanged(tmp_path) and user_errors(w) == []
+
+
 # -- fix-all -------------------------------------------------------------------------------
 
 
