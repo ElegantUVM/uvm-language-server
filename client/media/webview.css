@@ -154,6 +154,8 @@ table.cfg th {
 }
 table.cfg td { vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
 table.cfg .locs li { padding: 1px 0 4px; }
+table.cfg tr.highlight td { background: var(--vscode-editor-findMatchHighlightBackground, color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent)); }
+table.cfg tr.highlight td:first-child { box-shadow: inset 3px 0 0 var(--vscode-focusBorder); }
 .status { white-space: nowrap; font-size: 11px; padding: 1px 7px; border-radius: 9px; border: 1px solid; color: var(--vscode-foreground); }
 .status.good { border-color: var(--status-good); background: color-mix(in srgb, var(--status-good) 14%, transparent); }
 .status.warning { border-color: var(--status-warning); background: color-mix(in srgb, var(--status-warning) 18%, transparent); }

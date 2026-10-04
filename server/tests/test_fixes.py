@@ -839,6 +839,99 @@ def test_phase_no_super_fix_compiles(tmp_path, override):
     assert unchanged(tmp_path) and user_errors(w) == []
 
 
+# -- config_db ---------------------------------------------------------------------------
+
+CONFIG = """import uvm_pkg::*;
+typedef int depth_t;
+class cfg extends uvm_object;
+  `uvm_object_utils(cfg)
+  function new(string name = "cfg"); super.new(name); endfunction
+endclass
+class env extends uvm_env;
+  `uvm_component_utils(env)
+  bit checks_enable = 1;
+  int depth;
+  depth_t depth2;
+  cfg c;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    void'(uvm_config_db #(bit)::get(this, "", "checks_enable", checks_enable));
+    if (!uvm_config_db #(int)::get(this, "", "depth", depth)) `uvm_fatal("D", "no depth")
+    if (!uvm_config_db #(int)::get(this, "", "depth", depth2)) `uvm_fatal("D", "no depth")
+    if (!uvm_config_db #(cfg)::get(this, "", "cfg", c)) `uvm_fatal("C", "no cfg")
+  endfunction
+endclass
+class test extends uvm_test;
+  `uvm_component_utils(test)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    uvm_config_db #(bit)::set(this, "*", "checks_enable", 0);
+    uvm_config_db #(int)::set(this, "*", "depth", 4);
+    uvm_config_db #(cfg)::set(this, "*", "cfg", cfg::type_id::create("c"));
+  endfunction
+endclass
+"""
+
+
+def line_no(text: str, needle: str) -> int:
+    return text[:text.index(needle)].count("\n") + 1
+
+
+def test_config_db_typo(tmp_path):
+    planted = CONFIG.replace('"*", "checks_enable", 0', '"*", "checks_enabled", 0')
+    at = line_no(planted, '"checks_enabled"')
+    w = index(tmp_path, {"t.sv": planted})
+    [d] = findings(w, "config-db-no-set")
+    assert d.severity == "warning" and d.message.endswith(f"did you mean 'checks_enabled' (set in t.sv:{at})?")
+    fixes = offered(w, d, commands=frozenset({"uvm.showConfigDb"}))
+    assert [(f.title, f.preferred, f.command) for f in fixes] == [
+        (f"Change 'checks_enable' to 'checks_enabled' (set in t.sv:{at})", True, None),
+        ("Show 'checks_enable' in the config_db cross-reference", False,
+         ("uvm.showConfigDb", [{"field": "checks_enable"}]))]
+    fix_once(w, "config-db-no-set")
+    assert not findings(w, "config-db-no-set") and \
+        'get(this, "", "checks_enabled", checks_enable)' in (tmp_path / "t.sv").read_text()
+
+
+def test_config_db_typo_candidates(tmp_path):
+    text = CONFIG.replace('"*", "checks_enable", 0);', '"*", "Checks_Enable", 0);\n'
+                          '    uvm_config_db #(bit)::set(this, "*", "checks_enabl", 0);\n'
+                          '    uvm_config_db #(int)::set(this, "*", "checks_enablee", 0);')
+    w = index(tmp_path, {"t.sv": text})
+    [d] = findings(w, "config-db-no-set")
+    # Two of the same type, none preferred; the int one is no candidate.
+    assert [(f.title, f.preferred) for f in offered(w, d)] == [
+        (f"Change 'checks_enable' to 'Checks_Enable' (set in t.sv:{line_no(text, 'Checks_Enable')})", False),
+        (f"Change 'checks_enable' to 'checks_enabl' (set in t.sv:{line_no(text, 'checks_enabl"')})", False)]
+    assert "did you mean" not in d.message
+
+
+def test_config_db_type_mismatch_fix(tmp_path):
+    for old, new, title, preferred in [
+        ('uvm_config_db #(int)::get(this, "", "depth", depth)', 'uvm_config_db #(bit)::get(this, "", "depth", depth)',
+         "Change to uvm_config_db #(int) (the type 'depth' is set with)", True),
+        ('uvm_config_db #(int)::get(this, "", "depth", depth2)', 'uvm_config_db #(byte)::get(this, "", "depth", depth2)',
+         "Change to uvm_config_db #(int) (the type 'depth' is set with)", True),  # through a typedef
+    ]:
+        w = index(tmp_path, {"t.sv": CONFIG.replace(old, new)})
+        [d] = findings(w, "config-db-type-mismatch")
+        [fix] = offered(w, d)
+        assert (fix.title, fix.preferred, fix.safe) == (title, preferred, False)
+        round_trip(tmp_path, {"t.sv": CONFIG}, {"t.sv": CONFIG.replace(old, new)}, "config-db-type-mismatch")
+    # The variable is a bit: integral both, offered but not preferred.
+    text = CONFIG.replace("  int depth;", "  bit [3:0] depth;").replace('#(int)::get(this, "", "depth", depth)',
+                                                                       '#(bit [3:0])::get(this, "", "depth", depth)')
+    w = index(tmp_path, {"t.sv": text})
+    [d] = findings(w, "config-db-type-mismatch")
+    assert [(f.title, f.preferred) for f in offered(w, d)] == \
+        [("Change to uvm_config_db #(int) (the type 'depth' is set with)", False)]
+    # A class handle of another type: an inout argument, so no fix.
+    text = CONFIG.replace("  cfg c;", "  uvm_object c;").replace("#(cfg)::get", "#(uvm_object)::get")
+    w = index(tmp_path, {"t.sv": text})
+    [d] = findings(w, "config-db-type-mismatch")
+    assert offered(w, d) == []
+
+
 # -- fix-all -------------------------------------------------------------------------------
 
 
@@ -965,4 +1058,12 @@ def test_factory_ctor_fix_compiles(tmp_path):
     [d] = findings(w, "factory-ctor")
     assert d.message == "alu_seq_item has no constructor, but the factory constructs it with new(name)"
     fix_once(w, "factory-ctor")
+    assert unchanged(tmp_path) and user_errors(w) == []
+
+
+def test_config_db_type_fix_compiles(tmp_path):
+    w = example(tmp_path, {"agent/alu_agent.svh": ('uvm_config_db #(alu_agent_config)::get',
+                                                   'uvm_config_db #(uvm_object)::get')})
+    assert user_errors(w)  # the value argument is an inout alu_agent_config
+    fix_once(w, "config-db-type-mismatch")
     assert unchanged(tmp_path) and user_errors(w) == []

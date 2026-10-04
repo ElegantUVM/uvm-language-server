@@ -827,7 +827,7 @@ class _Actions:
         if fix.changes:
             a.edit = self.edit(fix.changes)
         if fix.command:
-            a.command = T.Command(fix.title, fix.command[0], fix.command[1])
+            a.command = T.Command(title=fix.title, command=fix.command[0], arguments=fix.command[1])
         if fix.disabled:
             a.disabled = T.CodeActionDisabled(fix.disabled)
         return a
@@ -845,7 +845,7 @@ def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], 
     client = fixes.Client(roots=list(ls.workspace_roots), commands=ls.client_commands,
                           disabled_support=bool(get_capability(
                               ls.client_capabilities, "text_document.code_action.disabled_support", False)))
-    ctx = fixes.Context(ls.ws, files, client, path)
+    ctx = fixes.Context(ls.ws, files, client, path, ls.nav)
     make = _Actions(ls, files, uris)
     published = ls.published.get(path, [])
     now = docs.get(path, (None,))[0]

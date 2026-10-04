@@ -290,6 +290,27 @@ def test_fix_all(client, tb):
     doc.close()
 
 
+def test_commands_only_for_a_client_that_has_them(client, tb):
+    mon = os.path.join(tb, "agent", "alu_monitor.svh")
+    doc = Doc(client, mon)
+    doc.change("\n" + doc.text)  # moves the planted finding, so it is published again
+    [d] = doc.diagnostics(lambda ds: ds)
+    assert d["code"] == "config-db-no-set" and d["severity"] == 3  # optional get: a note
+    assert [a["title"] for a in doc.actions([d])] == []
+    doc.close()
+    c = start(tb, clientCommands=["uvm.showConfigDb"])
+    try:
+        doc = Doc(c, mon)
+        doc.change("\n" + doc.text)
+        [d] = doc.diagnostics(lambda ds: ds)
+        [a] = doc.actions([d])
+        assert (a["title"], a["command"]["command"], a["command"]["arguments"]) == (
+            "Show 'checks_enable' in the config_db cross-reference", "uvm.showConfigDb", [{"field": "checks_enable"}])
+        assert "isPreferred" not in a and "edit" not in a
+    finally:
+        c.close()
+
+
 def test_a_stale_diagnostic_maps_to_the_finding_that_moved():
     # Two findings that read the same: the one the client's (older) diagnostic was about is the
     # one at the line its line moved to, not merely the nearest.

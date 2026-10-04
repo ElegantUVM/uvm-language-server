@@ -216,7 +216,8 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
       { scheme: "file", language: "systemverilog" },
       { scheme: "file", language: "verilog" },
     ],
-    initializationOptions: { settings: settings() },
+    // Client-side commands its code actions may use; a client without them gets no such action.
+    initializationOptions: { settings: settings(), clientCommands: ["uvm.showConfigDb"] },
     synchronize: { fileEvents: watcher },
     outputChannelName: "UVM Language Server",
   };
@@ -377,7 +378,8 @@ async function classAtCursor(): Promise<string | undefined> {
   }).then((r) => r ?? undefined, () => undefined);
 }
 
-async function open(ctx: vscode.ExtensionContext, tab: PanelTab, opts: { focus?: string; test?: string } = {}) {
+async function open(ctx: vscode.ExtensionContext, tab: PanelTab,
+                    opts: { focus?: string; test?: string; field?: string } = {}) {
   // Clicking the graph button while the server is down re-runs setup instead of doing nothing.
   if (!(await ensureClient(ctx, true)) || !client) {
     return;
@@ -399,7 +401,8 @@ export async function activate(ctx: vscode.ExtensionContext) {
       open(ctx, "classes", { focus: await classAtCursor() })),
     vscode.commands.registerCommand("uvm.showTopology", (arg?: { test?: string }) =>
       open(ctx, "topology", { test: arg?.test })),
-    vscode.commands.registerCommand("uvm.showConfigDb", () => open(ctx, "configdb")),
+    vscode.commands.registerCommand("uvm.showConfigDb", (arg?: { field?: string }) =>
+      open(ctx, "configdb", { field: typeof arg?.field === "string" ? arg.field : undefined })),
     vscode.commands.registerCommand("uvm.reindex", async () => {
       status.text = "$(sync~spin) UVM: indexing";
       const s = await client?.sendRequest<Stats>("uvm/reindex", {});

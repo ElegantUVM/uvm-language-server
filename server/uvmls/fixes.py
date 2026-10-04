@@ -16,11 +16,12 @@ import re
 from dataclasses import dataclass, field
 
 from .lints import (
-    UTILS_RE, body_of, ctor_call_problem, ctor_problem, misregistered, new_target, param_problem,
-    skipped_super, swapped_macro,
+    UTILS_RE, body_of, ctor_call_problem, ctor_problem, misregistered, near_misses, new_target,
+    param_problem, skipped_super, swapped_macro,
 )
 from .model import Range
 from .project import is_bundled
+from .views import canonical_type, config_db_report, mismatched
 
 log = logging.getLogger("uvmls")
 
@@ -179,6 +180,7 @@ class Context:
     files: FileTexts
     client: Client
     path: str  # the file the fixes are asked for
+    nav: object = None  # Navigator, to find what a name in the code is
 
     def not_editable(self, path: str) -> str | None:
         """Why a fix may not edit a file, or None. The library is never edited, nor a file outside
@@ -575,7 +577,107 @@ def _phase_no_super(ctx: Context, d) -> list[Fix]:
     return [Fix(title, [TextChange(ft.path, at, at, text)], preferred=True)]
 
 
+INTEGRAL_RE = re.compile(r"^(bit|logic|reg|int|integer|byte|shortint|longint|time)"
+                         r"(\s+(signed|unsigned))?(\s*\[[^\]]*\])*$")
+CHAIN_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
+
+
+def _config_db_get(ctx: Context, d):
+    """(report, field row, get entry, file text, call span, masked call, argument spans) for the get a
+    config_db finding is about, or None when the index or the text no longer has it."""
+    data = d.data or {}
+    report = config_db_report(ctx.ws)
+    row = next((r for r in report["fields"] if r["field"] == data.get("field")), None)
+    at = list(data.get("at") or ())
+    g = row and next((e for e in row["gets"] if e["file"] == d.range.path and [e["line"], e["col"]] == at), None)
+    if g is None:
+        return None
+    ft = ctx.files.get(g["file"])
+    span = ft and ft.span(Range(g["file"], g["line"], g["col"], g["endLine"], g["endCol"]))
+    masked = mask(ft.text[span[0]:span[1]]) if span else ""
+    parsed = call_args(masked)
+    if parsed is None or len(parsed[1]) < 3:
+        return None
+    return report, row, g, ft, span, masked, parsed[1]
+
+
+def show_config_db(ctx: Context, field: str) -> list[Fix]:
+    command = "uvm.showConfigDb"
+    return [Fix(f"Show '{field}' in the config_db cross-reference", command=(command, [{"field": field}]))] \
+        if command in ctx.client.commands else []
+
+
+def _config_db_no_set(ctx: Context, d) -> list[Fix]:
+    """A get nothing sets, when a set of a close name looks like a typo: use that name."""
+    found = _config_db_get(ctx, d)
+    if found is None:
+        return []
+    report, row, g, ft, span, masked, args = found
+    near = near_misses(report, g) if not row["sets"] else []
+    a, b = args[2 if g["db"] == "uvm_config_db" else 1]
+    literal = ft.text[span[0] + a:span[0] + b]
+    lead = len(literal) - len(literal.lstrip())
+    fixes = []
+    if 0 < len(near) <= 3 and literal.strip() == f'"{row["field"]}"':
+        start = span[0] + a + lead + 1
+        for name, entry in near:
+            fixes.append(Fix(f"Change '{row['field']}' to '{name}' (set in {os.path.basename(entry['file'])}:"
+                             f"{entry['line'] + 1})", [TextChange(ft.path, start, start + len(row["field"]), name)],
+                             preferred=len(near) == 1))
+    return fixes + show_config_db(ctx, row["field"])
+
+
+def _config_db_type_mismatch(ctx: Context, d) -> list[Fix]:
+    """A get of another type than the one the field is set with: get it with that type, when the
+    variable it reads into has it (or both are integral types, which convert)."""
+    found = _config_db_get(ctx, d)
+    if found is None:
+        return []
+    report, row, g, ft, span, masked, args = found
+    fixes = show_config_db(ctx, row["field"])
+    if g not in mismatched(row):
+        return []
+    want, written = row["sets"][0]["canon"], row["sets"][0]["type"]
+    a, b = args[3 if g["db"] == "uvm_config_db" else 2]
+    var = ft.text[span[0] + a:span[0] + b].strip()
+    nav = ctx.nav
+    if nav is None:
+        from .navigation import Navigator
+        nav = Navigator(ctx.ws)
+    end = span[0] + a + len(ft.text[span[0] + a:span[0] + b].rstrip()) - 1
+    line, col = ft.position(end)
+    hits = nav.resolve(ft.path, line, col, ft.text) if CHAIN_RE.match(var) else []
+    target = next((t for t in hits if hasattr(t.obj, "type_text")), None)
+    if target is None:
+        return fixes
+    owner = target.owner if hasattr(target.owner, "params") else None
+    same = canonical_type(ctx.ws, target.obj.type_text, owner) == want
+    if not same and not (INTEGRAL_RE.match(written) and INTEGRAL_RE.match(g["type"])):
+        return fixes  # a class handle is an inout argument: another type would not compile
+    db = re.search(rf"\b{g['db']}\s*#\s*\(", masked)
+    inner = _paren_span(masked, db.end() - 1) if db else None
+    if inner is None:
+        return fixes
+    return [Fix(f"Change to {g['db']} #({written}) (the type '{row['field']}' is set with)",
+                [TextChange(ft.path, span[0] + inner[0], span[0] + inner[1], written)], preferred=same)] + fixes
+
+
+def _paren_span(masked: str, open_at: int) -> tuple[int, int] | None:
+    """The span inside the parentheses that open at `open_at`."""
+    depth = 0
+    for i in range(open_at, len(masked)):
+        if masked[i] == "(":
+            depth += 1
+        elif masked[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return open_at + 1, i
+    return None
+
+
 FIXERS = {
+    ("uvm", "config-db-no-set"): _config_db_no_set,
+    ("uvm", "config-db-type-mismatch"): _config_db_type_mismatch,
     ("uvm", "phase-no-super"): _phase_no_super,
     ("uvm", "utils-param"): _utils_param,
     ("uvm", "create-new"): _create_new,

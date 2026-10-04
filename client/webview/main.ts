@@ -153,6 +153,7 @@ let pendingFocus: string | null = focusId;
 let lastClassKey = "";
 let lastTopoKey = "";
 const errors: Partial<Record<Tab, string>> = {}; // last request error per view
+let cfgHighlight: string | null = null; // the config_db field a quick fix asked to show
 
 // ---------------------------------------------------------------------------
 // Layout of the page
@@ -774,18 +775,22 @@ function renderConfigDb() {
     h("thead", {}, h("tr", {}, h("th", {}, "Field"), h("th", {}, "Status"), h("th", {}, "Type"), h("th", {}, "Set by"), h("th", {}, "Read by"))),
   );
   const body = h("tbody");
+  let shown: HTMLElement | null = null;
   for (const r of rows) {
     const st = STATUS[r.status] ?? STATUS.ok;
-    body.append(h("tr", {},
+    const tr = h("tr", { class: r.field === cfgHighlight ? "highlight" : undefined },
       h("td", { class: "mono" }, r.field),
       h("td", {}, h("span", { class: `status ${st.cls}` }, `${st.icon} ${st.label}`)),
       h("td", { class: "mono small" }, r.types.join(", ")),
       h("td", {}, r.sets.length ? cfgLocs(r.sets) : h("span", { class: "muted" }, "—")),
       h("td", {}, r.gets.length ? cfgLocs(r.gets) : h("span", { class: "muted" }, "—")),
-    ));
+    );
+    if (r.field === cfgHighlight) shown = tr;
+    body.append(tr);
   }
   table.append(body);
   cfgView.append(rows.length ? table : h("p", { class: "muted" }, "No config_db calls match."));
+  shown?.scrollIntoView({ block: "center" });
   if (cfgData.dynamic.length && state.cfgFilter === "all") {
     cfgView.append(h("h3", {}, `Calls with computed field names (${cfgData.dynamic.length})`),
       h("p", { class: "muted small" }, "The field name is not a string literal, so these cannot be matched statically."),
@@ -996,6 +1001,7 @@ function searchHits(d: Diagram, q: string): string[] {
 
 function applySearch() {
   const q = searchBox.value.trim().toLowerCase();
+  if (cfgHighlight !== null && searchBox.value.trim() !== cfgHighlight) cfgHighlight = null;
   if (state.tab === "configdb") { renderConfigDb(); return; }
   const d = currentDiagram();
   if (!d) return;
@@ -1098,6 +1104,13 @@ window.addEventListener("message", (ev) => {
       break;
     case "tab":
       if (m.focus && (!classData || isNode(m.focus))) { pendingFocus = m.focus; setFocus(m.focus); }
+      if (typeof m.field === "string") {
+        // From a quick fix: that field's row, whatever the filters said.
+        cfgHighlight = m.field;
+        searchBox.value = m.field;
+        state.cfgFilter = "all";
+        persist();
+      }
       setTab(m.tab);
       if (m.focus && classData) void renderClassGraph(true);
       break;

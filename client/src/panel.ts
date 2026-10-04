@@ -53,7 +53,7 @@ export class GraphPanel {
   }
 
   static show(ctx: vscode.ExtensionContext, client: LanguageClient, tab: PanelTab,
-              opts: { focus?: string; test?: string }) {
+              opts: { focus?: string; test?: string; field?: string }) {
     if (!GraphPanel.current) {
       const panel = vscode.window.createWebviewPanel(
         GraphPanel.viewType, "UVM", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
@@ -70,7 +70,7 @@ export class GraphPanel {
       p.test = opts.test;
       p.loadTopology();
     }
-    p.post({ type: "tab", tab, focus: opts.focus });
+    p.post({ type: "tab", tab, focus: opts.focus, field: opts.field });
   }
 
   /**
