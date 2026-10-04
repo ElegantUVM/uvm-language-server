@@ -51,6 +51,13 @@ def test_class_graph_inheritance_reaches_uvm_classes(bundled_ws):
     assert drv["libDistance"] == 1 and drv["file"] == UVM_DRIVER
 
 
+def test_user_classes_look_the_same_on_either_model(ws, bundled_ws):
+    # The real macros generate more members (get_type, create, ...); none of them are sent.
+    def user_nodes(w):
+        return {n["id"]: n for n in class_graph(w)["nodes"] if not n["library"]}
+    assert user_nodes(ws) == user_nodes(bundled_ws)
+
+
 def test_definition_goes_into_the_bundled_sources(bundled_ws):
     nav = Navigator(bundled_ws)
     for needle, offset, line in (("uvm_driver #(", 1, 44), ("get_next_item(req)", 14, 65)):

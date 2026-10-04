@@ -42,10 +42,15 @@ def class_graph(ws: Workspace) -> dict:
         if nid in nodes:
             return nid
         members = []
+        # Macro-generated members (type_id, get_type, ...) are left out, except p_sequencer.
         for v in cls.properties:
+            if v.generated and v.name != "p_sequencer":
+                continue
             members.append({"name": v.name, "type": v.type_text, "kind": "property",
                             "generated": v.generated, "qualifiers": v.qualifiers, **_loc(v.range)})
         for m in cls.methods:
+            if m.generated:
+                continue
             impl = ws.impls.get((cls.qualname, m.name), m) if m.is_prototype else m
             members.append({"name": m.name, "type": m.return_type or m.kind, "kind": m.kind,
                             "generated": m.generated, "qualifiers": m.qualifiers,
