@@ -588,6 +588,85 @@ endclass
     assert offered(w, found["sub_drv"]) == [] and offered(w, found["arg_drv"]) == []
 
 
+# -- create-new ------------------------------------------------------------------------
+
+NEWS = """import uvm_pkg::*;
+class item extends uvm_sequence_item;
+  `uvm_object_utils(item)
+  function new(string name = "item"); super.new(name); endfunction
+endclass
+class mon extends uvm_monitor;
+  `uvm_component_utils(mon)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class pdrv #(type T = int) extends uvm_driver;
+  `uvm_component_param_utils(pdrv #(T))
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+typedef mon mon_t;
+class agent extends uvm_agent;
+  `uvm_component_utils(agent)
+  mon m;
+  mon_t mt;
+  pdrv #(item) d;
+  mon mons[2];
+  uvm_analysis_port #(item) ap;
+  uvm_tlm_analysis_fifo #(item) fifo;
+  agent self;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    mon local_m;
+    m = mon::type_id::create("m", this);
+    mt = mon_t::type_id::create("mt", this);
+    d = pdrv#(item)::type_id::create("d", this);
+    local_m = mon::type_id::create("local_m", this);
+    foreach (mons[i]) mons[i] = mon::type_id::create($sformatf("mons_%0d", i), this);
+    ap = new("ap", this);
+    fifo = new("fifo", this);
+    self = new("self", null);
+  endfunction
+endclass
+"""
+
+
+@pytest.mark.parametrize("old,new,lhs,written", [
+    ('m = mon::type_id::create("m", this)', 'm = new("m", this)', "m", "mon"),
+    ('mt = mon_t::type_id::create("mt", this)', 'mt = new("mt", this)', "mt", "mon_t"),
+    ('d = pdrv#(item)::type_id::create("d", this)', 'd = new("d", this)', "d", "pdrv#(item)"),
+    ('local_m = mon::type_id::create("local_m", this)', 'local_m = new("local_m", this)', "local_m", "mon"),
+    ('mons[i] = mon::type_id::create($sformatf("mons_%0d", i), this)', 'mons[i] = new($sformatf("mons_%0d", i), this)',
+     "mons[i]", "mon"),
+    ('m = mon::type_id::create("m", this)', 'm = mon::new("m", this)', "m", "mon"),
+])
+def test_create_new(tmp_path, old, new, lhs, written):
+    planted = NEWS.replace(old, new)
+    w = index(tmp_path, {"t.sv": planted})
+    [d] = findings(w, "create-new")
+    target = "pdrv" if written.startswith("pdrv") else "mon"
+    assert d.message == f"{lhs} is created with new(), so a factory override of {target} never applies here; " \
+                        f"use {written}::type_id::create"
+    _, fix = round_trip(tmp_path, {"t.sv": NEWS}, {"t.sv": planted}, "create-new")
+    assert (fix.title, fix.preferred, fix.safe) == (f"Create '{lhs}' with {written}::type_id::create", True, False)
+
+
+def test_create_new_quiet(tmp_path):
+    # Ports, FIFOs, the class itself, an unregistered component, three arguments, a covergroup.
+    text = NEWS.replace("class mon extends uvm_monitor;\n  `uvm_component_utils(mon)",
+                        "class mon extends uvm_monitor;\n  covergroup cg; endgroup") \
+        .replace('m = mon::type_id::create("m", this);', 'm = new("m", this);\n    cg = new();') \
+        .replace('mt = mon_t::type_id::create("mt", this);', 'd = new("d", this, 1);')
+    w = index(tmp_path, {"t.sv": text})
+    assert findings(w, "create-new") == []
+
+
+def test_create_new_fix_compiles(tmp_path):
+    w = example(tmp_path, {"agent/alu_agent.svh": ('m_monitor = alu_monitor::type_id::create("m_monitor", this)',
+                                                   'm_monitor = new("m_monitor", this)')})
+    assert user_errors(w) == []  # it compiles: the factory is silently bypassed
+    fix_once(w, "create-new")
+    assert unchanged(tmp_path) and user_errors(w) == []
+
+
 # -- fix-all -------------------------------------------------------------------------------
 
 

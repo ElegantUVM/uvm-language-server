@@ -15,7 +15,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from .lints import UTILS_RE, ctor_call_problem, ctor_problem, misregistered, swapped_macro
+from .lints import UTILS_RE, ctor_call_problem, ctor_problem, misregistered, new_target, swapped_macro
 from .model import Range
 from .project import is_bundled
 
@@ -474,7 +474,38 @@ def _add_constructor(ctx: Context, ft: FileText, cls) -> list[Fix]:
     return [Fix(title, [TextChange(ft.path, ft.starts[at], ft.starts[at], text)], preferred=True, safe=True)]
 
 
+ASSIGN_RE = re.compile(r"(?<![=!<>])=(?!=)")
+
+
+def _create_new(ctx: Context, d) -> list[Fix]:
+    """`x = new(name, parent)` of a registered component: create it through the factory instead."""
+    ws, data = ctx.ws, d.data or {}
+    cls = ws.class_by_qual.get(data.get("cls"))
+    at = list(data.get("at") or ())
+    cr = cls and next((c for c in ws.calls_of(cls).creates if c.kind == "new"
+                       and c.range.path == d.range.path and [c.range.line, c.range.col] == at), None)
+    made = cr and new_target(ws, cls, cr)
+    ft = ctx.files.get(cr.range.path) if made else None
+    span = ft and ft.span(cr.range)
+    if span is None:
+        return []
+    masked = mask(ft.text[span[0]:span[1]])
+    eq = ASSIGN_RE.search(masked)
+    news = list(re.finditer(r"\bnew\b", masked[eq.end():])) if eq else []
+    if len(news) != 1:
+        return []
+    start = span[0] + eq.end() + news[0].start()
+    scoped = re.search(r"::\s*$", masked[:eq.end() + news[0].start()])
+    text = "type_id::create" if scoped else f"{made[1]}::type_id::create"
+    if bool(scoped) != (cr.type is not None):
+        return []
+    # Preferred, not safe: an override of the class applies from now on, which is the point.
+    return [Fix(f"Create '{cr.target}' with {made[1]}::type_id::create",
+                [TextChange(ft.path, start, start + 3, text)], preferred=True)]
+
+
 FIXERS = {
+    ("uvm", "create-new"): _create_new,
     ("uvm", "factory-ctor"): _factory_ctor,
     ("uvm", "utils-mismatch"): _utils_mismatch,
     ("uvm", "create-unregistered"): _create_unregistered,

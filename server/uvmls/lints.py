@@ -5,7 +5,7 @@ from __future__ import annotations
 import bisect
 import re
 
-from .model import Diag
+from .model import Diag, Variable
 from .uvm import COMPONENT_ROLES
 from .views import config_db_report
 from .workspace import Workspace, parse_type_text
@@ -98,6 +98,35 @@ def ctor_problem(ws: Workspace, cls) -> tuple[str, str] | None:
     return None
 
 
+NEW_TARGET_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_$]*)(\[[^\]]*\])*$")  # x, or an element x[i]
+
+
+def new_target(ws: Workspace, cls, cr):
+    """(class, type as written) of what a `x = new(...)` makes, when that is a component of the
+    project's that the factory knows: a registered user class, not the class making it."""
+    m = NEW_TARGET_RE.match(cr.target or "")
+    if cr.kind != "new" or cr.nargs != 2 or not (m or cr.type):
+        return None
+    if cr.type is not None:  # X::new(...)
+        spec, written = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls), cr.type.text
+    else:
+        body = ws.impls.get((cls.qualname, cr.method)) or \
+            next((x for x in cls.methods if x.name == cr.method and not x.is_prototype), None)
+        var = next((v for v in body.args + body.locals if v.name == m.group(1)), None) if body else None
+        if var is not None:
+            spec = ws.resolve_spec(var.type.name, var.type.scope, var.type.args, cls) if var.type else None
+        else:
+            hit = ws.find_member(cls, m.group(1))
+            var = hit[1] if hit and isinstance(hit[1], Variable) else None
+            spec = ws.member_type_spec(*hit) if var is not None else None
+        written = var.type_text if var is not None else ""
+    t = spec.cls if spec is not None else None
+    if t is None or t.library or t is cls or t.registration != "component" or not written:
+        return None
+    role = ws.role(t)
+    return (t, written) if role in COMPONENT_ROLES and role != "tlm" else None
+
+
 def lint(ws: Workspace) -> dict[str, list[Diag]]:
     out: dict[str, list[Diag]] = {}
 
@@ -146,6 +175,11 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
             add(cls.base.range or cls.range, f"base class '{cls.base.name}' was not found in the indexed sources",
                 "info", "unknown-base", cls=cls.qualname)
         for cr in ws.calls_of(cls).creates:
+            made = new_target(ws, cls, cr) if cr.kind == "new" else None
+            if made:
+                add(cr.range, f"{cr.target} is created with new(), so a factory override of {made[0].name} never "
+                              f"applies here; use {made[1]}::type_id::create", "warning", "create-new",
+                    cls=cls.qualname, at=[cr.range.line, cr.range.col])
             if cr.kind != "factory" or cr.type is None:
                 continue
             spec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls)
