@@ -97,6 +97,8 @@ export class Diagram {
   private drag: { x: number; y: number; tx: number; ty: number; moved: boolean } | null = null;
   private suppressClick = false;
   private hovered: Element | null = null;
+  /** The view is fitted: a resize fits it again, until the user pans, zooms or centres a node. */
+  private fitted = true;
   private elk = new ELK();
 
 
@@ -112,6 +114,7 @@ export class Diagram {
     this.svg.append(this.styleEl, this.defs, this.viewport);
     container.append(this.svg);
     this.bindEvents();
+    new ResizeObserver(() => { if (this.fitted) this.fit(false); }).observe(container);
   }
 
   // -- public API -----------------------------------------------------------
@@ -196,6 +199,7 @@ export class Diagram {
   }
 
   fit(animate = true) {
+    this.fitted = true;
     const vw = this.svg.clientWidth || this.container.clientWidth;
     const vh = this.svg.clientHeight || this.container.clientHeight;
     if (!this.width || !vw) return;
@@ -210,6 +214,7 @@ export class Diagram {
   centerOn(id: string) {
     const n = this.nodes.get(id);
     if (!n) return;
+    this.fitted = false;
     const vw = this.svg.clientWidth, vh = this.svg.clientHeight;
     if (this.k < 0.7) this.k = 1;
     this.tx = vw / 2 - (n.x + n.w / 2) * this.k;
@@ -578,6 +583,7 @@ export class Diagram {
   }
 
   private zoomAt(px: number, py: number, factor: number) {
+    this.fitted = false;
     const nk = Math.min(3, Math.max(0.05, this.k * factor));
     const f = nk / this.k;
     this.tx = px - (px - this.tx) * f;
@@ -603,6 +609,7 @@ export class Diagram {
       const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y;
       if (!this.drag.moved && Math.hypot(dx, dy) > 3) {
         this.drag.moved = true;
+        this.fitted = false;
         svg.classList.add("dragging");
       }
       if (this.drag.moved) {
