@@ -1,4 +1,6 @@
 from uvmls.indexer import Indexer
+from uvmls.project import ProjectConfig
+from uvmls.workspace import Workspace
 
 
 def classes(ws):
@@ -84,3 +86,18 @@ def test_include_skipped_by_its_guard(tmp_path):
     h = str(tmp_path / "h.svh")
     assert idx.files == {str(tmp_path / "a.sv"), h}
     assert [(t, r.line) for t, r in idx.includes[str(tmp_path / "a.sv")]] == [(h, 0), (h, 1)]
+
+
+def test_latin1_source_text_is_indexed(tmp_path):
+    # Legacy files are often Latin-1: comments, strings and include names that are not UTF-8.
+    (tmp_path / "pkg.sv").write_bytes(
+        b'package p;\n  import uvm_pkg::*;\n  `include "fich\xe9.svh"\n'
+        b'  // Pilote g\xe9n\xe9ral\n  class drv #(parameter string MODE = "r\xe9el") extends uvm_component;\n'
+        b'    function void build_phase(uvm_phase phase);\n'
+        b'      uvm_config_db #(int)::set(this, "*", "d\xe9lai", 1);\n    endfunction\n  endclass\nendpackage\n')
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    drv = w.find_class("drv")
+    assert drv.doc == "Pilote g\ufffdn\ufffdral" and drv.params[0].default == '"r\ufffdel"'
+    assert [c.field_name for c in w.calls_of(drv).config_db] == ["d\ufffdlai"]
+    assert "CouldNotOpenIncludeFile" in {d.code for d in w.user_diagnostics()}

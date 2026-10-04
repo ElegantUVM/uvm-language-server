@@ -22,7 +22,7 @@ import pyslang as ps
 from pyslang import ast, driver
 from pyslang import syntax as S
 
-from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro
+from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro, slang_text
 from .project import BUNDLED_UVM, SourceSet, norm
 
 log = logging.getLogger("uvmls")
@@ -199,7 +199,7 @@ class _Notes:
     def of(self, diag, severity) -> list[dict]:
         self.client.clear()
         self.eng.issue(diag)
-        found = [m for m in map(NOTE_RE.match, self.client.getString().splitlines()) if m]
+        found = [m for m in map(NOTE_RE.match, slang_text(self.client.getString).splitlines()) if m]
         if severity == ps.DiagnosticSeverity.Note and diag.location != ps.SourceLocation.NoLocation:
             found = found[1:]  # an $info is itself printed as a note, ahead of its own notes
         return [{"file": self.loc.as_given(norm(m.group(1))), "line": int(m.group(2)) - 1,
@@ -297,7 +297,7 @@ def _elaborate(req: dict) -> dict:
             if severity in library:
                 library[severity] += 1
             continue
-        message = eng.formatMessage(diag)
+        message = slang_text(eng.formatMessage, diag)
         if (span, code, message) in seen:
             continue  # e.g. a macro that expands its argument twice
         seen.add((span, code, message))

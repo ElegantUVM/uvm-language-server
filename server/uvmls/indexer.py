@@ -56,6 +56,15 @@ RESOURCE_DB_OPS = {"set": "set", "read_by_name": "get", "read_by_type": "get",
                    "set_default": "set", "set_override": "set"}
 
 
+def slang_text(get, *args) -> str:
+    """Text from slang as str. Source bytes that are not UTF-8 (a Latin-1 comment or string, say)
+    become U+FFFD instead of raising: pybind11 decodes strictly, and keeps the bytes in the error."""
+    try:
+        return get(*args)
+    except UnicodeDecodeError as e:
+        return e.object.decode("utf-8", "replace")
+
+
 def _shim_text() -> str:
     with open(SHIM_FILE, encoding="utf-8") as f:
         return f.read()
@@ -90,7 +99,7 @@ def compact(node) -> str:
     out: list[str] = []
     prev = ""
     for tok in iter_tokens(node):
-        raw = tok.rawText
+        raw = slang_text(getattr, tok, "rawText")
         if not raw:
             continue
         if prev and WORDISH.match(prev[-1]) and WORDISH.match(raw[0]):
@@ -105,7 +114,7 @@ def pretty(node) -> str:
     out: list[str] = []
     first = True
     for tok in iter_tokens(node):
-        raw = tok.rawText
+        raw = slang_text(getattr, tok, "rawText")
         if not raw:
             continue
         if not first and any(t.kind in (P.TriviaKind.Whitespace, P.TriviaKind.EndOfLine,
@@ -135,7 +144,7 @@ def unwrap(expr):
 def string_literal(expr) -> str | None:
     expr = unwrap(expr)
     if expr is not None and expr.kind == K.StringLiteralExpression:
-        return expr.literal.valueText
+        return slang_text(getattr, expr.literal, "valueText")
     return None
 
 
@@ -382,7 +391,7 @@ class Extractor:
                     break
                 if newlines > 1 and not comments:
                     break
-                comments.insert(0, tr.getRawText())
+                comments.insert(0, slang_text(tr.getRawText))
                 newlines = 0
             elif k == P.TriviaKind.EndOfLine:
                 newlines += 1
@@ -951,7 +960,7 @@ class Extractor:
             sev = eng.getSeverity(d.code, d.location)
             severity = {ps.DiagnosticSeverity.Error: "error", ps.DiagnosticSeverity.Fatal: "error",
                         ps.DiagnosticSeverity.Warning: "warning"}.get(sev, "info")
-            msg = eng.formatMessage(d)
+            msg = slang_text(eng.formatMessage, d)
             if code in ("UnknownDirective", "CouldNotOpenIncludeFile"):
                 severity = "warning"
                 msg += " (add its directory to uvm.includeDirs or a filelist)"
@@ -960,12 +969,13 @@ class Extractor:
     def collect_includes(self):
         earlier: dict[str, str] = {}
         for inc in self.tree.getIncludeDirectives():
+            name = slang_text(getattr, inc, "path")
             # A header skipped by its include guard has no buffer: it is the one included before.
-            target = self.path_of(inc.buffer.id) if inc.buffer else earlier.get(inc.path)
+            target = self.path_of(inc.buffer.id) if inc.buffer else earlier.get(name)
             syn = inc.syntax
             if target is None or syn is None:
                 continue
-            earlier.setdefault(inc.path, target)
+            earlier.setdefault(name, target)
             r = self.node_range(syn)
             if r is None:
                 continue

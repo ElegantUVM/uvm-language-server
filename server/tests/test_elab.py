@@ -139,6 +139,19 @@ def test_an_info_task_is_not_its_own_related_information(tmp_path):
         (5, "info", "$info encountered: m is 4", ["expanded from macro 'CHECK'"])]
 
 
+def test_a_message_quoting_latin1_text_keeps_the_other_diagnostics(tmp_path):
+    # A legacy Latin-1 file: slang's message quotes its bytes, which are not UTF-8.
+    (tmp_path / "top.sv").write_bytes(b'module top;\n  if (1) begin : g\n    $info("temp\xe9rature hors limites");\n'
+                                      b'  end\n  initial x = 1;\nendmodule\n')
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    r = elaborate(request_for(w))
+    assert r["error"] is None
+    found = {(d["line"], d["code"]): d["message"] for d in r["diagnostics"]}
+    assert found[(2, "InfoTask")] == "$info encountered: temp\ufffdrature hors limites"
+    assert found[(4, "UndeclaredIdentifier")] == "use of undeclared identifier 'x'"
+
+
 def test_library_diagnostics_are_never_reported(bundled_ws):
     uvm_driver = os.path.join(BUNDLED_UVM, "comps", "uvm_driver.svh")
     text = edited(uvm_driver, "endclass", "  function void broken(); undefined_thing = 1; endfunction\nendclass")
