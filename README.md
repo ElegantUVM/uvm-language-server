@@ -89,6 +89,7 @@ On this machine (WSL2, Python 3.14, pyslang 12):
 | Elaboration, ALU example with the bundled UVM 1.2: compile + elaborate / through the server's worker process / `elab -f` CLI | 0.09 s / 0.16 s / 0.17 s |
 | Elaboration, synthetic project (no top module, no UVM copy of its own) | 0.6 s compile + elaborate; 0.85 s through the worker; `elab -f` CLI 0.8-1.0 s |
 | Hover while the synthetic project elaborates | median 0.4 ms as when idle, slowest 14 ms (it runs in its own process) |
+| Peak memory of the elaboration process: ALU example / synthetic project | 0.1 GB / 0.84 GB (freed when it exits) |
 
 The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench.
 
