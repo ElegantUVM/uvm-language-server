@@ -233,6 +233,83 @@ def test_elaboration_on_save(client):
     client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
 
 
+def test_parse_errors_are_published_once(client):
+    # Elaboration reports parse errors too; only the index's copy is published. The index
+    # adds a hint to an include it cannot find, so its message differs from slang-elab's.
+    path = os.path.join(EXAMPLE, "agent/alu_driver.svh")
+    with open(path) as f:
+        text = f.read()
+    u = uri("agent/alu_driver.svh")
+    line = text[:text.index("m_cfg.vif;")].count("\n")
+    broken = text.replace("// Drives alu_seq_items onto the pin interface.", '`include "no_such_file.svh"')
+    broken = broken.replace("m_cfg.vif;", "m_cfg.vif")
+    client.forget("textDocument/publishDiagnostics")
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": broken}})
+    msg = client.wait_for("textDocument/publishDiagnostics",
+                          lambda m: m["params"]["uri"] == u and m["params"]["diagnostics"])
+    client.forget("textDocument/publishDiagnostics", "uvm/elaborationStatus")
+    client.notify("textDocument/didSave", {"textDocument": {"uri": u}})
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 2
+    # The run's merged publish, unless it left what the client shows as it was.
+    *_, msg = [msg] + [m for m in client.notifications
+                       if m["method"] == "textDocument/publishDiagnostics" and m["params"]["uri"] == u]
+    diags = sorted(msg["params"]["diagnostics"], key=lambda d: d["range"]["start"]["line"])
+    assert [(d["range"]["start"]["line"], d["code"], d["source"]) for d in diags] == \
+        [(0, "CouldNotOpenIncludeFile", "slang"), (line, "ExpectedToken", "slang")]
+    assert "uvm.includeDirs" in diags[0]["message"]
+
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                             "contentChanges": [{"text": text}]})
+    client.forget("uvm/elaborationStatus")
+    client.notify("textDocument/didSave", {"textDocument": {"uri": u}})
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+
+
+def test_elaboration_diagnostics_follow_edits_until_the_next_run(client):
+    # Between saves the last run's errors move with the lines above them, and go away once the
+    # lines they are on change: never back at stale lines, never next to the index's own copy.
+    path = os.path.join(EXAMPLE, "agent/alu_driver.svh")
+    with open(path) as f:
+        text = f.read()
+    u = uri("agent/alu_driver.svh")
+    versions = iter(range(2, 100))
+    broken = text.replace("m_cfg.vif", "m_cfg.vfi")
+    syntax = text.replace("super.build_phase(phase);", "super.build_phase(phase)")
+    line = broken[:broken.index("m_cfg.vfi")].count("\n")
+    sline = text[:text.index("super.build_phase(phase);")].count("\n")
+    view = []
+
+    def edit(new_text, save=False):
+        """The file's diagnostics in the client once the flush (and the run, if saved) is done."""
+        client.forget("textDocument/publishDiagnostics", "uvm/elaborationStatus", "uvm/indexChanged")
+        client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": next(versions)},
+                                                 "contentChanges": [{"text": new_text}]})
+        if save:
+            client.notify("textDocument/didSave", {"textDocument": {"uri": u}})
+        client.wait_for("uvm/indexChanged")
+        if save:
+            assert client.wait_for("uvm/elaborationStatus", finished)["params"]["state"] == "done"
+        sent = [m for m in client.notifications
+                if m["method"] == "textDocument/publishDiagnostics" and m["params"]["uri"] == u]
+        if sent:
+            view[:] = [(d["range"]["start"]["line"], d["source"], d["code"]) for d in sent[-1]["params"]["diagnostics"]]
+        return sorted(view)
+
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
+    assert edit(broken, save=True) == [(line, "slang-elab", "UnknownMember")]
+    assert edit("//\n//\n//\n" + broken) == [(line + 3, "slang-elab", "UnknownMember")]
+    assert edit(broken) == [(line, "slang-elab", "UnknownMember")]
+    assert edit(broken.replace("m_cfg.vfi", "m_cfg.vfj")) == []  # its own line changed
+    assert edit(syntax, save=True) == [(sline, "slang", "ExpectedToken")]
+    assert edit("//\n//\n" + syntax) == [(sline + 2, "slang", "ExpectedToken")]  # once, not twice
+    assert edit("//\n//\n" + text) == []  # fixed without saving: no slang-elab copy comes back
+    assert edit(text, save=True) == []
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+
+
 def test_a_long_elaboration_report_is_capped(client):
     path = os.path.join(EXAMPLE, "tb/tb_top.sv")
     with open(path) as f:

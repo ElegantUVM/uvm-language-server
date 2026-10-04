@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import time
+from dataclasses import replace
 from urllib.parse import unquote, urlparse
 
 from lsprotocol import types as T
@@ -68,6 +69,29 @@ def location(r: Range) -> T.Location:
     return T.Location(path_to_uri(r.path), lsp_range(r))
 
 
+def _read(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8", errors="replace", newline="") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def shift_lines(old: str, new: str):
+    """Where each line of `old` is in `new`, taking the edit as one changed block of lines: lines
+    before it keep their number, lines after it move with it, lines inside it are gone (None)."""
+    a, b = old.split("\n"), new.split("\n")
+    n = min(len(a), len(b))
+    head = 0
+    while head < n and a[head] == b[head]:
+        head += 1
+    tail = 0
+    while tail < n - head and a[-1 - tail] == b[-1 - tail]:
+        tail += 1
+    delta = len(b) - len(a)
+    return lambda line: line if line < head else line + delta if line >= len(a) - tail else None
+
+
 def lsp_diagnostic(d: Diag) -> T.Diagnostic:
     return T.Diagnostic(range=lsp_range(d.range), message=d.message,
                         severity=SEVERITY.get(d.severity, T.DiagnosticSeverity.Warning),
@@ -87,6 +111,7 @@ class UvmLanguageServer(LanguageServer):
         self.pending: set[str] = set()
         self._debounce: asyncio.TimerHandle | None = None
         self.elab_diags: dict[str, list[Diag]] = {}
+        self.elab_texts: dict[str, str] = {}  # the unsaved editor text those diagnostics come from
         self.elab_status: dict = {"state": "off"}
         self._elab_run = 0  # bumped by every start or stop; older runs discard their results
         self._elab_task: asyncio.Future | None = None
@@ -145,12 +170,13 @@ class UvmLanguageServer(LanguageServer):
             if not isinstance(lint_cfg, dict) or lint_cfg.get("enabled", True):
                 for path, diags in lint(self.ws).items():
                     per_file.setdefault(path, []).extend(diags)
+        docs = self.documents
         for path, diags in self.elab_diags.items():
             # Parse errors come from both; keep the index's (it adds hints, e.g. for includes).
             have = per_file.get(path, [])
             known = {(d.range.line, d.message) for d in have} | {(d.range.line, d.code) for d in have}
-            extra = [d for d in diags if (d.range.line, d.message) not in known
-                     and (d.range.line, d.code) not in known]
+            extra = [d for d in self.current_elab_diags(path, diags, docs)
+                     if (d.range.line, d.message) not in known and (d.range.line, d.code) not in known]
             if extra:
                 per_file.setdefault(path, []).extend(extra)
         for path in self.published.keys() - per_file.keys():
@@ -160,6 +186,35 @@ class UvmLanguageServer(LanguageServer):
                 items = [lsp_diagnostic(d) for d in diags]
                 self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), items))
         self.published = per_file
+
+    def current_elab_diags(self, path: str, diags: list[Diag], docs: dict[str, str]) -> list[Diag]:
+        """The last run's diagnostics for a file, on the lines they are on now: an edit since that run
+        moves those after it and drops those on the lines it changed, until the next run."""
+        then, now = self.elab_texts.get(path), docs.get(path)
+        if then is None and now is None:
+            return diags  # compiled from disk and not open: a change on disk elaborates again
+        if then is None or now is None:
+            disk = _read(path)
+            if disk is None:
+                return []
+            then, now = then if then is not None else disk, now if now is not None else disk
+        if then == now:
+            return diags
+        where = shift_lines(then, now)
+
+        def move(r: Range) -> Range | None:
+            if r.path != path:
+                return r
+            line, end = where(r.line), where(r.end_line)
+            return None if line is None or end is None else replace(r, line=line, end_line=end)
+
+        out = []
+        for d in diags:
+            rng = move(d.range)
+            if rng is not None:
+                related = [(r, m) for r, m in ((move(r), m) for r, m in d.related) if r is not None]
+                out.append(replace(d, range=rng, related=related))
+        return out
 
     # -- elaboration -----------------------------------------------------------
 
@@ -194,7 +249,7 @@ class UvmLanguageServer(LanguageServer):
 
     def clear_elaboration(self):
         self.stop_elaboration()
-        self.elab_diags = {}
+        self.elab_diags, self.elab_texts = {}, {}
         self.publish_diagnostics()
         self.notify_elaboration({"state": "off"})
 
@@ -226,7 +281,7 @@ class UvmLanguageServer(LanguageServer):
             request = None if reason else elab.request_for(self.ws, self.elab_overrides())
             uvm = elab.uvm_label(self.ws.sources)
         if reason:
-            self.elab_diags = {}
+            self.elab_diags, self.elab_texts = {}, {}
             self.publish_diagnostics()
             self.notify_elaboration({"state": "skipped", "message": reason, "uvm": uvm})
             return self.elab_status
@@ -258,7 +313,7 @@ class UvmLanguageServer(LanguageServer):
                 notes.append(f"Problems lists the first {listed} of {listed + counts['omitted']}")
             if counts.get("libraryErrors"):
                 notes.append(f"{counts['libraryErrors']} error(s) the UVM library reports on its own are not shown")
-        self.elab_diags = per_file
+        self.elab_diags, self.elab_texts = per_file, request["overrides"]
         self.publish_diagnostics()
         self.notify_elaboration({"state": "failed" if result.get("error") else "done",
                                  "errors": counts.get("errors", 0), "warnings": counts.get("warnings", 0),
