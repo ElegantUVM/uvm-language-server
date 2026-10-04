@@ -233,6 +233,29 @@ def test_elaboration_on_save(client):
     client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
 
 
+def test_a_long_elaboration_report_is_capped(client):
+    path = os.path.join(EXAMPLE, "tb/tb_top.sv")
+    with open(path) as f:
+        text = f.read()
+    u = uri("tb/tb_top.sv")
+    many = text.replace("endmodule", "".join(f"  initial nope_{i} = 1;\n" for i in range(150)) + "endmodule")
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": many}})
+    client.forget("textDocument/publishDiagnostics", "uvm/elaborationStatus")
+    client.notify("textDocument/didSave", {"textDocument": {"uri": u}})
+    status = client.wait_for("uvm/elaborationStatus", finished)["params"]
+    assert status["errors"] == 150 and "Problems lists the first 100 of 150" in status["message"]
+    *_, msg = [m for m in client.notifications
+               if m["method"] == "textDocument/publishDiagnostics" and m["params"]["uri"] == u]
+    assert len(elab_diags(msg)) == 100
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                             "contentChanges": [{"text": text}]})
+    client.forget("uvm/elaborationStatus")
+    client.notify("textDocument/didSave", {"textDocument": {"uri": u}})
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+
+
 def test_elaboration_off_on_demand_and_on_change(client):
     u = uri("agent/alu_driver.svh")
     with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:

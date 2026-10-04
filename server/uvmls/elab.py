@@ -32,6 +32,8 @@ SEVERITY = {ps.DiagnosticSeverity.Error: "error", ps.DiagnosticSeverity.Fatal: "
             ps.DiagnosticSeverity.Warning: "warning"}
 NOTE_RE = re.compile(r"^(.+?):(\d+):(\d+): note: (.*)$")
 HEADER_EXTENSIONS = (".svh", ".vh", ".svi")
+MAX_PER_FILE = 100  # diagnostics listed per file, and in all; the counts include the rest
+MAX_LISTED = 1000
 
 
 # -- requests ------------------------------------------------------------------
@@ -231,10 +233,10 @@ def _with_uvm_macros(d, loc: _Locator, include_dirs: list[str]):
     return trees if prelude else None
 
 
-def _counts(diags: list[dict], library: dict[str, int]) -> dict:
+def _counts(diags: list[dict], library: dict[str, int], omitted: int = 0) -> dict:
     sev = [d["severity"] for d in diags]
     return {"errors": sev.count("error"), "warnings": sev.count("warning"), "infos": sev.count("info"),
-            "libraryErrors": library["error"], "libraryWarnings": library["warning"]}
+            "libraryErrors": library["error"], "libraryWarnings": library["warning"], "omitted": omitted}
 
 
 def _failed(message: str) -> dict:
@@ -253,7 +255,7 @@ def _elaborate(req: dict) -> dict:
     missing = [r for r in roots if not os.path.isfile(r)]  # slang's loader needs the file on disk
     d = driver.Driver()
     d.addStandardArgs()
-    args = ["slang"]
+    args = ["slang", "--error-limit", "0"]  # the default stops after a few dozen; MAX_LISTED applies
     for inc in req.get("includeDirs") or []:
         args += ["-I", inc]
     for name, value in (req.get("defines") or {}).items():
@@ -289,8 +291,8 @@ def _elaborate(req: dict) -> dict:
     diags += am.getDiagnostics()
     eng = d.diagEngine
     notes = _Notes(eng, loc)
-    out = [_diag(r, "error", "io", "cannot read file") for r in missing]
-    out += [_diag(None, "error", "io", str(e)) for e in d.sourceLoader.errors]
+    found = [(_diag(r, "error", "io", "cannot read file"), None, None) for r in missing]
+    found += [(_diag(None, "error", "io", str(e)), None, None) for e in d.sourceLoader.errors]
     seen = set()
     library = {"error": 0, "warning": 0}
     for diag in diags:
@@ -311,11 +313,17 @@ def _elaborate(req: dict) -> dict:
         item = _diag(None, severity, code, message)
         if span is not None:
             item.update(zip(("file", "line", "col", "endLine", "endCol"), span))
-        item["related"] = notes.of(diag, sev)
-        out.append(item)
-    out.sort(key=lambda x: (x["file"] or "", x["line"], x["col"], x["code"], x["message"]))
+        found.append((item, diag, sev))
+    found.sort(key=lambda x: (x[0]["file"] or "", x[0]["line"], x[0]["col"], x[0]["code"], x[0]["message"]))
+    out, per_file = [], Counter()
+    for item, diag, sev in found:  # the first ones of each file, up to the limits
+        if len(out) < MAX_LISTED and per_file[item["file"]] < MAX_PER_FILE:
+            per_file[item["file"]] += 1
+            if diag is not None:
+                item["related"] = notes.of(diag, sev)
+            out.append(item)
     return {"diagnostics": out, "tops": [i.name for i in comp.getRoot().topInstances],
-            "counts": _counts(out, library), "error": None}
+            "counts": _counts([item for item, _, _ in found], library, len(found) - len(out)), "error": None}
 
 
 def elaborate(request: dict) -> dict:

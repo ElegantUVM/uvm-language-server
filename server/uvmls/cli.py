@@ -70,8 +70,13 @@ def _elab(ws: Workspace, args) -> int:
             where = f"{os.path.relpath(d['file'])}:{d['line'] + 1}:{d['col'] + 1}: " if d["file"] else ""
             print(f"{where}{d['severity']}: {d['message']} [{d['code']}]")
         c = result["counts"]
+        notes = [f"top: {', '.join(result['tops']) or 'none'}", uvm_label(ws.sources)]
+        if c.get("omitted"):
+            notes.append(f"{c['omitted']} more not listed")
+        if c.get("libraryErrors"):
+            notes.append(f"{c['libraryErrors']} error(s) inside the UVM library not shown")
         print(f"{c['errors']} error(s), {c['warnings']} warning(s) in {result['seconds']}s "
-              f"(top: {', '.join(result['tops']) or 'none'}; {uvm_label(ws.sources)})", file=sys.stderr)
+              f"({'; '.join(notes)})", file=sys.stderr)
     if result["error"]:
         print(f"elaboration failed: {result['error']}", file=sys.stderr)
         return 2

@@ -9,7 +9,7 @@ import sys
 import pytest
 
 from uvmls.cli import main as cli
-from uvmls.elab import elaborate, request_for, skip_reason, uvm_label
+from uvmls.elab import MAX_LISTED, MAX_PER_FILE, elaborate, request_for, skip_reason, uvm_label
 from uvmls.project import BUNDLED_UVM, ProjectConfig
 from uvmls.workspace import Workspace
 
@@ -163,6 +163,40 @@ def test_driver_and_assertion_checks_from_the_analysis_pass(tmp_path):
     assert [(d["line"], d["code"], d["severity"]) for d in r["diagnostics"]] == \
         [(3, "MixedVarAssigns", "error"), (5, "MultipleContAssigns", "error"), (6, "AssertionNoClock", "error")]
     assert [(n["line"], n["message"]) for n in r["diagnostics"][0]["related"]] == [(2, "also assigned here")]
+
+
+def test_no_error_limit_hides_later_errors(tmp_path):
+    # slang's default limit stopped after about 64 errors: the one in tb_top was never reported.
+    for i in range(70):
+        (tmp_path / f"old_{i:03}.sv").write_text(f"module old_{i:03}; logic a; assign a = undeclared_{i};\nendmodule\n")
+    (tmp_path / "tb_top.sv").write_text("module tb_top; logic a; assign a = planted_err; endmodule\n")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    r = elaborate(request_for(w))
+    assert r["counts"]["errors"] == len(r["diagnostics"]) == 71
+    assert "use of undeclared identifier 'planted_err'" in {d["message"] for d in r["diagnostics"]}
+    # Errors inside the library count toward no limit either.
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    for i in range(70):
+        (lib / f"p_{i:03}.sv").write_text(f"package p_{i:03}; int x = missing_{i}; endpackage\n")
+    req = {"roots": [str(p) for p in sorted(lib.iterdir())] + [str(tmp_path / "tb_top.sv")],
+           "library": [str(lib)]}
+    r = elaborate(req)
+    assert [d["message"] for d in r["diagnostics"]] == ["use of undeclared identifier 'planted_err'"]
+    assert (r["counts"]["errors"], r["counts"]["libraryErrors"]) == (1, 70)
+
+
+def test_listed_diagnostics_are_capped_and_counted(tmp_path):
+    body = "".join(f"    x = nope_{i};\n" for i in range(MAX_LISTED + 500))
+    (tmp_path / "big.sv").write_text(f"module big; int x;\n  initial begin\n{body}  end\nendmodule\n")
+    (tmp_path / "top.sv").write_text("module top; big b(); initial y = 1; endmodule\n")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    r = elaborate(request_for(w))
+    listed = [(os.path.basename(d["file"]), d["line"]) for d in r["diagnostics"]]
+    assert listed == [("big.sv", i + 2) for i in range(MAX_PER_FILE)] + [("top.sv", 0)]  # the first of each file
+    assert r["counts"]["errors"] == MAX_LISTED + 501 and r["counts"]["omitted"] == MAX_LISTED + 500 - MAX_PER_FILE
 
 
 def test_library_diagnostics_are_never_reported(bundled_ws):

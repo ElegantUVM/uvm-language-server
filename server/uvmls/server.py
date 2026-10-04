@@ -252,6 +252,9 @@ class UvmLanguageServer(LanguageServer):
             tops = result.get("tops") or []
             notes.insert(0, f"top: {', '.join(tops)}" if tops else
                          "no top module; packages and classes were checked")
+            if counts.get("omitted"):
+                listed = len(result.get("diagnostics", []))
+                notes.append(f"Problems lists the first {listed} of {listed + counts['omitted']}")
             if counts.get("libraryErrors"):
                 notes.append(f"{counts['libraryErrors']} error(s) inside the UVM library are not shown")
         self.elab_diags = per_file
