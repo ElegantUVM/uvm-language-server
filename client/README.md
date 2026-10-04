@@ -15,3 +15,4 @@ The UVM library comes from `uvm.uvmHome` when set, else from `$UVM_HOME`, else f
 Base syntax highlighting comes from a SystemVerilog syntax extension such as *Verilog-HDL/SystemVerilog* (`mshr-h.veriloghdl`); this extension adds UVM-specific highlighting on top rather than replacing it.
 
 The bundled UVM 1.2 is Accellera's, under the Apache License 2.0. Its `LICENSE.txt` and `NOTICE.txt` are in `server/uvmls/third_party/uvm-1.2/` inside the extension.
+The npm packages bundled into the extension's JavaScript are listed with their licence texts in `THIRD_PARTY_NOTICES.txt`: elkjs, under the Eclipse Public License 2.0 (source code at https://github.com/kieler/elkjs), the vscode-languageclient packages (MIT), semver and minimatch (ISC), and brace-expansion and balanced-match (MIT).

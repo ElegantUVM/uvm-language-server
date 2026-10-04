@@ -209,7 +209,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit -p .",
-    "package": "node scripts/bundle-server.mjs && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository --skip-license"
+    "package": "node scripts/bundle-server.mjs && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository --skip-license && node scripts/check-notices.mjs"
   },
   "dependencies": {
     "elkjs": "^0.12.0",

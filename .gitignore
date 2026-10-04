@@ -5,4 +5,5 @@ __pycache__/
 client/node_modules/
 client/dist/
 client/server/
+client/THIRD_PARTY_NOTICES.txt
 client/*.vsix
