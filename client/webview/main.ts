@@ -848,8 +848,17 @@ function uvmNote(s: any): string {
 /** A class's doc comment; its example code (the indented lines) in the code font. */
 function docText(doc: string): HTMLElement {
   const p = h("p", { class: "doc" });
-  for (const line of doc.split("\n")) p.append(line.startsWith("    ") ? h("code", {}, line.slice(4)) : line + "\n");
+  for (const line of doc.split("\n")) p.append(line.startsWith("    ") ? codeLine(line.slice(4)) : line + "\n");
   return p;
+}
+
+/** A line of example code that wraps after a `.`, `(` or `,` rather than inside a name, and
+ * whose wrapped part hangs two columns in from the line's own indentation. */
+function codeLine(text: string): HTMLElement {
+  const hang = `${text.length - text.trimStart().length + 2}ch`;
+  const code = h("code", { style: { paddingLeft: hang, textIndent: `-${hang}` } });
+  for (const part of text.split(/(?<=[.(,])/)) code.append(part, h("wbr"));
+  return code;
 }
 
 function renderClassDetails(d: any) {
