@@ -184,7 +184,7 @@
 `define uvm_message_context_begin(SEVERITY, ID, MSG, VERBOSITY, FILE, LINE, RO, RM) begin
 `define uvm_message_context_end end
 `define uvm_message_end end
-`define uvm_new_func
+`define uvm_new_func function new (string name, uvm_component parent); super.new(name, parent); endfunction
 `define uvm_non_blocking_transport_imp_decl(SFX)
 `define uvm_nonblocking_get_imp_decl(SFX)
 `define uvm_nonblocking_get_peek_imp_decl(SFX)

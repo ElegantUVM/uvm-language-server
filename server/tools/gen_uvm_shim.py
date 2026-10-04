@@ -9,6 +9,7 @@ Each macro keeps its real name and arity but gets a light body:
   * *_utils / *_registry macros -> `typedef uvm_*_registry #(T) type_id;`
     so the indexer can see factory registration the same way it does with real UVM
   * `uvm_declare_p_sequencer(S) -> `S p_sequencer;`
+  * `uvm_new_func -> the component constructor it declares, so the class has one
   * everything else -> empty
 
 Usage: python tools/gen_uvm_shim.py <UVM_HOME>/src > uvmls/shim/uvm_macros.svh
@@ -64,6 +65,8 @@ STATEMENT_PREFIXES = (
 def body_for(name, params):
     if name == "uvm_declare_p_sequencer":
         return f"{params.split(',')[0].strip()} p_sequencer;"
+    if name == "uvm_new_func":
+        return "function new (string name, uvm_component parent); super.new(name, parent); endfunction"
     if name in ("uvm_file",):
         return "`__FILE__"
     if name in ("uvm_line",):

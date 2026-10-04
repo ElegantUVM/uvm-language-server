@@ -415,6 +415,166 @@ def test_utils_mismatch_is_not_safe_when_a_create_has_no_parent(tmp_path):
     assert fix.preferred and not fix.safe  # as a component, that create() would stop compiling
 
 
+# -- factory-ctor ----------------------------------------------------------------------
+
+CTORS = """import uvm_pkg::*;
+class drv extends uvm_driver;
+  `uvm_component_utils(drv)
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  int n;
+endclass
+class item extends uvm_sequence_item;
+  rand int a;
+
+  `uvm_object_utils_begin(item)
+    `uvm_field_int(a, UVM_ALL_ON)
+  `uvm_object_utils_end
+
+  function new(string name = "item");
+    super.new(name);
+  endfunction
+endclass
+"""
+
+
+def ctor_findings(tmp_path, text, **cfg):
+    w = index(tmp_path, {"t.sv": text}, **cfg)
+    return w, [(d.range.line, d.message) for d in findings(w, "factory-ctor")]
+
+
+@pytest.mark.parametrize("old,new,message", [
+    ("function new(string name, uvm_component parent);", "function new(string name);",
+     "the factory constructs drv with new(name, parent), but this constructor takes 1 argument(s)"),
+    ("function new(string name, uvm_component parent);", "function new(string name, uvm_component parent, int k);",
+     "the factory constructs drv with new(name, parent); give 'k' a default value"),
+    ("function new(string name, uvm_component parent);", "function new(string name, drv parent);",
+     "the factory passes a uvm_component as argument 2 of drv's constructor, but 'parent' is drv"),
+    ("function new(string name, uvm_component parent);", "function new(int name, uvm_component parent);",
+     "the factory passes a string as argument 1 of drv's constructor, but 'name' is int"),
+    ('function new(string name = "item");', 'function new(string name = "item", int k);',
+     "the factory constructs item with new(name); give 'k' a default value"),
+    ('function new(string name = "item");', "function new();",
+     "the factory constructs item with new(name), but this constructor takes 0 argument(s)"),
+])
+def test_factory_ctor_reports_what_the_factory_cannot_call(tmp_path, old, new, message):
+    w, found = ctor_findings(tmp_path, CTORS.replace(old, new))
+    assert [m for _, m in found] == [message]
+    assert offered(w, findings(w, "factory-ctor")[0]) == []  # no fix but adding or editing by hand
+
+
+@pytest.mark.parametrize("old,new", [
+    ("function new(string name, uvm_component parent);", "function new(string name, uvm_component parent, int k = 1);"),
+    ("function new(string name, uvm_component parent);", "function new(string name = \"d\", uvm_object parent = null);"),
+    ("`uvm_component_utils(drv)", "`uvm_component_utils(drv)\n  `uvm_new_func"),  # the macro's own
+    ("class drv extends", "virtual class drv extends"),
+    ("`uvm_component_utils(drv)", "`uvm_object_utils(drv)"),  # utils-mismatch, fixed first
+    ("`uvm_component_utils(drv)", "`uvm_component_utils(drv)\n  `NOBODY_DEFINES_THIS"),  # may be the constructor
+])
+def test_factory_ctor_quiet(tmp_path, old, new):
+    text = CTORS.replace(old, new)
+    if "uvm_new_func" in new:
+        text = text.replace("  function new(string name, uvm_component parent);\n    super.new(name, parent);\n"
+                            "  endfunction\n", "")
+    assert ctor_findings(tmp_path, text)[1] == []
+
+
+def test_factory_ctor_with_the_real_uvm_new_func(tmp_path):
+    text = CTORS.replace("  function new(string name, uvm_component parent);\n    super.new(name, parent);\n"
+                         "  endfunction\n", "  `uvm_new_func\n")
+    assert ctor_findings(tmp_path, '`include "uvm_macros.svh"\n' + text, bundled=True)[1] == []
+
+
+def test_factory_ctor_objects_without_a_constructor_need_the_define(tmp_path):
+    text = CTORS.replace('  function new(string name = "item");\n    super.new(name);\n  endfunction\n', "")
+    assert [m for _, m in ctor_findings(tmp_path, text)[1]] == \
+        ["item has no constructor, but the factory constructs it with new(name)"]
+    assert ctor_findings(tmp_path, text, defines={"UVM_OBJECT_DO_NOT_NEED_CONSTRUCTOR": ""})[1] == []
+
+
+@pytest.mark.parametrize("deleted,title", [
+    ("  function new(string name, uvm_component parent);\n    super.new(name, parent);\n  endfunction\n\n",
+     "Add a constructor: new(string name, uvm_component parent)"),
+    ('  function new(string name = "item");\n    super.new(name);\n  endfunction\n',
+     'Add a constructor: new(string name = "item")'),
+])
+def test_factory_ctor_adds_the_constructor(tmp_path, deleted, title):
+    _, fix = round_trip(tmp_path, {"t.sv": CTORS}, {"t.sv": CTORS.replace(deleted, "")}, "factory-ctor")
+    assert (fix.title, fix.preferred, fix.safe) == (title, True, True)
+
+
+def test_factory_ctor_constructor_placement(tmp_path):
+    text = """import uvm_pkg::*;
+class a extends uvm_object; `uvm_object_utils(a)
+  int x;
+endclass
+class b extends uvm_object;
+	`uvm_object_utils(b)
+endclass
+class c extends uvm_object; `uvm_object_utils(c) endclass
+"""
+    w = index(tmp_path, {"t.sv": text})
+    assert len(findings(w, "factory-ctor")) == 3
+    fix_once(w, "factory-ctor")
+    fix_once(w, "factory-ctor")
+    assert [(d.data["cls"], offered(w, d)) for d in findings(w, "factory-ctor")] == [("c", [])]  # one line
+    assert (tmp_path / "t.sv").read_text() == """import uvm_pkg::*;
+class a extends uvm_object; `uvm_object_utils(a)
+
+  function new(string name = "a");
+    super.new(name);
+  endfunction
+
+  int x;
+endclass
+class b extends uvm_object;
+	`uvm_object_utils(b)
+
+	function new(string name = "b");
+		super.new(name);
+	endfunction
+endclass
+class c extends uvm_object; `uvm_object_utils(c) endclass
+"""
+
+
+def test_factory_ctor_name_default(tmp_path):
+    planted = CTORS.replace('function new(string name = "item");', "function new(string name);")
+    w = index(tmp_path, {"t.sv": planted})
+    [d] = findings(w, "factory-ctor")
+    assert d.message == "the factory constructs item with new() as well as new(name); give 'name' a default value"
+    _, fix = round_trip(tmp_path, {"t.sv": CTORS}, {"t.sv": planted}, "factory-ctor")
+    assert (fix.title, fix.preferred, fix.safe) == ('Give \'name\' a default value: "item"', True, True)
+    # Not for an extern constructor: the default goes on its prototype, the body may repeat it.
+    ext = planted.replace('function new(string name);\n    super.new(name);\n  endfunction',
+                          "extern function new(string name);") + 'function item::new(string name);\n  super.new(name);\nendfunction\n'
+    w = index(tmp_path, {"t.sv": ext})
+    [d] = findings(w, "factory-ctor")
+    assert offered(w, d) == []
+
+
+def test_factory_ctor_not_offered_when_the_base_cannot_take_it(tmp_path):
+    text = CTORS + """class base_drv extends uvm_driver;
+  function new(string name, uvm_component parent, int n);
+    super.new(name, parent);
+  endfunction
+endclass
+class sub_drv extends base_drv;
+  `uvm_component_utils(sub_drv)
+endclass
+class arg_drv extends uvm_driver(null);
+  `uvm_component_utils(arg_drv)
+endclass
+"""
+    w = index(tmp_path, {"t.sv": text})
+    found = {d.data["cls"]: d for d in findings(w, "factory-ctor")}
+    assert set(found) == {"sub_drv", "arg_drv"}
+    assert offered(w, found["sub_drv"]) == [] and offered(w, found["arg_drv"]) == []
+
+
 # -- compile proof: fixed code elaborates with the bundled UVM 1.2 -----------------------
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "..", "examples", "alu_tb")
@@ -472,4 +632,14 @@ def test_utils_mismatch_fix_compiles(tmp_path):
     w = example(tmp_path, {"env/alu_coverage.svh": ("`uvm_component_utils(alu_coverage)", "`uvm_object_utils(alu_coverage)")})
     assert user_errors(w)
     fix_once(w, "utils-mismatch")
+    assert unchanged(tmp_path) and user_errors(w) == []
+
+
+def test_factory_ctor_fix_compiles(tmp_path):
+    w = example(tmp_path, {"agent/alu_seq_item.svh": (
+        '  function new(string name = "alu_seq_item");\n    super.new(name);\n  endfunction\n\n', "")})
+    assert user_errors(w)  # the factory's new(name) and new() calls
+    [d] = findings(w, "factory-ctor")
+    assert d.message == "alu_seq_item has no constructor, but the factory constructs it with new(name)"
+    fix_once(w, "factory-ctor")
     assert unchanged(tmp_path) and user_errors(w) == []

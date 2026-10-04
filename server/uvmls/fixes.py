@@ -15,7 +15,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from .lints import UTILS_RE, misregistered, swapped_macro
+from .lints import UTILS_RE, ctor_call_problem, ctor_problem, misregistered, swapped_macro
 from .model import Range
 from .project import is_bundled
 
@@ -187,6 +187,21 @@ class Context:
         return None
 
 
+def member_indent(ft: FileText, cls_span: tuple[int, int], header_line: int) -> tuple[str, str]:
+    """(indentation of a class's members, one indentation unit): that of the first line with text
+    after the header, when it is deeper than the class's; else the class's plus one unit."""
+    end_line = ft.line_at(cls_span[1])
+    cls_indent = indent_of(ft.line(ft.line_at(cls_span[0])))
+    indent = None
+    for n in range(header_line + 1, end_line):
+        if ft.line(n).strip():
+            ind = indent_of(ft.line(n))
+            indent = ind if len(ind) > len(cls_indent) else None
+            break
+    unit = indent_unit(indent or cls_indent, mask(ft.text[cls_span[0]:cls_span[1]]))
+    return indent or cls_indent + unit, unit
+
+
 def insert_member(ft: FileText, cls, item: str) -> TextChange | None:
     """An edit that makes `item` (one line, without its line end) the first item of a class body,
     right after the header: on the next line at the members' indentation, with a blank line before
@@ -203,16 +218,7 @@ def insert_member(ft: FileText, cls, item: str) -> TextChange | None:
         return TextChange(ft.path, semi + 1, semi + 1, " " + item)
     if line + 1 >= len(ft.starts):
         return None
-    end_line = ft.line_at(cls_span[1])
-    cls_indent = indent_of(ft.line(ft.line_at(cls_span[0])))
-    indent = None
-    for n in range(line + 1, end_line):
-        if ft.line(n).strip():
-            ind = indent_of(ft.line(n))
-            indent = ind if len(ind) > len(cls_indent) else None
-            break
-    if indent is None:
-        indent = cls_indent + indent_unit(cls_indent, mask(ft.text[cls_span[0]:cls_span[1]]))
+    indent, _ = member_indent(ft, cls_span, line)
     nxt = ft.line(line + 1)
     eol = ft.eol(line + 1)
     gap = eol if nxt.strip() and not mask(nxt).strip().startswith("endclass") else ""
@@ -403,7 +409,73 @@ def _utils_mismatch(ctx: Context, d) -> list[Fix]:
     return [Fix(title, changes, preferred=True, safe=safe)]
 
 
+def _factory_ctor(ctx: Context, d) -> list[Fix]:
+    """A registered class the factory cannot construct: add the constructor it calls, or give an
+    object's name argument the default that new() needs."""
+    ws = ctx.ws
+    cls = ws.class_by_qual.get((d.data or {}).get("cls"))
+    problem = cls and not cls.library and ctor_problem(ws, cls)
+    if not problem or problem[0] == "other":
+        return []
+    ft = ctx.files.get(cls.path)
+    if ft is None:
+        return []
+    if problem[0] == "name-default":
+        ctor = next(m for m in cls.methods if m.name == "new")
+        arg = ctor.args[0]
+        span = None if ctor.is_prototype or ctor.generated else ft.span(arg.range)
+        if span is None or ft.text[span[0]:span[1]] != arg.name:
+            return []
+        return [Fix(f"Give '{arg.name}' a default value: \"{cls.name}\"",
+                    [TextChange(ft.path, span[1], span[1], f' = "{cls.name}"')], preferred=True, safe=True)]
+    return _add_constructor(ctx, ft, cls)
+
+
+def _add_constructor(ctx: Context, ft: FileText, cls) -> list[Fix]:
+    """The constructor the factory calls, right after the registration block."""
+    ws = ctx.ws
+    component = cls.registration == "component"
+    base = ws.base_spec(cls)
+    if cls.extends_args is not None or cls.registration_range is None or base is None:
+        return []
+    if base.cls is not None and not base.cls.library:  # it must take super.new(...) too
+        bctor = next((m for m in base.cls.methods if m.name == "new"), None)
+        if bctor is None or ctor_call_problem(ws, base.cls, bctor.args, 2 if component else 1):
+            return []
+    body, reg = masked_body(ws, ft, cls), ft.span(cls.registration_range)
+    if body is None or reg is None or cls.header_end is None:
+        return []
+    end = reg[1]
+    if cls.registration_macro.endswith("_begin"):
+        m = UTILS_END_RE.search(body[1], reg[1] - body[0])
+        if not m:
+            return []
+        end = body[0] + m.end()
+    line = ft.line_at(end)
+    if re.search(r"\bendclass\b", mask(ft.text[end:ft.ends[line]])) or line + 1 >= len(ft.starts):
+        return []
+    indent, unit = member_indent(ft, (body[0], body[0] + len(body[1])), cls.header_end.line)
+    if component:
+        title, lines = "Add a constructor: new(string name, uvm_component parent)", [
+            "function new(string name, uvm_component parent);", f"{unit}super.new(name, parent);", "endfunction"]
+    else:
+        title, lines = f'Add a constructor: new(string name = "{cls.name}")', [
+            f'function new(string name = "{cls.name}");', f"{unit}super.new(name);", "endfunction"]
+    if ft.line(line + 1).strip():
+        at, before = line + 1, ft.eol(line + 1)
+    elif line + 2 < len(ft.starts):
+        at, before = line + 2, ""
+    else:
+        return []
+    eol = ft.eol(at)
+    nxt = ft.line(at)
+    after = eol if nxt.strip() and not mask(nxt).strip().startswith("endclass") else ""
+    text = before + "".join(indent + ln + eol for ln in lines) + after
+    return [Fix(title, [TextChange(ft.path, ft.starts[at], ft.starts[at], text)], preferred=True, safe=True)]
+
+
 FIXERS = {
+    ("uvm", "factory-ctor"): _factory_ctor,
     ("uvm", "utils-mismatch"): _utils_mismatch,
     ("uvm", "create-unregistered"): _create_unregistered,
     ("uvm", "create-no-parent"): _create_no_parent,

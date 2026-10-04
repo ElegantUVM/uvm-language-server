@@ -74,6 +74,7 @@ def test_lint_unregistered_create_and_type_mismatch(tmp_path):
 class cfg extends uvm_object; endclass
 class drv extends uvm_driver #(uvm_sequence_item);
   `uvm_component_utils(drv)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
   cfg c; int n;
   function void build_phase(uvm_phase phase);
     c = cfg::type_id::create("c");
@@ -90,6 +91,6 @@ endclass
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     found = sorted((d.code, d.range.line, d.data) for ds in lint(w).values() for d in ds)
-    assert found == [("config-db-type-mismatch", 7, {"field": "depth", "at": [7, 10]}),
-                     ("create-unregistered", 6, {"target": "cfg"}),
-                     ("utils-mismatch", 10, {"cls": "env"})]
+    assert found == [("config-db-type-mismatch", 8, {"field": "depth", "at": [8, 10]}),
+                     ("create-unregistered", 7, {"target": "cfg"}),
+                     ("utils-mismatch", 11, {"cls": "env"})]
