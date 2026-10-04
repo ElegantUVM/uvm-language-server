@@ -1229,6 +1229,167 @@ def test_the_cli_leaves_out_ignored_findings(tmp_path, capsys):
     assert run() == (0, "")
 
 
+WAIVE = """import uvm_pkg::*;
+class mon extends uvm_monitor;
+  `uvm_component_utils(mon)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class cfg extends uvm_object;
+  function new(string name = "cfg"); super.new(name); endfunction
+endclass
+class env extends uvm_env;
+  `uvm_component_utils(env)
+  mon m, m2;
+  cfg c;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+LINE
+    m2 = mon::type_id::create("m2");
+  endfunction
+endclass
+"""
+M = 'm = mon::type_id::create("m");'
+ABOVE = "    // uvm-lint: ignore create-no-parent\n"
+IGNORE_LAYOUTS = {  # the line(s) in WAIVE with the finding, before and after; the file's line end
+    "no comment": (f"    {M}", f"    {M}  // uvm-lint: ignore create-no-parent", "\n"),
+    "spaces after it": (f"    {M}   ", f"    {M}  // uvm-lint: ignore create-no-parent   ", "\n"),
+    "a directive after it": (f"    {M}  // uvm-lint: ignore create-new -- why",
+                             f"    {M}  // uvm-lint: ignore create-new, create-no-parent -- why", "\n"),
+    "another comment": (f"    {M}  // the monitor", f"{ABOVE}    {M}  // the monitor", "\n"),
+    "uvm-lint in a comment": (f"    {M}  // see uvm-lint: ignore", f"{ABOVE}    {M}  // see uvm-lint: ignore", "\n"),
+    "a block comment": (f"    {M} /* the monitor */", f"{ABOVE}    {M} /* the monitor */", "\n"),
+    "an unclosed block comment": (f"    {M} /* the monitor,\n       created here */",
+                                  f"{ABOVE}    {M} /* the monitor,\n       created here */", "\n"),
+    "a directive above": (f"    // uvm-lint: ignore create-new\n    {M}  // the monitor",
+                          f"    // uvm-lint: ignore create-new, create-no-parent\n    {M}  // the monitor", "\n"),
+    "a directive above, then comments": (
+        f"    // uvm-lint: ignore create-new -- why\n\n    /* more */\n    {M}",
+        f"    // uvm-lint: ignore create-new, create-no-parent -- why\n\n    /* more */\n    {M}", "\n"),
+    "two directives above": (f"    // uvm-lint: ignore create-new\n    // uvm-lint: ignore utils-param\n    {M}",
+                             f"    // uvm-lint: ignore create-new\n    // uvm-lint: ignore utils-param, create-no-parent"
+                             f"\n    {M}", "\n"),
+    "a directive above about its own line": (
+        f'    c = cfg::type_id::create("c");  // uvm-lint: ignore create-new\n    {M}  // the monitor',
+        f'    c = cfg::type_id::create("c");  // uvm-lint: ignore create-new\n{ABOVE}    {M}  // the monitor', "\n"),
+    "another finding on the line": (f'    c = cfg::type_id::create("c"); {M}',
+                                    f'    c = cfg::type_id::create("c"); {M}  // uvm-lint: ignore create-no-parent', "\n"),
+    "the line starts in a block comment": (f"    /* the\n       monitor */ {M}",
+                                           f"    /* the\n       monitor */ {M}  // uvm-lint: ignore create-no-parent", "\n"),
+    "tabs": (f"\t\t{M}\t// the monitor", f"\t\t// uvm-lint: ignore create-no-parent\n\t\t{M}\t// the monitor", "\n"),
+    "crlf": (f"    {M}  // the monitor", f"{ABOVE}    {M}  // the monitor", "\r\n"),
+    "crlf, no comment": (f"    {M}", f"    {M}  // uvm-lint: ignore create-no-parent", "\r\n"),
+}
+
+
+def fixes_ignore(w: Workspace, d, **client) -> list:
+    from uvmls.fixes import ignore_fixes
+    return ignore_fixes(Context(w, FileTexts(), Client(roots=[os.path.dirname(d.range.path)], **client),
+                                d.range.path), d)
+
+
+def all_findings(w: Workspace) -> list:
+    return sorted((d.range.path, d.code, d.message) for ds in lint(w).values() for d in ds)
+
+
+def ignore_round_trip(w: Workspace, d, expected: str):
+    """Apply the Ignore fix of a finding: the file must read `expected`, and once indexed again
+    that finding must be gone and every other one still there."""
+    [fix] = fixes_ignore(w, d)
+    assert (fix.title, fix.preferred, fix.safe, fix.disabled) == (f"Ignore '{d.code}' on this line", False, False, None)
+    assert {c.path for c in fix.changes} == {d.range.path}
+    before = all_findings(w)
+    apply_fix(w, fix)
+    with open(d.range.path, newline="") as f:
+        assert f.read() == expected
+    before.remove((d.range.path, d.code, d.message))
+    assert all_findings(w) == before
+
+
+@pytest.mark.parametrize("layout", IGNORE_LAYOUTS)
+def test_ignore_on_this_line(tmp_path, layout):
+    before, after, eol = IGNORE_LAYOUTS[layout]
+    w = index(tmp_path, {"t.sv": WAIVE.replace("LINE", before).replace("\n", eol)})
+    d = findings(w, "create-no-parent")[0]
+    assert M in WAIVE.replace("LINE", before).split("\n")[d.range.line]  # m's, not m2's
+    ignore_round_trip(w, d, WAIVE.replace("LINE", after).replace("\n", eol))
+
+
+def test_ignore_two_codes_on_one_line(tmp_path):
+    line = f'    c = cfg::type_id::create("c"); {M}'
+    w = index(tmp_path, {"t.sv": WAIVE.replace("LINE", line)})
+    ignore_round_trip(w, findings(w, "create-no-parent")[0],
+                      WAIVE.replace("LINE", line + "  // uvm-lint: ignore create-no-parent"))
+    ignore_round_trip(w, findings(w, "create-unregistered")[0],
+                      WAIVE.replace("LINE", line + "  // uvm-lint: ignore create-no-parent, create-unregistered"))
+
+
+@pytest.mark.parametrize("comment", ["", " // the env"])
+def test_ignore_on_the_last_line(tmp_path, comment):
+    # No line end after it: one goes after the directive, the file's own (CRLF here).
+    last = "class env2 extends uvm_env; `uvm_object_utils(env2) endclass"
+    w = index(tmp_path, {"t.sv": f"import uvm_pkg::*;\r\n{last}{comment}"})
+    [d] = findings(w, "utils-mismatch")
+    after = f"{last}  // uvm-lint: ignore utils-mismatch" if not comment else \
+        f"// uvm-lint: ignore utils-mismatch\r\n{last}{comment}"
+    ignore_round_trip(w, d, f"import uvm_pkg::*;\r\n{after}")
+
+
+def test_ignore_from_a_macro_call(tmp_path):
+    # Reported where the macro is used: the directive goes on that line.
+    w = index(tmp_path, {"t.sv": "`define MAKE(T, n) n = T::type_id::create(`\"n`\")\n" +
+                         WAIVE.replace("LINE", "    `MAKE(mon, m);  // the monitor")})
+    d = findings(w, "create-no-parent")[0]
+    ignore_round_trip(w, d, "`define MAKE(T, n) n = T::type_id::create(`\"n`\")\n" +
+                      WAIVE.replace("LINE", f"{ABOVE}    `MAKE(mon, m);  // the monitor"))
+
+
+def test_ignore_not_offered(tmp_path):
+    from uvmls.model import Diag, Range
+    from uvmls.project import BUNDLED_UVM
+    # The line starts inside a block comment and ends in another: no line can go above it, and a
+    # directive after the comment would be part of it.
+    w = index(tmp_path, {"t.sv": WAIVE.replace("LINE", f"    /* the\n       monitor */ {M} // here") + "class\n"})
+    d = findings(w, "create-no-parent")[0]
+    assert fixes_ignore(w, d) == []
+    # Nor when it starts inside a string continued from the line before.
+    w2 = index(tmp_path / "s", {"t.sv": WAIVE.replace("LINE", f'    $display("the\\\nmonitor"); {M} // here')})
+    d2 = findings(w2, "create-no-parent")[0]
+    assert d2.range.line == 15 and fixes_ignore(w2, d2) == []
+    # A string the line does not close (the text being typed), or a directive that has the code
+    # already (the finding is not current): nothing to add.
+    from uvmls.fixes import ignore_fixes
+    path = d.range.path
+
+    def on(text: str, line: int, col: int, code="create-new") -> list:
+        ctx = Context(w, FileTexts({path: (text, 1)}), Client(roots=[str(tmp_path)]), path)
+        return ignore_fixes(ctx, Diag(Range(path, line, col, line, col + 1), "x", "warning", code, "uvm"))
+    assert on('    x = "abc\n', 0, 4) == [] and on('    x = "abc";\n', 0, 4) != []
+    assert on("    x = y;  // uvm-lint: ignore a,create-new\n", 0, 4) == []
+    w3 = index(tmp_path / "d", {"t.sv": WAIVE.replace("LINE", f"    // uvm-lint: ignore create-new\n    {M}")})
+    d3 = findings(w3, "create-no-parent")[0]
+    assert fixes_ignore(w3, Diag(d3.range, "x", "warning", "create-new", "uvm")) == []
+    assert fixes_ignore(w3, Diag(d3.range, "x", "warning", "utils-param", "uvm")) != []
+    # A compile error cannot be waived.
+    [syntax] = [x for x in w.user_diagnostics() if x.severity == "error"]
+    assert syntax.source == "slang" and fixes_ignore(w, syntax) == []
+    assert fixes_ignore(w, Diag(d.range, d.message, "error", d.code, "slang-elab")) == []
+    # A line the text no longer has.
+    assert fixes_ignore(w, Diag(Range(d.range.path, 99, 0, 99, 1), d.message, "error", d.code, "uvm")) == []
+    # The UVM library: greyed out with the reason, for an editor that shows such actions.
+    lib = os.path.join(BUNDLED_UVM, "base", "uvm_component.svh")
+    finding = Diag(Range(lib, 0, 0, 0, 1), "x", "warning", "create-new", "uvm")
+    assert fixes_ignore(w, finding) == []
+    [fix] = fixes_ignore(w, finding, disabled_support=True)
+    assert fix.disabled == "uvm_component.svh is part of the UVM library" and fix.changes == []
+
+
+def test_in_comment_or_string():
+    from uvmls.fixes import _in_comment_or_string
+    text = 'a = "x\\\ny"; b; // c\n/* d\ne */ f;\n'
+    starts = [0] + [i + 1 for i, ch in enumerate(text) if ch == "\n"]
+    assert [_in_comment_or_string(text, s) for s in starts] == [False, True, False, True, False]
+
+
 # -- compile proof: fixed code elaborates with the bundled UVM 1.2 -----------------------
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "..", "examples", "alu_tb")

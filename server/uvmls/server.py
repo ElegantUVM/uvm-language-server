@@ -866,6 +866,8 @@ def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], 
                     [lsp_diagnostic(x) for x in fixed]) if len(fixed) >= 2 else None
             if per_code[finding.code] is not None:
                 out.append(per_code[finding.code])
+        for fix in fixes.ignore_fixes(ctx, finding):
+            out.append(make.action(fix, [d]))
     if fix_all:
         changes, fixed = fixes.fix_all(ctx, published)
         if changes:

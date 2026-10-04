@@ -20,7 +20,7 @@ from .lints import (
     param_problem, skipped_super, swapped_macro,
 )
 from .elab import SOURCE as ELAB_SOURCE
-from .indexer import EOL_RE, MASK_RE, NOT_EOL_RE, mask
+from .indexer import EOL_RE, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
 from .model import Range
 from .project import discover_files, is_bundled, parse_filelist
 from .views import canonical_type, config_db_report, mismatched
@@ -753,6 +753,60 @@ def _missing_include(ctx: Context, d) -> list[Fix]:
     return fixes
 
 
+# -- the ignore directive ------------------------------------------------------------
+
+
+def _in_comment_or_string(text: str, offset: int) -> bool:
+    """Whether a comment or string literal that starts before an offset goes on past it."""
+    for m in MASK_RE.finditer(text):
+        if m.start() >= offset:
+            return False
+        if m.end() > offset:
+            return True
+    return False
+
+
+def _ignore(ctx: Context, d) -> list[Fix]:
+    """`// uvm-lint: ignore {code}` for the line a lint finding starts on: added to a directive about
+    that line, when there is one; else after the code, or, when the line ends in a comment, on a line
+    of its own above it."""
+    code = d.code
+    ft = ctx.files.get(d.range.path)
+    at = ft and ft.offset(d.range.line, d.range.col)  # the finding: code, so not in a comment
+    if at is None or not re.fullmatch(r"[\w-]+", code or ""):
+        return []
+    n, title = d.range.line, f"Ignore '{code}' on this line"
+    rest = ft.text[at:ft.ends[n]]
+    parts = list(MASK_RE.finditer(rest))
+    if any(m.group(0)[0] == '"' and not m.group("close") for m in parts):
+        return []  # a string the line does not close
+    tail = next((m for m in parts if m.group(0)[0] != '"' and not rest[m.end():].strip()), None)
+    directive = tail and IGNORE_RE.match(tail.group(0))
+    if directive:  # after the code: add the code to it
+        if code in ignore_codes(directive):
+            return []
+        end = at + tail.start() + directive.end(1)
+        return [Fix(title, [TextChange(ft.path, end, end, f", {code}")])]
+    if n in ctx.ws.ignores.get(ft.path, {}):  # one on a line of its own above: the nearest
+        above = [x for x in ignore_directives(ft.text) if x.target == n and x.line < n]
+        if above:
+            if code in above[-1].codes:
+                return []
+            return [Fix(title, [TextChange(ft.path, above[-1].end, above[-1].end, f", {code}")])]
+    text = f"// uvm-lint: ignore {code}"
+    if tail is None:
+        end = at + len(rest.rstrip())
+        return [Fix(title, [TextChange(ft.path, end, end, "  " + text)])]
+    # The line ends in a comment (a // one, or a block comment, closed or not): a line of its own
+    # above it. Not when the line starts inside a block comment, or a string continued from the line
+    # before, that ends before the finding: a line put there would be part of it.
+    start = ft.starts[n]
+    if ("*/" in ft.text[start:at] or (n > 0 and ft.line(n - 1).endswith("\\"))) \
+            and _in_comment_or_string(ft.text, start):
+        return []
+    return [Fix(title, [TextChange(ft.path, start, start, indent_of(ft.line(n)) + text + ft.eol(n))])]
+
+
 FIXERS = {
     **{(source, code): _typo for source in ("slang", ELAB_SOURCE)
        for code in ("TypoKeyword", "TypoIdentifier", "UnknownMember")},
@@ -773,8 +827,16 @@ def fixes_for(ctx: Context, d) -> list[Fix]:
     """The quick fixes for a current diagnostic (a model.Diag), each checked against the index and
     the text; a fix that would edit a file it may not is dropped, or disabled with the reason."""
     fixer = FIXERS.get((d.source, d.code))
-    if fixer is None:
-        return []
+    return _checked(ctx, d, fixer) if fixer else []
+
+
+def ignore_fixes(ctx: Context, d) -> list[Fix]:
+    """The fix that ignores a lint finding on its line. slang's diagnostics have none: a compile
+    error cannot be waived. Never preferred, never applied by fix-all."""
+    return _checked(ctx, d, _ignore) if d.source == "uvm" else []
+
+
+def _checked(ctx: Context, d, fixer) -> list[Fix]:
     try:
         found = fixer(ctx, d)
     except Exception:  # a fix must never break the request

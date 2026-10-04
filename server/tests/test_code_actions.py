@@ -113,6 +113,15 @@ def edits_for(action, uri, version=None) -> list:
     return edit["changes"][uri]
 
 
+IGNORE = "Ignore '{}' on this line"
+
+
+def own_fixes(actions: list) -> list:
+    """A lint finding's actions but the last, which is always Ignore."""
+    assert actions and actions[-1]["title"] == IGNORE.format(actions[-1]["diagnostics"][0]["code"])
+    return actions[:-1]
+
+
 def test_capabilities(tb):
     c = Client()
     try:
@@ -133,8 +142,10 @@ def test_round_trip(client, tb):
     doc.change(original.replace('create("m_driver", this)', 'create("m_driver")'))
     [d] = doc.diagnostics(lambda ds: ds)
     assert d["code"] == "create-no-parent" and d["data"]["cls"] == "alu_pkg::alu_agent"
-    [a] = doc.actions([d])
+    a, ignore = doc.actions([d])
     assert (a["title"], a["kind"], a["isPreferred"], a["diagnostics"]) == ("Pass 'this' as the parent", "quickfix", True, [d])
+    assert (ignore["title"], ignore["kind"], ignore["diagnostics"]) == ("Ignore 'create-no-parent' on this line", "quickfix", [d])
+    assert "isPreferred" not in ignore
     doc.change(applied(doc.text, edits_for(a, doc.uri, doc.version)))
     assert doc.text == original
     doc.diagnostics(lambda ds: not ds)
@@ -149,7 +160,7 @@ def test_a_stale_diagnostic_is_fixed_where_its_finding_is_now(client, tb):
     [d] = doc.diagnostics(lambda ds: ds)
     # Three lines above it, then at once a request with the diagnostic the editor still has.
     doc.change("// one\n// two\n// three\n" + doc.text)
-    [a] = doc.actions([d])
+    [a] = own_fixes(doc.actions([d]))
     edits = edits_for(a, doc.uri, doc.version)  # made for the new version
     assert edits[0]["range"]["start"]["line"] == d["range"]["start"]["line"] + 3
     assert applied(doc.text, edits) == "// one\n// two\n// three\n" + original
@@ -167,7 +178,7 @@ def test_an_automatic_request_right_after_an_edit_waits_for_the_index(client, tb
     # The lightbulb's request (Automatic) can come before the edit is indexed (250 ms later): it
     # waits for it, instead of answering from where the call was before the edit.
     doc.change("\n\n" + doc.text)
-    [a] = doc.actions([d], trigger=2)
+    [a] = own_fixes(doc.actions([d], trigger=2))
     assert applied(doc.text, edits_for(a, doc.uri, doc.version)) == "\n\n" + original
     doc.diagnostics(lambda ds: ds and ds[0]["range"]["start"]["line"] == d["range"]["start"]["line"] + 2)
     doc.change(original)
@@ -189,7 +200,7 @@ def test_edits_count_utf16_units(client, tb):
                              'm_driver    = alu_driver::type_id::create(/*😀é*/"m_driver", this);')
     doc.change(emoji.replace('"m_driver", this)', '"m_driver")'))
     [d] = doc.diagnostics(lambda ds: ds)
-    [a] = doc.actions([d])
+    [a] = own_fixes(doc.actions([d]))
     [e] = edits_for(a, doc.uri, doc.version)
     line = doc.text.split("\n")[e["range"]["start"]["line"]]
     assert e["range"]["start"]["character"] == len(line[:line.index('"m_driver")') + 10].encode("utf-16-le")) // 2
@@ -205,7 +216,7 @@ def test_plain_changes_without_document_changes(tb):
         original = doc.text
         doc.change(original.replace('create("m_driver", this)', 'create("m_driver")'))
         [d] = doc.diagnostics(lambda ds: ds)
-        [a] = doc.actions([d])
+        [a] = own_fixes(doc.actions([d]))
         assert "documentChanges" not in a["edit"]
         assert applied(doc.text, edits_for(a, doc.uri)) == original
         assert "disabled" not in a and a["isPreferred"]
@@ -221,7 +232,8 @@ def test_a_client_without_data_support(tb):
         doc.change(original.replace('create("m_driver", this)', 'create("m_driver")'))
         [d] = doc.diagnostics(lambda ds: ds)
         d.pop("data")  # such a client sends it back without
-        [a] = doc.actions([d])
+        a, ignore = doc.actions([d])
+        assert ignore["title"] == IGNORE.format("create-no-parent")
         assert applied(doc.text, edits_for(a, doc.uri)) == original
     finally:
         c.close()
@@ -244,7 +256,7 @@ def test_a_fix_in_another_file(client, tb):
     env = Doc(client, env_path)
     [d] = published(client, env_path, lambda ds: ds)
     assert d["code"] == "create-unregistered"
-    [a] = env.actions([d])
+    [a] = own_fixes(env.actions([d]))
     assert a["title"] == "Add `uvm_component_utils(alu_scoreboard) to class 'alu_scoreboard' (alu_scoreboard.svh)"
     assert applied(planted, edits_for(a, sb.uri, sb.version)) == original
     sb.close()
@@ -257,7 +269,7 @@ def test_a_fix_in_another_file(client, tb):
         client.notify("workspace/didChangeWatchedFiles", {"changes": [{"uri": sb.uri, "type": 2}]})
         env = Doc(client, env_path)
         [d] = published(client, env_path, lambda ds: ds)
-        [a] = env.actions([d])
+        [a] = own_fixes(env.actions([d]))
         assert applied(planted, edits_for(a, sb.uri, None)) == original
         env.close()
     finally:
@@ -276,7 +288,8 @@ def test_fix_all(client, tb):
     acts = doc.actions(ds[:1])  # the lightbulb on one of them; never the source action unasked
     assert [(a["title"], a["kind"], a.get("isPreferred")) for a in acts] == [
         ("Pass 'this' as the parent", "quickfix", True),
-        ("Fix all 2 'create-no-parent' problems in this file", "quickfix", None)]
+        ("Fix all 2 'create-no-parent' problems in this file", "quickfix", None),
+        ("Ignore 'create-no-parent' on this line", "quickfix", None)]
     assert len(acts[1]["diagnostics"]) == 2
     assert applied(doc.text, edits_for(acts[1], doc.uri, doc.version)) == original
     # Source Action / codeActionsOnSave ask by kind, and get only that.
@@ -290,20 +303,47 @@ def test_fix_all(client, tb):
     doc.close()
 
 
+def test_ignore(client, tb):
+    """Ignore edits the open document at its version. The directive clears the finding while the
+    text is unsaved, and fix-all leaves that finding alone from then on. slang's get no Ignore."""
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    planted = original.replace('create("m_driver", this)', 'create("m_driver")')
+    doc.change(planted)
+    [d] = doc.diagnostics(lambda ds: ds)
+    fix, ignore = doc.actions([d])
+    assert (fix["title"], ignore["title"]) == ("Pass 'this' as the parent", "Ignore 'create-no-parent' on this line")
+    waived = planted.replace('create("m_driver");', 'create("m_driver");  // uvm-lint: ignore create-no-parent')
+    assert applied(doc.text, edits_for(ignore, doc.uri, doc.version)) == waived
+    doc.change(waived)
+    doc.diagnostics(lambda ds: not ds)
+    doc.change(waived.replace('create("m_sequencer", this)', 'create("m_sequencer")'))
+    [d2] = doc.diagnostics(lambda ds: ds)
+    assert d2["range"]["start"]["line"] == d["range"]["start"]["line"] + 1
+    [a] = doc.actions([], only=["source.fixAll"])
+    assert applied(doc.text, edits_for(a, doc.uri, doc.version)) == waived
+    doc.change('`include "nowhere.svh"\n' + original)
+    [d3] = doc.diagnostics(lambda ds: ds)
+    assert (d3["source"], d3["code"]) == ("slang", "CouldNotOpenIncludeFile") and doc.actions([d3]) == []
+    doc.change(original)
+    doc.diagnostics(lambda ds: not ds)
+    doc.close()
+
+
 def test_commands_only_for_a_client_that_has_them(client, tb):
     mon = os.path.join(tb, "agent", "alu_monitor.svh")
     doc = Doc(client, mon)
     doc.change("\n" + doc.text)  # moves the planted finding, so it is published again
     [d] = doc.diagnostics(lambda ds: ds)
     assert d["code"] == "config-db-no-set" and d["severity"] == 3  # optional get: a note
-    assert [a["title"] for a in doc.actions([d])] == []
+    assert [a["title"] for a in doc.actions([d])] == [IGNORE.format("config-db-no-set")]
     doc.close()
     c = start(tb, clientCommands=["uvm.showConfigDb"])
     try:
         doc = Doc(c, mon)
         doc.change("\n" + doc.text)
         [d] = doc.diagnostics(lambda ds: ds)
-        [a] = doc.actions([d])
+        [a] = own_fixes(doc.actions([d]))
         assert (a["title"], a["command"]["command"], a["command"]["arguments"]) == (
             "Show 'checks_enable' in the config_db cross-reference", "uvm.showConfigDb", [{"field": "checks_enable"}])
         assert "isPreferred" not in a and "edit" not in a
