@@ -160,10 +160,10 @@ class Workspace:
         with self.lock:
             t0 = time.time()
             self.sources = build_source_set(self.config)
-            self.indexer = Indexer(self.sources.include_dirs, self.sources.defines,
-                                   use_shim=not self.sources.has_real_uvm_macros,
-                                   library_dirs=sorted({os.path.dirname(r) for r in self.sources.library_roots}),
-                                   library_guard=self.sources.uvm_guard)
+            s = self.sources
+            self.indexer = Indexer(s.include_dirs, s.defines, use_shim=not s.has_real_uvm_macros,
+                                   library_dirs=sorted({os.path.dirname(r) for r in s.library_roots}),
+                                   library_guard=s.uvm_guard)
             self.indices = {}
             for root in self.sources.roots:
                 self.indices[root] = self.indexer.parse(

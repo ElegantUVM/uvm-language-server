@@ -159,8 +159,10 @@ class UvmLanguageServer(LanguageServer):
                     and _same_text(p, docs[p], None)]
         reloaded = await loop.run_in_executor(None, work)
         self.after_index()
-        if self._elab_timer is None and any(self.documents.get(p) != self.elab_basis.get(p) for p in reloaded):
-            self.schedule_elaboration(ELAB_SAVE_DELAY)
+        if reloaded and self._elab_timer is None:  # unless a run is due anyway, or started meanwhile
+            docs = self.documents
+            if any(docs.get(p) != self.elab_basis.get(p) for p in reloaded):
+                self.schedule_elaboration(ELAB_SAVE_DELAY)
 
     @property
     def documents(self) -> dict[str, str]:
@@ -355,7 +357,8 @@ class UvmLanguageServer(LanguageServer):
                 listed = len(result.get("diagnostics", []))
                 notes.append(f"Problems lists the first {listed} of {listed + counts['omitted']}")
             if counts.get("libraryErrors"):
-                notes.append(f"{counts['libraryErrors']} error(s) the UVM library reports on its own are not shown")
+                notes.append(f"{counts['libraryErrors']} error(s) the UVM library reports on its own "
+                             "are not shown")
         self.elab_diags, self.elab_texts = per_file, request["overrides"]
         self.publish_diagnostics()
         # The counts describe what Problems shows: an error the index already reports is shown once.
@@ -749,7 +752,8 @@ def uvm_class_at(ls: UvmLanguageServer, params):
     with ls.ws.lock:
         cls = ls.nav.class_at(path, line, col, _text(ls, uri))
         # The graph holds only the UVM classes user code uses; for any other, the class around the cursor.
-        if cls is not None and cls.library and cls.qualname not in {n["id"] for n in class_graph(ls.ws)["nodes"]}:
+        if cls is not None and cls.library and \
+                cls.qualname not in {n["id"] for n in class_graph(ls.ws)["nodes"]}:
             cls = ls.ws.enclosing(path, line, col)[0]
         return cls.qualname if cls else None
 

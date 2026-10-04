@@ -283,7 +283,8 @@ def _without_other_uvm(uvm_src: str, uvm_dirs: list[str], roots: list[str], incl
     others = list(dict.fromkeys(others))
     for d in others:
         if os.path.realpath(d) != os.path.realpath(uvm_src):
-            warnings.append(f"the UVM library in {d} is left out: {uvm_src} (uvmHome or $UVM_HOME) replaces it")
+            warnings.append(f"the UVM library in {d} is left out: {uvm_src} (uvmHome or $UVM_HOME) "
+                            "replaces it")
 
     def other(p: str) -> bool:
         return any(p == d or p.startswith(d + os.sep) for d in others)

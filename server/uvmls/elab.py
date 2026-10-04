@@ -321,9 +321,11 @@ def _library_errors(req: dict, loc: _Locator) -> set[tuple[str, int, str]]:
 def _given_types(diag, loc: _Locator) -> list[dict]:
     """Related information for the design's types a specialization was given: "T = my_driver"."""
     scope = diag.symbol.parentScope
-    this = scope.lookupName("this")  # inside a method: its class is the specialization
+    if scope is None:
+        return []
+    cls = getattr(scope.lookupName("this"), "type", None)  # inside a method: its class
     out = []
-    for m in this.type if this is not None and this.type.isClass else scope:
+    for m in cls if cls is not None and cls.isClass else scope:
         if m.kind != ast.SymbolKind.TypeParameter:
             continue
         t = m.targetType.type.canonicalType
