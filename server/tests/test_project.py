@@ -119,6 +119,25 @@ def test_project_uvm_on_include_path_or_behind_uvm_sv(tmp_path):
     source_set()
 
 
+def test_a_listed_uvm_pkg_that_does_not_exist_is_not_the_uvm_library(tmp_path, monkeypatch):
+    # $UVM_HOME set in the shell but not where the editor runs: the filelist names a missing file.
+    monkeypatch.delenv("UVM_HOME", raising=False)
+    (tmp_path / "tb.sv").write_text("module tb; endmodule\n")
+    (tmp_path / "tb.f").write_text("+incdir+$UVM_HOME/src\n$UVM_HOME/src/uvm_pkg.sv\ntb.sv\n")
+    ss = build_source_set(ProjectConfig.from_settings([str(tmp_path)], {"filelists": ["tb.f"]}))
+    assert (ss.uvm_source, ss.uvm_dir, ss.uvm_version) == ("bundled", BUNDLED_UVM, "1.2")
+    missing = os.path.join(str(tmp_path), "$UVM_HOME", "src", "uvm_pkg.sv")
+    assert missing in ss.roots and missing not in ss.library_roots  # its read error stays visible
+    assert ss.warnings == [f"{tmp_path / 'tb.f'}: $UVM_HOME is not set",
+                           f"{missing} does not exist (is a variable in its path unset?); "
+                           "it is not used as the UVM library"]
+    # Nor does it hide a UVM on the include path.
+    kit = fake_uvm(tmp_path / "kit", "1.1d")
+    (tmp_path / "tb.f").write_text(f"+incdir+{kit}\n{tmp_path}/nope/uvm_pkg.sv\ntb.sv\n")
+    ss = build_source_set(ProjectConfig.from_settings([str(tmp_path)], {"filelists": ["tb.f"]}))
+    assert (ss.uvm_source, ss.uvm_dir) == ("project", kit)
+
+
 def test_bad_uvm_home_warns_and_falls_back(tmp_path):
     (tmp_path / "tb.sv").write_text("module tb; endmodule\n")
     ss = build_source_set(ProjectConfig(workspace_roots=[str(tmp_path)], uvm_home=str(tmp_path / "nope")))

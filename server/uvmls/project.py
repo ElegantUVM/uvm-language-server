@@ -29,6 +29,7 @@ DEFAULT_EXCLUDES = [
     "**/uvmls/third_party/**",  # and its bundled UVM library
 ]
 INCLUDE_RE = re.compile(r'^\s*`include\s+["<]([^">]+)[">]', re.MULTILINE)
+UNSET_VAR_RE = re.compile(r"\$\{?(\w+)")  # what os.path.expandvars leaves of an unset variable
 BUNDLED_UVM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party", "uvm-1.2", "src")
 UVM_REV_RE = re.compile(r"^[ \t]*`define[ \t]+UVM_(MAJOR|MINOR|FIX)_REV[ \t]+(\S+)", re.MULTILINE)
 IEEE_UVM_RE = re.compile(r'"Accellera:(1800\.2[^:"]*):UVM:([^"]+)"')
@@ -172,6 +173,10 @@ def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | 
 
     def resolve(p: str) -> str:
         p = _expand_env(p)
+        for name in UNSET_VAR_RE.findall(p):
+            warning = f"{path}: ${name} is not set"
+            if warning not in result.warnings:
+                result.warnings.append(warning)
         return norm(p if os.path.isabs(p) else os.path.join(base, p))
 
     i = 0
@@ -252,11 +257,13 @@ def _is_uvm_src(d: str) -> bool:
     return os.path.isfile(os.path.join(d, "uvm_macros.svh")) and os.path.isfile(os.path.join(d, "uvm_pkg.sv"))
 
 
+UVM_WRAPPERS = ("uvm_pkg.sv", "uvm.sv")
+
+
 def _is_uvm_pkg(path: str) -> bool:
-    """uvm_pkg.sv, or the uvm.sv wrapper that includes it."""
-    name = os.path.basename(path)
-    return name == "uvm_pkg.sv" or (name == "uvm.sv" and
-                                    os.path.isfile(os.path.join(os.path.dirname(path), "uvm_pkg.sv")))
+    """An existing uvm_pkg.sv, or the uvm.sv wrapper next to one."""
+    return (os.path.basename(path) in UVM_WRAPPERS and os.path.isfile(path)
+            and os.path.isfile(os.path.join(os.path.dirname(path), "uvm_pkg.sv")))
 
 
 def _read(path: str) -> str:
@@ -322,6 +329,10 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
 
     # UVM the project compiles itself: a uvm_pkg.sv (or uvm.sv) among its roots,
     # or else a UVM source directory on its include path.
+    for r in roots:
+        if os.path.basename(r) in UVM_WRAPPERS and not os.path.isfile(r):
+            unset = " (is a variable in its path unset?)" if "$" in r else ""
+            warnings.append(f"{r} does not exist{unset}; it is not used as the UVM library")
     uvm_dirs = list(dict.fromkeys(os.path.dirname(r) for r in roots if _is_uvm_pkg(r)))
     project_uvm = next((d for d in uvm_dirs if d != uvm_src), None)
     if not uvm_src and project_uvm is None:

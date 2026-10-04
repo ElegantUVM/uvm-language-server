@@ -1,6 +1,7 @@
 // Filelist in the same form a simulator takes (VCS / Xcelium / Questa).
 // UVM is not listed, so the language server indexes the Accellera UVM 1.2 it ships with.
-// To use another UVM, add +incdir+$UVM_HOME/src and $UVM_HOME/src/uvm_pkg.sv here.
+// To use another UVM, set uvm.uvmHome or $UVM_HOME, or add +incdir+$UVM_HOME/src and
+// $UVM_HOME/src/uvm_pkg.sv here ($UVM_HOME must then be set where VS Code runs, too).
 +incdir+agent
 +incdir+env
 +incdir+seq

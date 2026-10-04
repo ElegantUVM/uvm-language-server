@@ -148,6 +148,19 @@ def test_missing_file_is_reported_and_the_rest_still_elaborates(tmp_path):
     assert r["tops"] == ["top"]
 
 
+def test_a_listed_uvm_pkg_that_does_not_exist_is_one_error(tmp_path, monkeypatch):
+    # Not the project's own UVM: the bundled one is compiled, and the missing file is reported.
+    monkeypatch.delenv("UVM_HOME", raising=False)
+    shutil.copytree(EXAMPLE, tmp_path / "tb")
+    (tmp_path / "tb" / "env.f").write_text("+incdir+$UVM_HOME/src\n$UVM_HOME/src/uvm_pkg.sv\n-f alu_tb.f\n")
+    w = Workspace()
+    w.configure(ProjectConfig.from_settings([str(tmp_path / "tb")], {"filelists": ["env.f"]}))
+    assert uvm_label(w.sources) == "bundled Accellera UVM 1.2" and w.stats()["libraryClasses"] > 300
+    r = elaborate(request_for(w))
+    assert [(os.path.basename(d["file"]), d["code"]) for d in r["diagnostics"]] == [("uvm_pkg.sv", "io")]
+    assert [d.code for d in w.user_diagnostics()] == ["io"]
+
+
 def test_filelist_timescale_reaches_slang(tmp_path):
     # Some design elements with a `timescale and some without is an error, unless the
     # simulator is given a default, as filelists often do.
