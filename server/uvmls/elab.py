@@ -53,8 +53,10 @@ def skip_reason(ws) -> str | None:
         return ("the built-in UVM model cannot be elaborated; turn uvm.useBundledUvm back on "
                 "or set uvm.uvmHome")
     if s.mode == "discovery":
+        roots = set(s.roots)  # not files merely open in the editor
+        compiled = set().union(*(idx.files for r, idx in ws.indices.items() if r in roots))
         dups = sorted(name for name, units in ws.units_by_name.items()
-                      if len({u.range.path for u in units}) > 1)
+                      if len({u.range.path for u in units if u.range.path in compiled}) > 1)
         if dups:
             names = ", ".join(dups[:3]) + (f" and {len(dups) - 3} more" if len(dups) > 3 else "")
             return (f"{names} {'is' if len(dups) == 1 else 'are'} defined in more than one file, as "

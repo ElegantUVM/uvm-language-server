@@ -136,6 +136,10 @@ def test_skip_reasons(ws, bundled_ws, tmp_path):
     assert "uvm.filelists" in reason
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb_a" / "alu_tb.f")]))
     assert skip_reason(w) is None
+    # A file open in the editor but outside the compile does not count.
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path / "tb_a")]))
+    w.update_document(str(tmp_path / "elsewhere.sv"), "module tb_top; endmodule\n")
+    assert len(w.units_by_name["tb_top"]) == 2 and skip_reason(w) is None
 
 
 def run_worker(payload: bytes):
