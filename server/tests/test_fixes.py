@@ -341,6 +341,80 @@ def test_register_a_class_outside_the_workspace(tmp_path):
     assert not fix.changes and not fix.preferred
 
 
+# -- utils-mismatch --------------------------------------------------------------------
+
+DRV = """import uvm_pkg::*;
+class drv extends uvm_driver;
+  int x;
+  `uvm_component_utils_begin(drv)
+    `uvm_field_int(x, UVM_ALL_ON)
+  `uvm_component_utils_end
+endclass
+class pdrv #(type T = int) extends uvm_driver;
+  `uvm_component_param_utils_begin(pdrv #(T))
+  `uvm_component_utils_end
+endclass
+class item extends uvm_sequence_item;
+  `uvm_object_utils(item)
+endclass
+"""
+
+
+@pytest.mark.parametrize("old,new,title", [
+    ("`uvm_component_utils_begin(drv)", "`uvm_object_utils_begin(drv)", None),
+    ("`uvm_component_param_utils_begin(pdrv #(T))", "`uvm_object_param_utils_begin(pdrv #(T))",
+     "Change `uvm_object_param_utils_begin to `uvm_component_param_utils_begin"),
+    ("`uvm_object_utils(item)", "`uvm_component_utils(item)", "Change `uvm_component_utils to `uvm_object_utils"),
+])
+def test_utils_mismatch_swaps_object_and_component(tmp_path, old, new, title):
+    planted = DRV.replace(old, new)
+    if "_begin(drv)" in old:
+        planted = planted.replace("`uvm_component_utils_end", "`uvm_object_utils_end", 1)
+        title = ("Change `uvm_object_utils_begin to `uvm_component_utils_begin and "
+                 "`uvm_object_utils_end to `uvm_component_utils_end")
+    w, fix = round_trip(tmp_path, {"t.sv": DRV}, {"t.sv": planted}, "utils-mismatch")
+    assert (fix.title, fix.preferred, fix.safe) == (title, True, True)
+
+
+def test_utils_mismatch_names_the_macro(tmp_path):
+    w = index(tmp_path, {"t.sv": DRV.replace("`uvm_component_param_utils_begin", "`uvm_object_param_utils_begin")})
+    [d] = findings(w, "utils-mismatch")
+    assert d.message == "pdrv is a component but is registered with `uvm_object_param_utils_begin; " \
+                        "use `uvm_component_param_utils_begin"
+
+
+def test_utils_mismatch_not_offered(tmp_path):
+    text = """import uvm_pkg::*;
+`define MY_UTILS(T) `uvm_object_utils(T)
+class a extends uvm_driver;
+  typedef uvm_object_registry #(a) type_id;
+endclass
+class b extends uvm_driver;
+  `MY_UTILS(b)
+endclass
+"""
+    w = index(tmp_path, {"t.sv": text})
+    a, b = findings(w, "utils-mismatch")
+    assert a.message == "a is a component but is registered with a uvm_object_registry type_id; use `uvm_component_utils"
+    assert offered(w, a) == [] and offered(w, b) == []
+    # A macro the UVM in use does not have (1.2 has no _abstract_ ones): nothing to swap to.
+    w = index(tmp_path, {"t.sv": "import uvm_pkg::*;\n`include \"uvm_macros.svh\"\n"
+                                 "`define uvm_object_abstract_utils(T) typedef uvm_object_registry#(T) type_id;\n"
+                                 "virtual class c extends uvm_driver;\n  `uvm_object_abstract_utils(c)\nendclass\n"},
+              bundled=True)
+    [d] = findings(w, "utils-mismatch")
+    assert offered(w, d) == []
+
+
+def test_utils_mismatch_is_not_safe_when_a_create_has_no_parent(tmp_path):
+    text = DRV.replace("`uvm_object_utils(item)", "`uvm_object_utils(item)\n  function void f(); "
+                       'drv d = drv::type_id::create("d"); endfunction')
+    w = index(tmp_path, {"t.sv": text.replace("`uvm_component_utils_begin(drv)", "`uvm_object_utils_begin(drv)")})
+    [d] = findings(w, "utils-mismatch")
+    [fix] = offered(w, d)
+    assert fix.preferred and not fix.safe  # as a component, that create() would stop compiling
+
+
 # -- compile proof: fixed code elaborates with the bundled UVM 1.2 -----------------------
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "..", "examples", "alu_tb")
@@ -391,4 +465,11 @@ def test_register_fix_compiles(tmp_path):
     w = example(tmp_path, {"env/alu_scoreboard.svh": ("  `uvm_component_utils(alu_scoreboard)\n", "")})
     assert user_errors(w)  # no member type_id
     fix_once(w, "create-unregistered")
+    assert unchanged(tmp_path) and user_errors(w) == []
+
+
+def test_utils_mismatch_fix_compiles(tmp_path):
+    w = example(tmp_path, {"env/alu_coverage.svh": ("`uvm_component_utils(alu_coverage)", "`uvm_object_utils(alu_coverage)")})
+    assert user_errors(w)
+    fix_once(w, "utils-mismatch")
     assert unchanged(tmp_path) and user_errors(w) == []

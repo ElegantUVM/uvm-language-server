@@ -2,10 +2,34 @@
 
 from __future__ import annotations
 
+import re
+
 from .model import Diag
 from .uvm import COMPONENT_ROLES
 from .views import config_db_report
 from .workspace import Workspace
+
+
+UTILS_RE = re.compile(r"^uvm_(object|component)(_abstract)?(_param)?_utils(_begin)?$")
+REGISTRY_RE = re.compile(r"^uvm_(object|component)_registry$")
+
+
+def misregistered(ws: Workspace, cls) -> str | None:
+    """The registration a class needs when its own contradicts its role: 'component' for a
+    component registered as an object, 'object' for the reverse."""
+    role = ws.role(cls)
+    if cls.registration == "object" and role in COMPONENT_ROLES:
+        return "component"
+    if cls.registration == "component" and role not in COMPONENT_ROLES and role not in ("class", "interface"):
+        return "object"
+    return None
+
+
+def swapped_macro(macro: str | None, kind: str) -> str | None:
+    """The registration macro for the other kind: uvm_object_param_utils -> uvm_component_param_utils."""
+    if macro and (UTILS_RE.match(macro) or REGISTRY_RE.match(macro)):
+        return macro.replace("component" if kind == "object" else "object", kind, 1)
+    return None
 
 
 def lint(ws: Workspace) -> dict[str, list[Diag]]:
@@ -34,14 +58,14 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
     for cls in ws.classes:
         if cls.library:
             continue
-        role = ws.role(cls)
-        is_comp = role in COMPONENT_ROLES
-        if cls.registration == "object" and is_comp:
-            add(cls.range, f"{cls.name} is a component but is registered with `uvm_object_utils; "
-                           "use `uvm_component_utils", "warning", "utils-mismatch", cls=cls.qualname)
-        elif cls.registration == "component" and role not in COMPONENT_ROLES and role not in ("class", "interface"):
-            add(cls.range, f"{cls.name} is not a component but is registered with `uvm_component_utils; "
-                           "use `uvm_object_utils", "warning", "utils-mismatch", cls=cls.qualname)
+        kind = misregistered(ws, cls)
+        if kind:
+            used = f"`{cls.registration_macro}" if cls.registration_macro else \
+                f"a uvm_{cls.registration}_registry type_id"
+            use = swapped_macro(cls.registration_macro, kind) or f"uvm_{kind}_utils"
+            add(cls.range, f"{cls.name} is {'a component' if kind == 'component' else 'not a component'} "
+                           f"but is registered with {used}; use `{use}", "warning", "utils-mismatch",
+                cls=cls.qualname)
         if cls.base is not None and ws.base_spec(cls) is None and not cls.base.name.startswith("uvm_"):
             add(cls.base.range or cls.range, f"base class '{cls.base.name}' was not found in the indexed sources",
                 "info", "unknown-base", cls=cls.qualname)

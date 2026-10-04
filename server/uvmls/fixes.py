@@ -15,6 +15,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from .lints import UTILS_RE, misregistered, swapped_macro
 from .model import Range
 from .project import is_bundled
 
@@ -253,8 +254,7 @@ def call_args(masked: str) -> tuple[int, list[tuple[int, int]]] | None:
 
 
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
-UTILS_RE = re.compile(r"^uvm_(object|component)(_abstract)?(_param)?_utils(_begin)?$")
-REGISTRY_RE = re.compile(r"^uvm_(object|component)_registry$")
+UTILS_END_RE = re.compile(r"`(uvm_(?:object|component)(?:_abstract)?_utils_end)\b")
 
 
 def macro_defined(ws, name: str) -> bool:
@@ -342,7 +342,69 @@ def _create_unregistered(ctx: Context, d) -> list[Fix]:
     return [Fix(title, [change], preferred=True, safe=t.path == ctx.path)] if change else []
 
 
+def masked_body(ws, ft: FileText, cls) -> tuple[int, str] | None:
+    """(offset, masked text) of a class declaration, with its nested classes blanked out too."""
+    span = ft.span(cls.decl_range)
+    if span is None:
+        return None
+    masked = mask(ft.text[span[0]:span[1]])
+    for inner in ws.classes:
+        if inner.outer_class == cls.name and inner.package == cls.package and inner.path == cls.path:
+            sub = ft.span(inner.decl_range)
+            if sub and span[0] <= sub[0] <= sub[1] <= span[1]:
+                a, b = sub[0] - span[0], sub[1] - span[0]
+                masked = masked[:a] + NOT_EOL_RE.sub(" ", masked[a:b]) + masked[b:]
+    return span[0], masked
+
+
+def creates_of(ws, cls) -> list:
+    """Every factory create() of a class, anywhere in the user's code."""
+    out = []
+    for c in ws.classes:
+        if c.library:
+            continue
+        for cr in ws.calls_of(c).creates:
+            if cr.kind != "factory" or cr.type is None or \
+                    (cr.type.name != cls.name and cr.type.name not in ws.typedefs_by_name):
+                continue
+            spec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, c)
+            if spec is not None and spec.cls is cls:
+                out.append(cr)
+    return out
+
+
+def _utils_mismatch(ctx: Context, d) -> list[Fix]:
+    """A component registered with `uvm_object_utils, or the reverse: swap object and component in the
+    macro's name (and in the matching _end)."""
+    ws = ctx.ws
+    cls = ws.class_by_qual.get((d.data or {}).get("cls"))
+    kind = cls and not cls.library and misregistered(ws, cls)
+    old = cls.registration_macro if kind else None
+    new = swapped_macro(old, kind) if old else None
+    if not new or cls.registration_range is None or not macro_defined(ws, new):
+        return []
+    ft = ctx.files.get(cls.registration_range.path)
+    span = ft and ft.span(cls.registration_range)
+    if span is None or not ft.text.startswith("`" + old, span[0]):
+        return []
+    changes = [TextChange(ft.path, span[0] + 1, span[0] + 1 + len(old), new)]
+    title = f"Change `{old} to `{new}"
+    if old.endswith("_begin"):
+        body = masked_body(ws, ft, cls)
+        m = body and UTILS_END_RE.search(body[1], span[1] - body[0])
+        end_new = f"uvm_{kind}_utils_end"
+        if not m or not macro_defined(ws, end_new):
+            return []
+        if m.group(1) != end_new:
+            changes.append(TextChange(ft.path, body[0] + m.start(1), body[0] + m.end(1), end_new))
+            title += f" and `{m.group(1)} to `{end_new}"
+    # As a component, its create() needs a parent: a create() without one stops compiling.
+    safe = kind == "object" or all(cr.nargs >= 2 for cr in creates_of(ws, cls))
+    return [Fix(title, changes, preferred=True, safe=safe)]
+
+
 FIXERS = {
+    ("uvm", "utils-mismatch"): _utils_mismatch,
     ("uvm", "create-unregistered"): _create_unregistered,
     ("uvm", "create-no-parent"): _create_no_parent,
 }
