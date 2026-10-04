@@ -23,7 +23,7 @@ import pyslang as ps
 from pyslang import analysis, ast, driver
 from pyslang import syntax as S
 
-from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro, slang_text
+from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro, fix_data, slang_text
 from .project import BUNDLED_UVM, SourceSet, norm
 
 log = logging.getLogger("uvmls")
@@ -390,6 +390,9 @@ def _elaborate(req: dict) -> dict:
             per_file[item["file"]] += 1
             if diag is not None:
                 item["related"] = notes.of(diag, sev) + related
+                data = fix_data(item["code"], diag, [n["message"] for n in item["related"]])
+                if data:
+                    item["data"] = data
             out.append(item)
     return {"diagnostics": out, "tops": [i.name for i in comp.getRoot().topInstances],
             "counts": _counts([item for item, *_ in found], library, len(found) - len(out)), "error": None}

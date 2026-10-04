@@ -150,6 +150,9 @@ def test_stats_and_diagnostics(client):
     diag = client.wait_for("textDocument/publishDiagnostics",
                            lambda m: m["params"]["uri"].endswith("alu_monitor.svh"))
     assert [d["code"] for d in diag["params"]["diagnostics"]] == ["config-db-no-set"]
+    # What its quick fixes need comes with it.
+    [d] = diag["params"]["diagnostics"]
+    assert d["data"] == {"field": "checks_enable", "at": [d["range"]["start"]["line"], d["range"]["start"]["character"]]}
 
 
 def test_definition_and_hover(client):

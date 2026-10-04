@@ -98,7 +98,8 @@ def lsp_diagnostic(d: Diag) -> T.Diagnostic:
                         severity=SEVERITY.get(d.severity, T.DiagnosticSeverity.Warning),
                         code=d.code, source=d.source,
                         related_information=[T.DiagnosticRelatedInformation(location(r), msg)
-                                             for r, msg in d.related] or None)
+                                             for r, msg in d.related] or None,
+                        data=d.data or None)
 
 
 class UvmLanguageServer(LanguageServer):
@@ -347,7 +348,7 @@ class UvmLanguageServer(LanguageServer):
                        for n in d["related"]]
             per_file.setdefault(d["file"], []).append(
                 Diag(Range(d["file"], d["line"], d["col"], d["endLine"], d["endCol"]), d["message"],
-                     d["severity"], d["code"], elab.SOURCE, related))
+                     d["severity"], d["code"], elab.SOURCE, related, d.get("data")))
         counts = result.get("counts") or {}
         if result.get("error"):
             notes = [result["error"]]

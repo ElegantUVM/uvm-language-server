@@ -452,3 +452,15 @@ def test_cli_exit_codes(capsys, monkeypatch, broken_example):
     code, out = elab(EXAMPLE, "-f", FILELIST, "--no-bundled-uvm")
     assert code == 2 and "elaboration skipped: the built-in UVM model" in out.err
     assert "drop --no-bundled-uvm or pass --uvm-home" in out.err
+
+
+def test_did_you_mean_carries_both_names(tmp_path):
+    # What the quick fix replaces, and with what: from slang's arguments, or its "did you mean" note.
+    (tmp_path / "t.sv").write_text("class c;\n  int buildit;\n  function void f();\n    buildt = 1;\n"
+                                   "    this.buildt = 2;\n    this.zzz = 3;\n  endfunction\nendclass\n")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    found = [(d["line"], d["code"], d.get("data")) for d in elaborate(request_for(w))["diagnostics"]]
+    assert found == [(3, "TypoIdentifier", {"from": "buildt", "to": "buildit"}),
+                     (4, "UnknownMember", {"from": "buildt", "to": "buildit"}),
+                     (5, "UnknownMember", None)]  # nothing close enough to suggest

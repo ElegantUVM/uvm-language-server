@@ -89,5 +89,7 @@ endclass
 ''')
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
-    codes = sorted(d.code for ds in lint(w).values() for d in ds)
-    assert codes == ["config-db-type-mismatch", "create-unregistered", "utils-mismatch"]
+    found = sorted((d.code, d.range.line, d.data) for ds in lint(w).values() for d in ds)
+    assert found == [("config-db-type-mismatch", 7, {"field": "depth", "at": [7, 10]}),
+                     ("create-unregistered", 6, {"target": "cfg"}),
+                     ("utils-mismatch", 10, {"cls": "env"})]

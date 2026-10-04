@@ -193,3 +193,11 @@ def test_where_edits_go(tmp_path):
     assert macro_new.generated and macro_new.header_end is None and macro_new.body_items == []
     assert [a.name for a in macro_new.args] == ["name", "parent"]
     assert ext.extends_args == "(5)" and ext.registration_macro is None
+
+
+def test_fix_data_of_parse_diagnostics(tmp_path):
+    (tmp_path / "a.sv").write_text('`include "sub/missing_hdr.svh"\nmodule m;\n  intial begin end\nendmodule\n')
+    idx = Indexer([], {}, use_shim=True).parse(str(tmp_path / "a.sv"))
+    assert [(d.code, d.data) for d in idx.diagnostics] == [
+        ("CouldNotOpenIncludeFile", {"include": "sub/missing_hdr.svh"}),
+        ("TypoKeyword", {"from": "intial", "to": "initial"})]

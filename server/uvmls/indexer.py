@@ -90,6 +90,30 @@ def _shim_text() -> str:
         return f.read()
 
 
+DID_YOU_MEAN_RE = re.compile(r"^did you mean '([A-Za-z_][A-Za-z0-9_$]*)'\?$")
+
+
+def fix_data(code: str, diag, notes=()) -> dict | None:
+    """What a quick fix needs from one of slang's diagnostics: the include it could not open, or
+    the name it suggests instead of a misspelt one (TypoKeyword/TypoIdentifier say it in their
+    arguments, UnknownMember in a "did you mean" note)."""
+    if code not in ("CouldNotOpenIncludeFile", "TypoKeyword", "TypoIdentifier", "UnknownMember"):
+        return None
+    try:
+        args = [str(a) for a in diag.args]
+    except UnicodeDecodeError:  # a name that is not UTF-8: no edit can match it
+        return None
+    if code == "CouldNotOpenIncludeFile" and args:
+        return {"include": args[0]}
+    if code in ("TypoKeyword", "TypoIdentifier") and len(args) >= 2:
+        return {"from": args[0], "to": args[1]}
+    if code == "UnknownMember" and args:
+        to = [m.group(1) for m in map(DID_YOU_MEAN_RE.match, notes) if m]
+        if len(to) == 1:
+            return {"from": args[0], "to": to[0]}
+    return None
+
+
 def _uses_unknown_uvm_macro(tree) -> bool:
     """True when the file uses a UVM macro that nothing it includes defines."""
     return any(d.code == ps.Diags.UnknownDirective and d.args and
@@ -1096,7 +1120,8 @@ class Extractor:
             if code in ("UnknownDirective", "CouldNotOpenIncludeFile"):
                 severity = "warning"
                 msg += " (add its directory to uvm.includeDirs or a filelist)"
-            self.out.diagnostics.append(Diag(Range(path, line, col, end_line, end_col), msg, severity, code))
+            self.out.diagnostics.append(Diag(Range(path, line, col, end_line, end_col), msg, severity, code,
+                                             data=fix_data(code, d)))
 
     def collect_includes(self):
         earlier: dict[str, str] = {}
