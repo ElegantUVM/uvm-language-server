@@ -253,6 +253,26 @@ def call_args(masked: str) -> tuple[int, list[tuple[int, int]]] | None:
 
 
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+UTILS_RE = re.compile(r"^uvm_(object|component)(_abstract)?(_param)?_utils(_begin)?$")
+REGISTRY_RE = re.compile(r"^uvm_(object|component)_registry$")
+
+
+def macro_defined(ws, name: str) -> bool:
+    """Whether the UVM in use (or the project) defines a macro."""
+    if name in ws.macros_by_name:
+        return True
+    from .navigation import shim_macros
+    return not (ws.sources and ws.sources.has_real_uvm_macros) and name in shim_macros()
+
+
+def sees_uvm_pkg(ws, cls) -> bool:
+    """Whether the UVM macros (which name uvm_*_registry unqualified) compile in a class: it
+    imports uvm_pkg, or another class of its package (of its file, outside one) is registered
+    through them."""
+    if "uvm_pkg" in cls.imports:
+        return True
+    return any(c is not cls and not c.library and c.registration_macro and UTILS_RE.match(c.registration_macro)
+               and (c.package == cls.package if cls.package else c.path == cls.path) for c in ws.classes)
 
 
 def method_of(ws, cls, name: str):
@@ -296,7 +316,34 @@ def _create_no_parent(ctx: Context, d) -> list[Fix]:
     return [fix]
 
 
+def _create_unregistered(ctx: Context, d) -> list[Fix]:
+    """`T::type_id::create(...)` of a class T that is not registered: add the utils macro to T."""
+    ws = ctx.ws
+    t = ws.class_by_qual.get((d.data or {}).get("target"))
+    if t is None or t.library or t.is_virtual or t.registration is not None:
+        return []
+    if ws.role(t) in ("class", "interface"):  # not known to be a uvm_object
+        return []
+    macro = ("uvm_component" if ws.is_component(t) else "uvm_object") + ("_param_utils" if t.params else "_utils")
+    arg = t.name + (" #(" + ", ".join(p.name for p in t.params) + ")" if t.params else "")
+    if not macro_defined(ws, macro) or not sees_uvm_pkg(ws, t):
+        return []
+    item = f"`{macro}({arg})"
+    title = f"Add {item} to class '{t.name}'" + ("" if t.path == d.range.path else f" ({os.path.basename(t.path)})")
+    outside = ctx.not_editable(t.path)
+    if outside:
+        return [Fix(title, disabled=f"'{t.name}' is declared outside the workspace ({t.path})")]
+    ft = ctx.files.get(t.path)
+    span = ft and ft.span(t.decl_range)
+    # A class with field macros needs a _begin/_end block around them: which, is the author's call.
+    if span is None or "`uvm_field_" in mask(ft.text[span[0]:span[1]]):
+        return []
+    change = insert_member(ft, t, item)
+    return [Fix(title, [change], preferred=True, safe=t.path == ctx.path)] if change else []
+
+
 FIXERS = {
+    ("uvm", "create-unregistered"): _create_unregistered,
     ("uvm", "create-no-parent"): _create_no_parent,
 }
 
@@ -314,10 +361,11 @@ def fixes_for(ctx: Context, d) -> list[Fix]:
         return []
     out = []
     for fix in found:
-        reason = next((r for r in map(ctx.not_editable, {c.path for c in fix.changes}) if r), None)
-        if reason is None:
+        fix.disabled = fix.disabled or next(
+            (r for r in map(ctx.not_editable, {c.path for c in fix.changes}) if r), None)
+        if fix.disabled is None:
             out.append(fix)
         elif ctx.client.disabled_support:
-            fix.disabled, fix.preferred, fix.safe = reason, False, False
+            fix.changes, fix.preferred, fix.safe = [], False, False
             out.append(fix)
     return out

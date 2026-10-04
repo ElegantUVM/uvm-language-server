@@ -222,6 +222,125 @@ def test_create_no_parent_not_offered_in_a_macro_or_for_stale_text(tmp_path):
     assert offered(w, plain) == []
 
 
+# -- create-unregistered -------------------------------------------------------------
+
+ENV = """import uvm_pkg::*;
+class mon extends uvm_monitor;
+  `uvm_component_utils(mon)
+
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class env extends uvm_env;
+  `uvm_component_utils(env)
+  mon m;
+  cfg c;
+  function void build_phase(uvm_phase phase);
+    m = mon::type_id::create("m", this);
+    c = cfg::type_id::create("c");
+  endfunction
+endclass
+"""
+CFG = """class cfg extends uvm_object;
+  `uvm_object_utils(cfg)
+
+  int n;
+endclass
+"""
+
+
+def test_register_a_component_in_the_same_file(tmp_path):
+    files = {"env.sv": ENV, "cfg.svh": CFG}
+    planted = {"env.sv": ENV.replace("  `uvm_component_utils(mon)\n", "")}
+    _, fix = round_trip(tmp_path, files, planted, "create-unregistered")
+    assert (fix.title, fix.preferred, fix.safe) == ("Add `uvm_component_utils(mon) to class 'mon'", True, True)
+
+
+def test_register_an_object_in_another_file(tmp_path):
+    files = {"env.sv": ENV.replace("\n", '\n`include "cfg.svh"\n', 1), "cfg.svh": CFG}
+    _, fix = round_trip(tmp_path, files, {"cfg.svh": CFG.replace("  `uvm_object_utils(cfg)\n", "")},
+                        "create-unregistered")
+    assert fix.title == "Add `uvm_object_utils(cfg) to class 'cfg' (cfg.svh)"
+    assert [c.path for c in fix.changes] == [str(tmp_path / "cfg.svh")]
+    assert fix.preferred and not fix.safe  # it edits another file than the finding's
+
+
+def test_register_a_parameterized_class_and_a_nested_one(tmp_path):
+    text = """import uvm_pkg::*;
+class drv #(type T = int, int N = 2) extends uvm_driver;
+  T x;
+endclass
+class outer extends uvm_object;
+  `uvm_object_utils(outer)
+  class inner extends uvm_object;
+  endclass
+  inner i;
+endclass
+class env extends uvm_env;
+  `uvm_component_utils(env)
+  drv #(int, 3) d;
+  outer::inner i;
+  function void build_phase(uvm_phase phase);
+    d = drv #(int, 3)::type_id::create("d", this);
+    i = outer::inner::type_id::create("i");
+  endfunction
+endclass
+"""
+    w = index(tmp_path, {"t.sv": text})
+    titles = [offered(w, d)[0].title for d in findings(w, "create-unregistered")]
+    assert titles == ["Add `uvm_component_param_utils(drv #(T, N)) to class 'drv'",
+                      "Add `uvm_object_utils(inner) to class 'inner'"]
+    fix_once(w, "create-unregistered")
+    fix_once(w, "create-unregistered")
+    assert not findings(w, "create-unregistered")
+    after = (tmp_path / "t.sv").read_text()
+    assert "extends uvm_driver;\n  `uvm_component_param_utils(drv #(T, N))\n\n  T x;" in after
+    assert "  class inner extends uvm_object;\n    `uvm_object_utils(inner)\n  endclass" in after
+
+
+@pytest.mark.parametrize("cfg_text", [
+    CFG.replace("  `uvm_object_utils(cfg)\n\n  int n;", "  int n;\n  `uvm_field_int(n, UVM_ALL_ON)"),  # needs _begin/_end
+    "`define DECL(n) class n extends uvm_object;\n`DECL(cfg)\n  int n;\nendclass\n",  # header from a macro
+])
+def test_register_not_offered(tmp_path, cfg_text):
+    w = index(tmp_path, {"env.sv": ENV.replace("\n", '\n`include "cfg.svh"\n', 1), "cfg.svh": cfg_text})
+    [d] = findings(w, "create-unregistered")
+    assert offered(w, d) == []
+
+
+def test_no_finding_for_a_class_that_is_not_a_uvm_object(tmp_path):
+    # Usually the `ifndef UVM branch of a class, taken for want of a define the build sets.
+    w = index(tmp_path, {"env.sv": ENV.replace("\n", '\n`include "cfg.svh"\n', 1),
+                         "cfg.svh": "class cfg;\n  int n;\nendclass\n"})
+    assert findings(w, "create-unregistered") == []
+
+
+def test_register_needs_the_uvm_macros_to_compile(tmp_path):
+    # In a package that does not import uvm_pkg, the macros cannot name uvm_object_registry.
+    text = "package p;\n  class cfg extends uvm_pkg::uvm_object;\n  endclass\n" \
+           "  class t extends uvm_pkg::uvm_test;\n    cfg c;\n" \
+           '    function void build_phase(uvm_pkg::uvm_phase phase); c = cfg::type_id::create("c"); endfunction\n' \
+           "  endclass\nendpackage\n"
+    w = index(tmp_path, {"p.sv": text})
+    [d] = findings(w, "create-unregistered")
+    assert offered(w, d) == []
+    # Another class of the package is registered through them: it compiles there.
+    w = index(tmp_path, {"p.sv": text.replace("  class t extends uvm_pkg::uvm_test;\n",
+                                              "  class t extends uvm_pkg::uvm_test;\n    `uvm_component_utils(t)\n")})
+    [d] = findings(w, "create-unregistered")
+    assert [f.title for f in offered(w, d)] == ["Add `uvm_object_utils(cfg) to class 'cfg'"]
+
+
+def test_register_a_class_outside_the_workspace(tmp_path):
+    w = index(tmp_path, {"ws/env.sv": ENV.replace("\n", '\n`include "../lib/cfg.svh"\n', 1),
+                         "lib/cfg.svh": CFG.replace("  `uvm_object_utils(cfg)\n", "")})
+    [d] = findings(w, "create-unregistered")
+    roots = [str(tmp_path / "ws")]
+    assert offered(w, d, roots=roots) == []
+    [fix] = offered(w, d, roots=roots, disabled_support=True)
+    assert fix.disabled == f"'cfg' is declared outside the workspace ({tmp_path / 'lib' / 'cfg.svh'})"
+    assert not fix.changes and not fix.preferred
+
+
 # -- compile proof: fixed code elaborates with the bundled UVM 1.2 -----------------------
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "..", "examples", "alu_tb")
@@ -265,4 +384,11 @@ def test_create_no_parent_fix_compiles(tmp_path):
     [d] = findings(w, "create-no-parent")
     assert d.severity == "error"  # UVM 1.2 has no default for the parent
     fix_once(w, "create-no-parent")
+    assert unchanged(tmp_path) and user_errors(w) == []
+
+
+def test_register_fix_compiles(tmp_path):
+    w = example(tmp_path, {"env/alu_scoreboard.svh": ("  `uvm_component_utils(alu_scoreboard)\n", "")})
+    assert user_errors(w)  # no member type_id
+    fix_once(w, "create-unregistered")
     assert unchanged(tmp_path) and user_errors(w) == []

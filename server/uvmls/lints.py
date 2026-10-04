@@ -56,7 +56,9 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
             if target.is_virtual:
                 add(cr.range, f"{target.name} is a virtual class and cannot be created", "error",
                     "create-virtual", cls=cls.qualname, at=at, target=target.qualname)
-            elif target.registration is None:
+            elif target.registration is None and ws.role(target) not in ("class", "interface"):
+                # (A class not known to be a uvm_object, such as one whose `ifdef UVM branch is
+                # not taken, is not something a macro can register.)
                 macro = "`uvm_component_utils" if ws.is_component(target) else "`uvm_object_utils"
                 add(cr.range, f"{target.name} is not registered with the factory (add {macro}({target.name}))",
                     "warning", "create-unregistered", target=target.qualname)

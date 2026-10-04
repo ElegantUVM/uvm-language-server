@@ -227,6 +227,46 @@ def test_a_client_without_data_support(tb):
         c.close()
 
 
+def published(client, path, pred=lambda ds: True, timeout=20):
+    return client.wait_for("textDocument/publishDiagnostics",
+                           lambda m: m["params"]["uri"] == f"file://{path}" and pred(m["params"]["diagnostics"]),
+                           timeout=timeout)["params"]["diagnostics"]
+
+
+def test_a_fix_in_another_file(client, tb):
+    """The finding is on the create() call in alu_env.svh; the fix registers alu_scoreboard in its
+    own file, open in the editor (versioned) or not (no version)."""
+    sb_path, env_path = os.path.join(tb, "env", "alu_scoreboard.svh"), os.path.join(tb, "env", "alu_env.svh")
+    with open(sb_path) as f:
+        original = f.read()
+    planted = original.replace("  `uvm_component_utils(alu_scoreboard)\n", "")
+    sb = Doc(client, sb_path, planted)
+    env = Doc(client, env_path)
+    [d] = published(client, env_path, lambda ds: ds)
+    assert d["code"] == "create-unregistered"
+    [a] = env.actions([d])
+    assert a["title"] == "Add `uvm_component_utils(alu_scoreboard) to class 'alu_scoreboard' (alu_scoreboard.svh)"
+    assert applied(planted, edits_for(a, sb.uri, sb.version)) == original
+    sb.close()
+    env.close()
+    published(client, env_path, lambda ds: not ds)
+    # Not open: the file on disk, and no version to check.
+    with open(sb_path, "w") as f:
+        f.write(planted)
+    try:
+        client.notify("workspace/didChangeWatchedFiles", {"changes": [{"uri": sb.uri, "type": 2}]})
+        env = Doc(client, env_path)
+        [d] = published(client, env_path, lambda ds: ds)
+        [a] = env.actions([d])
+        assert applied(planted, edits_for(a, sb.uri, None)) == original
+        env.close()
+    finally:
+        with open(sb_path, "w") as f:
+            f.write(original)
+        client.notify("workspace/didChangeWatchedFiles", {"changes": [{"uri": sb.uri, "type": 2}]})
+    published(client, env_path, lambda ds: not ds)
+
+
 def test_a_stale_diagnostic_maps_to_the_finding_that_moved():
     # Two findings that read the same: the one the client's (older) diagnostic was about is the
     # one at the line its line moved to, not merely the nearest.
