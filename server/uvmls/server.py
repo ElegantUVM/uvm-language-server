@@ -115,6 +115,7 @@ class UvmLanguageServer(LanguageServer):
         self.elab_texts: dict[str, str] = {}  # the unsaved editor text those diagnostics come from
         self.elab_shown: list[str] = []  # the severity Problems shows for each of them
         self.elab_basis: dict[str, str] = {}  # the text of open files when the latest run started
+        self.elab_compiled: dict[str, str] = {}  # that, without the files opened since
         self.elab_status: dict = {"state": "off"}
         self._elab_run = 0  # bumped by every start or stop; older runs discard their results
         self._elab_task: asyncio.Future | None = None
@@ -263,6 +264,7 @@ class UvmLanguageServer(LanguageServer):
         """Elaborate now, superseding any run in progress. The task's result is the status."""
         self.stop_elaboration()
         self.elab_basis = self.documents
+        self.elab_compiled = dict(self.elab_basis)
         self._elab_task = asyncio.ensure_future(self.elaborate(self._elab_run))
         return self._elab_task
 
@@ -498,7 +500,12 @@ def did_change(ls: UvmLanguageServer, params: T.DidChangeTextDocumentParams):
 
 @server.feature(T.TEXT_DOCUMENT_DID_SAVE)
 def did_save(ls: UvmLanguageServer, params: T.DidSaveTextDocumentParams):
-    ls.schedule(uri_to_path(params.text_document.uri))
+    path = uri_to_path(params.text_document.uri)
+    ls.schedule(path)
+    # An auto-save of the text an onChange run has compiled (or is compiling): same result.
+    if ls.elab_status["state"] in ("running", "done") and path in ls.elab_compiled \
+            and ls.elab_compiled[path] == ls.documents.get(path):
+        return
     ls.schedule_elaboration(ELAB_SAVE_DELAY)
 
 

@@ -586,6 +586,32 @@ def test_an_edit_in_on_change_mode_supersedes_a_run_in_progress(client):
     client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
 
 
+def test_auto_save_after_an_on_change_run_does_not_elaborate_again(client):
+    u = uri("agent/alu_driver.svh")
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+        text = f.read()
+    set_elaboration(client, "onChange")
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
+    client.forget("uvm/elaborationStatus")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                             "contentChanges": [{"text": text.replace("m_cfg.vif", "m_cfg.vfi")}]})
+    client.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "running")
+    client.notify("textDocument/didSave", {"textDocument": {"uri": u}})  # files.autoSave afterDelay
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 1
+    time.sleep(1)
+    client.request("uvm/stats", {})  # collects whatever else the server sent
+    assert not [m for m in client.notifications if m["method"] == "uvm/elaborationStatus"]
+    # A save of other text than the run compiled still elaborates.
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 3},
+                                             "contentChanges": [{"text": text}]})
+    client.notify("textDocument/didSave", {"textDocument": {"uri": u}})  # before the onChange delay
+    client.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "running", timeout=0.8)
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+    set_elaboration(client, "onSave")
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+
+
 def test_elaborate_now_answers_with_the_run_that_superseded_it(client):
     u = uri("agent/alu_driver.svh")
     with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
