@@ -54,6 +54,13 @@ def test_class_graph_inheritance_reaches_uvm_classes(bundled_ws):
              "uvm_pkg::uvm_report_object", "uvm_pkg::uvm_object", "uvm_pkg::uvm_void"]
     assert {(a, b, "extends") for a, b in zip(chain, chain[1:])} <= edges
     assert ("alu_pkg::alu_sequencer", "uvm_pkg::uvm_sequencer", "typedef") in edges
+    # A UVM class drawn as a type (a typedef's target, a port) has its own bases, joining the
+    # chains already drawn; they are not direct bases of user classes.
+    assert {("uvm_pkg::uvm_sequencer", "uvm_pkg::uvm_sequencer_param_base", "extends"),
+            ("uvm_pkg::uvm_sequencer_base", "uvm_pkg::uvm_component", "extends"),
+            ("uvm_pkg::uvm_analysis_port", "uvm_pkg::uvm_port_base", "extends"),
+            ("uvm_pkg::uvm_analysis_imp", "uvm_pkg::uvm_port_base", "extends")} <= edges
+    assert {n["id"]: n["libDistance"] for n in g["nodes"]}["uvm_pkg::uvm_sequencer_param_base"] == 2
     drv = next(n for n in g["nodes"] if n["id"] == "uvm_pkg::uvm_driver")
     assert drv["library"] and not drv["external"] and drv["package"] == "uvm_pkg"
     assert drv["libDistance"] == 1 and drv["file"] == UVM_DRIVER

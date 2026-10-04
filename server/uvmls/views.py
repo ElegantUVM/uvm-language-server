@@ -182,6 +182,20 @@ def class_graph(ws: Workspace) -> dict:
             add_edge(src, dst, "override", f"{ov.kind} override in {cls.name}",
                      line=ov.range.line, file=ov.range.path)
 
+    # A library class drawn as the type of something (a port, a typedef's target) shows its own
+    # bases too, up to where the chains of the user classes already reach.
+    walked = {e["source"] for e in edges.values() if e["kind"] == "extends"}
+    for nid in [n for n, d in nodes.items() if d["library"] and n not in walked]:
+        cls = ws.class_by_qual.get(nid)
+        prev = nid
+        for entry in ws.chain(cls)[1:] if cls is not None else []:
+            nxt = spec_node(entry.spec, prefer_typedef=False)
+            add_edge(prev, nxt, "extends")
+            walked.add(prev)
+            if nxt in walked:
+                break
+            prev = nxt
+
     # Distance from user code, so the UI can show "direct UVM bases only".
     adj: dict[str, set[str]] = {}
     for e in edges.values():
