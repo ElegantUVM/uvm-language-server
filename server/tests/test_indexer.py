@@ -130,3 +130,66 @@ def test_doc_comments(tmp_path):
     assert idx_cls.doc == "Drives <item>s."
     assert props == {"seq_item_port": "Where items come from.", "x": "", "y": "", "z": ""}
     assert meths == {"run": "Runs.", "stop": ""}
+
+
+EDIT_ANCHORS = '''package p;
+  import uvm_pkg::*;
+  `include "uvm_macros.svh"
+  class item #(type T = int, int N = 4) extends uvm_object; // header
+    int x;
+    `uvm_object_param_utils_begin(item #(T, N))
+      `uvm_field_int(x, UVM_ALL_ON)
+    `uvm_object_utils_end
+    function new(string name = "item", int k = 3);
+      super.new(name);
+    endfunction
+  endclass
+  class drv extends uvm_component;
+    `uvm_component_utils(drv)
+    `uvm_new_func
+    function void build_phase(uvm_phase phase);
+      int a;
+      if (a) `uvm_info("X", "y", UVM_LOW)
+      super.build_phase(phase);
+      uvm_component::connect_phase(phase);
+    endfunction
+  endclass
+  class ext extends uvm_object(5); endclass
+endpackage
+'''
+
+
+def test_where_edits_go(tmp_path):
+    """Header ends, body statements, argument defaults and the registration macro call, in the
+    file; never inside a macro's text."""
+    (tmp_path / "p.sv").write_text(EDIT_ANCHORS)
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    item, drv, ext = (w.find_class(n) for n in ("item", "drv", "ext"))
+    lines = EDIT_ANCHORS.split("\n")
+
+    def at(line, needle, end=None):  # the span of `needle` (through `end`) on a line
+        col = lines[line].index(needle)
+        stop = lines[line].index(end, col) + len(end) if end else col + len(needle)
+        return (line, col, line, stop)
+
+    span = lambda r: (r.line, r.col, r.end_line, r.end_col)  # noqa: E731
+    assert span(item.header_end) == at(3, ";") and span(item.end_kw) == at(11, "endclass")
+    assert (item.registration_macro, span(item.registration_range), item.registration_arg) == \
+        ("uvm_object_param_utils_begin", at(5, "`uvm", "N))"), "item#(T,N)")
+    assert (drv.registration_macro, span(drv.registration_range)) == \
+        ("uvm_component_utils", at(13, "`uvm", "(drv)"))
+    new = next(m for m in item.methods if m.name == "new")
+    assert [(a.name, a.type_text, a.default) for a in new.args] == [("name", "string", '"item"'), ("k", "int", "3")]
+    assert span(new.header_end) == at(8, ";") and span(new.end_kw) == at(10, "endfunction")
+    assert [span(r) for r in new.body_items] == [at(9, "super", ";")]
+    build = next(m for m in drv.methods if m.name == "build_phase")
+    # The `if` ends where the macro call does; the declaration is not a statement.
+    assert [span(r) for r in build.body_items] == [at(17, "if", "LOW)"), at(18, "super", ";"),
+                                                   at(19, "uvm_component", ";")]
+    assert build.first_stmt == build.body_items[0]
+    assert build.super_calls == ["build_phase", "uvm_component::connect_phase"]
+    macro_new = next(m for m in drv.methods if m.name == "new")  # `uvm_new_func
+    assert macro_new.generated and macro_new.header_end is None and macro_new.body_items == []
+    assert [a.name for a in macro_new.args] == ["name", "parent"]
+    assert ext.extends_args == "(5)" and ext.registration_macro is None

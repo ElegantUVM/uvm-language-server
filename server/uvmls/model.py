@@ -58,6 +58,7 @@ class Variable:
     qualifiers: list[str] = field(default_factory=list)
     generated: bool = False  # produced by a macro expansion (e.g. p_sequencer)
     doc: str = ""
+    default: str | None = None  # an argument's default value
 
 
 @dataclass
@@ -74,6 +75,15 @@ class Method:
     is_prototype: bool = False  # extern / pure virtual declaration without a body
     generated: bool = False
     doc: str = ""
+    # Where a body is, for edits; None (empty) for one a macro writes.
+    header_end: Range | None = None  # the `;` that ends the prototype
+    body_items: list[Range] = field(default_factory=list)  # top-level statements, declarations left out
+    end_kw: Range | None = None  # endfunction / endtask
+    super_calls: list[str] = field(default_factory=list)  # super.X(...) -> 'X', C::X(...) -> 'C::X'
+
+    @property
+    def first_stmt(self) -> Range | None:
+        return self.body_items[0] if self.body_items else None
 
 
 @dataclass
@@ -103,6 +113,7 @@ class CreateCall:
     condition: str | None
     in_loop: bool
     range: Range
+    nargs: int = 0
 
 
 @dataclass
@@ -190,6 +201,13 @@ class ClassInfo:
     outer_class: str | None = None
     library: bool = False
     doc: str = ""
+    extends_args: str | None = None  # `extends base(args)`
+    # Where the class is, for edits; None when a macro wrote that part.
+    header_end: Range | None = None  # the `;` that ends the header
+    end_kw: Range | None = None  # endclass
+    registration_macro: str | None = None  # the macro written in the class that declares type_id
+    registration_range: Range | None = None  # that macro call, `uvm_component_utils(T)
+    registration_arg: str | None = None  # the class it registers, as the macro was given it
 
     @property
     def qualname(self) -> str:
@@ -261,6 +279,7 @@ class Diag:
     code: str
     source: str = "slang"
     related: list[tuple[Range, str]] = field(default_factory=list)  # slang notes
+    data: dict | None = None  # what a quick fix needs; sent to the client with the diagnostic
 
 
 @dataclass

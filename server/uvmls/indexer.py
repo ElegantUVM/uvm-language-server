@@ -59,6 +59,10 @@ LINE_COMMENT, BLOCK_COMMENT = P.TriviaKind.LineComment, P.TriviaKind.BlockCommen
 END_OF_LINE, WHITESPACE = P.TriviaKind.EndOfLine, P.TriviaKind.Whitespace
 RULE_CHARS = "-=*#~_+/\\"  # what a separator line in a comment is made of
 TYPEDEF_KINDS = (K.TypedefDeclaration, K.ForwardTypedefDeclaration)
+DECLARATION_KINDS = {  # the block items that are not statements
+    K.DataDeclaration, K.TypedefDeclaration, K.ForwardTypedefDeclaration,
+    K.ParameterDeclarationStatement, K.PackageImportDeclaration, K.LetDeclaration,
+}
 CONFIG_DB_OPS = {"set", "get", "exists", "wait_modified"}
 RESOURCE_DB_OPS = {"set": "set", "read_by_name": "get", "read_by_type": "get",
                    "set_default": "set", "set_override": "set"}
@@ -283,6 +287,7 @@ class Sink:
         self.seq_starts: list[SeqStart] = []
         self.run_tests: list[tuple[str, Range]] = []
         self.locals: list[Variable] = []
+        self.super_calls: list[str] = []
 
 
 # ----------------------------------------------------------------------------
@@ -400,6 +405,38 @@ class Extractor:
                 return None, False
         r = tok.range
         return self.make_range(r.start, r.end)
+
+    def plain_range(self, tok) -> Range | None:
+        """A token's range, or None when a macro wrote it: nothing may edit generated text."""
+        if tok is None or self.sm.isMacroLoc(tok.location):
+            return None
+        r = tok.range
+        return self.make_range(r.start, r.end)[0]
+
+    def macro_call(self, loc) -> tuple[str | None, object | None]:
+        """(name, range) of the outermost macro call whose expansion holds `loc`."""
+        sm = self.sm
+        name, rng = None, None
+        while sm.isMacroLoc(loc):
+            name = slang_text(sm.getMacroName, loc)
+            rng = sm.getExpansionRange(loc)
+            loc = rng.start
+        return name, rng
+
+    def span(self, node) -> Range | None:
+        """A node's range in its file, where a token a macro wrote counts as the whole macro call
+        (node_range ends such a node where the call starts)."""
+        first, last = node.getFirstToken(), node.getLastToken()
+        if first is None or last is None:
+            return None
+        start, _ = self.file_loc(first.location)
+        end = last.range.end
+        if self.sm.isMacroLoc(end) and not self.sm.isMacroArgLoc(end):
+            end = self.macro_call(end)[1].end
+        else:
+            end, _ = self.file_loc(end)
+        rng, _ = self.make_range(start, end)
+        return rng
 
     def node_range(self, node) -> Range | None:
         first, last = node.getFirstToken(), node.getLastToken()
@@ -644,8 +681,11 @@ class Extractor:
             params=self.params(n.parameters), imports=imports, outer_class=outer,
             library=self.library, doc=self.doc_of(n, n.name.valueText, before),
         )
+        cls.header_end, cls.end_kw = self.plain_range(n.semi), self.plain_range(n.endClass)
         if n.extendsClause is not None:
             cls.base = self.type_ref_from_name(n.extendsClause.baseName)
+            if n.extendsClause.arguments is not None:
+                cls.extends_args = compact(n.extendsClause.arguments)
         if n.implementsClause is not None:
             for iface in n.implementsClause.interfaces:
                 if isinstance(iface, Node):
@@ -732,6 +772,11 @@ class Extractor:
                 cls.registration = "component"
             elif reg in ("uvm_object_registry", "uvm_abstract_object_registry"):
                 cls.registration = "object"
+            name, rng = self.macro_call(decl.typedefKeyword.location)
+            if rng is not None:
+                cls.registration_macro = name
+                cls.registration_range = self.make_range(rng.start, rng.end)[0]
+            cls.registration_arg = td.target.args[0] if td.target.args else None
 
     def typedef(self, decl, package, owner_class) -> Typedef | None:
         if decl.kind != K.TypedefDeclaration:
@@ -771,6 +816,9 @@ class Extractor:
                 if port.kind == K.FunctionPort and port.declarator is not None:
                     v = self.variable(port.declarator, "argument", port.dataType, compact(port), [])
                     if v:
+                        init = port.declarator.initializer
+                        if init is not None and init.expr is not None:
+                            v.default = compact(init.expr)
                         args.append(v)
         return Method(name=tok.valueText, kind=kind, return_type=ret, signature=pretty(proto),
                       range=r, decl_range=self.node_range(decl_node) or r, args=args,
@@ -794,6 +842,11 @@ class Extractor:
             for st in decl.items:
                 self.walk(st, ctx, sink)
             meth.locals = sink.locals
+            meth.super_calls = sink.super_calls
+            if not meth.generated:
+                meth.header_end, meth.end_kw = self.plain_range(decl.semi), self.plain_range(decl.end)
+                meth.body_items = [r for r in (self.span(st) for st in decl.items
+                                               if st.kind not in DECLARATION_KINDS) if r is not None]
         return meth, sink
 
     def merge_sink(self, target, sink: Sink):
@@ -881,6 +934,11 @@ class Extractor:
         if r is None:
             return
 
+        # super.build_phase(phase), uvm_component::build_phase(phase)
+        if len(segs) >= 2 and (segs[-2].name == "super" and segs[-1].sep == "."
+                               or segs[-1].sep == "::"):
+            sink.super_calls.append(last if segs[-2].name == "super" else f"{segs[-2].name}::{last}")
+
         # T::type_id::create(name, parent)
         if last == "create" and len(segs) >= 3 and segs[-2].name == "type_id":
             tseg = segs[-3]
@@ -895,7 +953,7 @@ class Extractor:
                 name_expr=compact(args[0]) if args else None,
                 parent_expr=compact(args[1]) if len(args) > 1 else None,
                 method=ctx.method, conditional=ctx.conditional, condition=ctx.condition,
-                in_loop=ctx.in_loop, range=r))
+                in_loop=ctx.in_loop, range=r, nargs=len(args)))
             return
 
         # uvm_config_db #(T)::set/get(...)
@@ -1002,7 +1060,7 @@ class Extractor:
                 name_expr=compact(args[0]) if args else None,
                 parent_expr=compact(args[1]) if len(args) > 1 else None,
                 method=ctx.method, conditional=ctx.conditional, condition=ctx.condition,
-                in_loop=ctx.in_loop, range=r))
+                in_loop=ctx.in_loop, range=r, nargs=len(args)))
         elif rhs.kind == K.ScopedName and node.left.kind == K.IdentifierName:
             segs = flatten_name(rhs)
             if all(s.sep in ("", ".") for s in segs) and len(segs) >= 2:
