@@ -4,6 +4,8 @@ import { LanguageClient } from "vscode-languageclient/node";
 
 export type PanelTab = "classes" | "topology" | "configdb";
 
+const NOT_RUNNING = "The UVM language server is not running. Click UVM in the status bar to start it.";
+
 interface OpenMessage {
   type: "open";
   file: string;
@@ -18,8 +20,16 @@ type FromWebview =
   | { type: "refresh" }
   | { type: "savePng"; dataUrl: string; name: string };
 
+function webviewOptions(ctx: vscode.ExtensionContext): vscode.WebviewOptions {
+  return {
+    enableScripts: true,
+    localResourceRoots: [vscode.Uri.joinPath(ctx.extensionUri, "dist"), vscode.Uri.joinPath(ctx.extensionUri, "media")],
+  };
+}
+
 /** The single webview that hosts the class graph, topology and config_db views. */
 export class GraphPanel {
+  static readonly viewType = "uvmGraph";
   static current: GraphPanel | undefined;
 
   private ready = false;
@@ -30,11 +40,14 @@ export class GraphPanel {
   private constructor(
     private readonly panel: vscode.WebviewPanel,
     private readonly ctx: vscode.ExtensionContext,
-    private client: LanguageClient,
+    private client: LanguageClient | undefined,
   ) {
     panel.webview.html = this.html();
     panel.onDidDispose(() => {
-      GraphPanel.current = undefined;
+      clearTimeout(this.refreshTimer);
+      if (GraphPanel.current === this) {
+        GraphPanel.current = undefined;
+      }
     });
     panel.webview.onDidReceiveMessage((m: FromWebview) => this.onMessage(m));
   }
@@ -43,12 +56,8 @@ export class GraphPanel {
               opts: { focus?: string; test?: string }) {
     if (!GraphPanel.current) {
       const panel = vscode.window.createWebviewPanel(
-        "uvmGraph", "UVM", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
-        {
-          enableScripts: true,
-          retainContextWhenHidden: true,
-          localResourceRoots: [vscode.Uri.joinPath(ctx.extensionUri, "dist"), vscode.Uri.joinPath(ctx.extensionUri, "media")],
-        },
+        GraphPanel.viewType, "UVM", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+        { ...webviewOptions(ctx), retainContextWhenHidden: true },
       );
       GraphPanel.current = new GraphPanel(panel, ctx, client);
       GraphPanel.current.loadAll();
@@ -62,6 +71,33 @@ export class GraphPanel {
       p.loadTopology();
     }
     p.post({ type: "tab", tab, focus: opts.focus });
+  }
+
+  /**
+   * Take over the panel VS Code brings back after a window reload. The webview keeps its tab and
+   * class focus itself; the topology's test comes back from its saved state. Without a client the
+   * data loads when setClient() gets one.
+   */
+  static restore(ctx: vscode.ExtensionContext, panel: vscode.WebviewPanel, client: LanguageClient | undefined,
+                 state: unknown) {
+    // A panel a command opened while this one waited, unrestored, in a background tab gives way
+    // to the one just brought up.
+    GraphPanel.current?.panel.dispose();
+    panel.webview.options = webviewOptions(ctx);
+    const p = new GraphPanel(panel, ctx, client);
+    const test = (state as { test?: unknown } | undefined)?.test;
+    p.test = typeof test === "string" ? test : undefined;
+    GraphPanel.current = p;
+    p.loadAll();
+  }
+
+  /** In place of the data, when no language server could be started for a restored panel. */
+  showNotRunning() {
+    if (!this.client) {
+      for (const view of ["classes", "topology", "configdb"] as const) {
+        this.post({ type: "error", view, message: NOT_RUNNING });
+      }
+    }
   }
 
   /** Point the panel at a (re)started language client and reload its data. */
@@ -93,6 +129,9 @@ export class GraphPanel {
   }
 
   private async request(method: string, params: object, view: PanelTab): Promise<unknown> {
+    if (!this.client) {
+      return undefined; // restored before the server started: setClient() loads the data
+    }
     try {
       return await this.client.sendRequest(method, params);
     } catch (e) {
@@ -109,9 +148,10 @@ export class GraphPanel {
   }
 
   private async loadTopology() {
-    const data = await this.request("uvm/topology", { test: this.test }, "topology");
+    const test = this.test;
+    const data = await this.request("uvm/topology", { test }, "topology");
     if (data) {
-      this.post({ type: "topology", data });
+      this.post({ type: "topology", data, test }); // the webview keeps the test for a restore
     }
   }
 

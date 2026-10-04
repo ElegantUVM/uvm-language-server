@@ -24,7 +24,8 @@
   "activationEvents": [
     "onLanguage:systemverilog",
     "onLanguage:verilog",
-    "workspaceContains:**/*.{sv,svh,v,vh}"
+    "workspaceContains:**/*.{sv,svh,v,vh}",
+    "onWebviewPanel:uvmGraph"
   ],
   "contributes": {
     "languages": [

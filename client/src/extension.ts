@@ -414,6 +414,20 @@ export async function activate(ctx: vscode.ExtensionContext) {
       client = undefined;
       await ensureClient(ctx, true);
     }),
+    vscode.window.registerWebviewPanelSerializer(GraphPanel.viewType, {
+      async deserializeWebviewPanel(panel: vscode.WebviewPanel, state: unknown) {
+        GraphPanel.restore(ctx, panel, client, state);
+        if (!client) {
+          // Activation is starting the server, or after a failed start this tries again; the
+          // panel loads its data once it runs.
+          void ensureClient(ctx, false).then((running) => {
+            if (!running) {
+              GraphPanel.current?.showNotRunning();
+            }
+          });
+        }
+      },
+    }),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (e.affectsConfiguration("uvm.pythonPath")) {
         await client?.stop().catch(() => undefined);

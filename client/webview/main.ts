@@ -128,9 +128,15 @@ const state = {
   showConnections: saved.showConnections ?? true,
   focusDepth: saved.focusDepth ?? 1,
   cfgFilter: saved.cfgFilter ?? "all",
+  test: saved.test as string | undefined, // the topology's test, read back by the extension on a restore
 };
 function persist() {
-  vscode.setState({ ...state, edgeKinds: [...state.edgeKinds] });
+  vscode.setState({ ...state, edgeKinds: [...state.edgeKinds], focus: focusId });
+}
+/** Focus the class graph on one class's neighbourhood, or on all of it (null); a reload keeps it. */
+function setFocus(id: string | null) {
+  focusId = id;
+  persist();
 }
 
 let classData: ClassGraph | null = null;
@@ -138,12 +144,12 @@ let topoData: Topology | null = null;
 let cfgData: ConfigDb | null = null;
 let classDiagram: Diagram | null = null;
 let topoDiagram: Diagram | null = null;
-let focusId: string | null = null; // class graph neighbourhood focus
+let focusId: string | null = saved.focus ?? null; // class graph neighbourhood focus
 let focusGroup: string | null = null; // overview group (package or role) being shown
 let showAll = false; // draw every class even when the project is large
 const LARGE = 300;
 let pathFrom: string | null = null;
-let pendingFocus: string | null = null;
+let pendingFocus: string | null = focusId;
 let lastClassKey = "";
 let lastTopoKey = "";
 const errors: Partial<Record<Tab, string>> = {}; // last request error per view
@@ -273,7 +279,7 @@ function renderToolbar() {
       toolbar.append(
         select([["1", "1 hop"], ["2", "2 hops"], ["3", "3 hops"]], String(state.focusDepth),
           (v) => { state.focusDepth = Number(v); persist(); void renderClassGraph(true); }, "Focus"),
-        h("button", { class: "chip on", onclick: () => { focusId = null; renderToolbar(); void renderClassGraph(true); } }, "✕ show all"),
+        h("button", { class: "chip on", onclick: () => { setFocus(null); renderToolbar(); void renderClassGraph(true); } }, "✕ show all"),
       );
     }
   } else if (state.tab === "topology") {
@@ -560,7 +566,7 @@ function elementsKey(els: Elements, extra = ""): string {
 
 async function renderClassGraph(force = false) {
   if (state.tab !== "classes") return;
-  if (!classData) { showEmpty("Indexing…"); return; }
+  if (!classData) { showEmpty(errors.classes ?? "Indexing…"); return; }
   const userCount = classData.nodes.filter((n) => !n.library).length;
   if (userCount === 0) {
     showEmpty("No classes found yet. Point uvm.filelists at your simulator filelist, or open a folder containing .sv/.svh files.");
@@ -706,7 +712,7 @@ function findInstance(id: string, n: TNode | null | undefined): TNode | null {
 
 async function renderTopology(force = false) {
   if (state.tab !== "topology") return;
-  if (!topoData) { showEmpty("Indexing…"); return; }
+  if (!topoData) { showEmpty(errors.topology ?? "Indexing…"); return; }
   if (!topoData.root) {
     showEmpty(topoData.tests.length ? "Pick a test above." : "No uvm_test classes found. The topology starts from a test and follows type_id::create() calls in build_phase.");
     return;
@@ -761,7 +767,7 @@ function renderConfigDb() {
   if (state.tab !== "configdb") return;
   empty.style.display = "none";
   cfgView.replaceChildren();
-  if (!cfgData) { cfgView.append(h("p", { class: "muted" }, "Indexing…")); return; }
+  if (!cfgData) { showEmpty(errors.configdb ?? "Indexing…"); return; }
   const q = searchBox.value.trim().toLowerCase();
   const rows = cfgData.fields.filter((r) => (state.cfgFilter === "all" || r.status === state.cfgFilter) && (!q || r.field.toLowerCase().includes(q)));
   const table = h("table", { class: "cfg" },
@@ -873,7 +879,7 @@ function renderClassDetails(d: any) {
     ),
     h("div", { class: "row-actions" },
       d.file ? h("button", { class: "btn", onclick: () => openLoc(d) }, "Open source") : null,
-      h("button", { class: "btn secondary", onclick: () => { focusId = d.id; pendingFocus = d.id; renderToolbar(); void renderClassGraph(true); } }, "Focus"),
+      h("button", { class: "btn secondary", onclick: () => { setFocus(d.id); pendingFocus = d.id; renderToolbar(); void renderClassGraph(true); } }, "Focus"),
     ),
   );
   if (d.file) detailsBody.append(h("p", { class: "muted small mono" }, `${basename(d.file)}:${d.line + 1}`));
@@ -930,7 +936,7 @@ function renderClassDetails(d: any) {
 function selectClass(id: string | undefined) {
   if (!id || !classDiagram) return;
   classDiagram.setFaded(null);
-  if (!classDiagram.hasNode(id)) { pendingFocus = id; focusId = id; renderToolbar(); void renderClassGraph(true); return; }
+  if (!classDiagram.hasNode(id)) { pendingFocus = id; setFocus(id); renderToolbar(); void renderClassGraph(true); return; }
   classDiagram.select(id);
   classDiagram.centerOn(id);
   renderDetails();
@@ -1051,7 +1057,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "Escape") {
     pathFrom = null;
     clearHighlights();
-    if (focusId || focusGroup) { focusId = null; focusGroup = null; renderToolbar(); void renderClassGraph(true); }
+    if (focusId || focusGroup) { setFocus(null); focusGroup = null; renderToolbar(); void renderClassGraph(true); }
   }
 });
 
@@ -1074,12 +1080,14 @@ window.addEventListener("message", (ev) => {
   switch (m.type) {
     case "classGraph":
       classData = m.data;
-      if (focusId && !isNode(focusId)) { focusId = null; pendingFocus = null; } // renamed or not in the graph
+      if (focusId && !isNode(focusId)) { setFocus(null); pendingFocus = null; } // renamed or not in the graph
       delete errors.classes;
       if (state.tab === "classes") { renderToolbar(); void renderClassGraph(); renderDetails(); }
       break;
     case "topology":
       topoData = m.data;
+      state.test = m.test;
+      persist();
       delete errors.topology;
       if (state.tab === "topology") { renderToolbar(); void renderTopology(); renderDetails(); }
       break;
@@ -1089,7 +1097,7 @@ window.addEventListener("message", (ev) => {
       if (state.tab === "configdb") { renderToolbar(); renderConfigDb(); }
       break;
     case "tab":
-      if (m.focus && (!classData || isNode(m.focus))) { pendingFocus = m.focus; focusId = m.focus; }
+      if (m.focus && (!classData || isNode(m.focus))) { pendingFocus = m.focus; setFocus(m.focus); }
       setTab(m.tab);
       if (m.focus && classData) void renderClassGraph(true);
       break;
