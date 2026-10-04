@@ -66,6 +66,30 @@ def test_unsaved_root_file(bundled_ws):
         [(top, line, col, "UndeclaredIdentifier")]
 
 
+def test_workspace_and_library_behind_symlinks(tmp_path):
+    # slang resolves symlinks; unsaved text must still apply, diagnostics keep the paths the
+    # editor uses, and the UVM library is still recognised.
+    (tmp_path / "real").mkdir()
+    shutil.copytree(EXAMPLE, tmp_path / "real" / "alu_tb")
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    (tmp_path / "uvm").symlink_to(os.path.dirname(BUNDLED_UVM))
+    root = tmp_path / "link" / "alu_tb"
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(root)], filelists=[str(root / "alu_tb.f")],
+                              uvm_home=str(tmp_path / "uvm")))
+    drv, top = str(root / "agent" / "alu_driver.svh"), str(root / "tb" / "tb_top.sv")
+    uvm_driver = os.path.join(BUNDLED_UVM, "comps", "uvm_driver.svh")
+    r = elaborate(request_for(w, {
+        drv: edited(DRIVER, "vif = m_cfg.vif;", "vif = m_cfg.vfi;"),
+        top: edited(os.path.join(EXAMPLE, "tb", "tb_top.sv"), "rst_n = 1;", "rst_n = no_such_signal;"),
+        str(tmp_path / "uvm" / "src" / "comps" / "uvm_driver.svh"):
+            edited(uvm_driver, "endclass", "  function void broken(); undefined_thing = 1; endfunction\nendclass"),
+    }))
+    assert sorted((d["file"], d["code"]) for d in r["diagnostics"]) == \
+        [(drv, "UnknownMember"), (top, "UndeclaredIdentifier")]
+    assert r["counts"]["libraryErrors"] == 1
+
+
 def test_notes_become_related_information(bundled_ws):
     text = edited(AGENT, "    ap = m_monitor.ap;\n", "    ap = m_monitor.ap;\n    m_driver.drive_itme(null);\n")
     [d] = errors(elaborate(request_for(bundled_ws, {AGENT: text})))

@@ -80,19 +80,36 @@ def uvm_label(s: SourceSet | None) -> str:
 
 
 class _Locator:
-    """Maps slang locations to files, the way indexer.Extractor.file_loc does."""
+    """Maps slang locations to files, the way indexer.Extractor.file_loc does.
 
-    def __init__(self, sm, library: list[str]):
+    slang resolves symlinks in every path it opens; files are reported under the
+    paths the request used (a workspace opened through a symlink, say)."""
+
+    def __init__(self, sm, req: dict):
         self.sm = sm
-        self.library = [norm(p) for p in library]
+        files = list(req["roots"]) + list(req.get("overrides") or {})
+        dirs = (list(req.get("includeDirs") or []) + list(req.get("library") or [])
+                + [os.path.dirname(f) for f in files])
+        self.files = {os.path.realpath(f): f for f in files}
+        prefixes = {os.path.realpath(d) + os.sep: d + os.sep for d in dirs}
+        self.prefixes = sorted(((r, d) for r, d in prefixes.items() if r != d), key=lambda x: -len(x[0]))
+        self.library = [norm(p) for p in req.get("library") or []]
         self._paths: dict[int, str | None] = {}
+
+    def as_given(self, path: str) -> str:
+        if path in self.files:
+            return self.files[path]
+        for real, given in self.prefixes:
+            if path.startswith(real):
+                return given + path[len(real):]
+        return path
 
     def path(self, buffer) -> str | None:
         """The file behind a buffer; None for generated text such as the macro prelude."""
         bid = buffer.id
         if bid not in self._paths:
             p = str(self.sm.getFullPath(buffer) or "")
-            self._paths[bid] = None if p in ("", ".") or p.startswith("<") else norm(p)
+            self._paths[bid] = None if p in ("", ".") or p.startswith("<") else self.as_given(norm(p))
         return self._paths[bid]
 
     def is_library(self, path: str) -> bool:
@@ -142,8 +159,9 @@ class _Locator:
 class _Notes:
     """slang's notes ("declared here", "did you mean ...") are only reachable as text."""
 
-    def __init__(self, eng):
+    def __init__(self, eng, loc: _Locator):
         self.eng = eng
+        self.loc = loc
         c = self.client = ps.TextDiagnosticClient()
         c.showColors(False)
         c.showSourceLine(False)
@@ -162,7 +180,7 @@ class _Notes:
         for line in self.client.getString().splitlines():
             m = NOTE_RE.match(line)
             if m and os.path.isabs(m.group(1)):  # not a generated buffer such as the prelude
-                out.append({"file": norm(m.group(1)), "line": int(m.group(2)) - 1,
+                out.append({"file": self.loc.as_given(norm(m.group(1))), "line": int(m.group(2)) - 1,
                             "col": int(m.group(3)) - 1, "message": m.group(4)})
         return out
 
@@ -224,10 +242,14 @@ def _elaborate(req: dict) -> dict:
     if not d.parseCommandLine(" ".join(_quote(a) for a in args)) or not d.processOptions():
         return _failed("slang did not accept the elaboration options")
     sm = d.sourceManager
+    assigned = set()
     for path, text in overrides.items():
-        sm.assignText(path, text)
+        real = os.path.realpath(path)  # the name slang looks files up by
+        if real not in assigned:
+            assigned.add(real)
+            sm.assignText(real, text)
     d.parseAllSources()
-    loc = _Locator(sm, req.get("library") or [])
+    loc = _Locator(sm, req)
     trees = _with_uvm_macros(d, loc, req.get("includeDirs") or [])
     if trees is None:
         comp = d.createCompilation()
@@ -237,7 +259,7 @@ def _elaborate(req: dict) -> dict:
             comp.addSyntaxTree(tree)
     diags = comp.getAllDiagnostics()
     eng = d.diagEngine
-    notes = _Notes(eng)
+    notes = _Notes(eng, loc)
     out = [_diag(r, "error", "io", "cannot read file") for r in missing]
     out += [_diag(None, "error", "io", str(e)) for e in d.sourceLoader.errors]
     seen = set()
