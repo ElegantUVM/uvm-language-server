@@ -16,6 +16,7 @@ SERVER_DIR = os.path.dirname(os.path.dirname(__file__))
 class Client:
     def __init__(self):
         env = dict(os.environ, PYTHONPATH=SERVER_DIR)
+        env.pop("UVM_HOME", None)  # default settings: the bundled UVM
         self.proc = subprocess.Popen([sys.executable, "-m", "uvmls", "--stdio"], cwd=SERVER_DIR,
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
         self.next_id = 0
@@ -102,6 +103,8 @@ def client():
 def test_stats_and_diagnostics(client):
     stats = client.request("uvm/stats", {})
     assert stats["classes"] == 19 and stats["mode"] == "filelist"
+    assert stats["uvm"]["source"] == "bundled" and stats["uvm"]["version"] == "1.2"
+    assert stats["libraryClasses"] > 300
     diag = client.wait_for("textDocument/publishDiagnostics",
                            lambda m: m["params"]["uri"].endswith("alu_monitor.svh"))
     assert [d["code"] for d in diag["params"]["diagnostics"]] == ["config-db-no-set"]
@@ -149,6 +152,19 @@ def test_live_edit_updates_index_and_diagnostics(client):
     client.notify("textDocument/didClose", {"textDocument": {"uri": uri("env/alu_env.svh")}})
     client.wait_for("textDocument/publishDiagnostics",
                     lambda m: m["params"]["uri"].endswith("alu_monitor.svh") and m["params"]["diagnostics"])
+
+
+def test_use_bundled_uvm_setting(client):
+    def configure(source, **settings):
+        client.notifications = [m for m in client.notifications if m["method"] != "uvm/indexChanged"]
+        client.notify("workspace/didChangeConfiguration",
+                      {"settings": {"uvm": {"filelists": [FILELIST], **settings}}})
+        msg = client.wait_for("uvm/indexChanged", lambda m: m["params"]["stats"]["uvm"]["source"] == source)
+        return msg["params"]["stats"]
+
+    stats = configure("builtin", useBundledUvm=False)
+    assert stats["libraryClasses"] == 0 and stats["classes"] == 19
+    assert configure("bundled")["libraryClasses"] > 300
 
 
 def test_document_symbols_and_type_hierarchy(client):

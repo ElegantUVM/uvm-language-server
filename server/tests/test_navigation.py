@@ -1,4 +1,5 @@
 import os
+import re
 
 from uvmls.navigation import Navigator, expr_at
 
@@ -39,10 +40,10 @@ def test_virtual_interface_clocking_signal(ws):
     assert defs(ws, "agent/alu_driver.svh", "vif.drv_cb.valid", 4) == ["agent/alu_if.sv:9"]
 
 
-def test_type_parameter_member(ws):
+def test_type_parameter_member(any_ws):
     # req is declared in uvm_driver as REQ; alu_driver binds REQ = alu_seq_item.
-    assert "alu_seq_item" in hover(ws, "agent/alu_driver.svh", "get_next_item(req)", 14)
-    assert defs(ws, "agent/alu_driver.svh", "item.op", 5) == ["agent/alu_seq_item.svh:3"]
+    assert "alu_seq_item" in hover(any_ws, "agent/alu_driver.svh", "get_next_item(req)", 14)
+    assert defs(any_ws, "agent/alu_driver.svh", "item.op", 5) == ["agent/alu_seq_item.svh:3"]
 
 
 def test_extern_method_goes_to_both(ws):
@@ -79,4 +80,9 @@ def test_document_symbols(ws):
 
 
 def test_with_real_uvm(uvm_ws):
-    assert defs(uvm_ws, "agent/alu_driver.svh", "get_next_item(req)", 14)[0].endswith("uvm_driver.svh:83")
+    # req is declared in the library's uvm_driver.svh, at a line that depends on the UVM version.
+    target = defs(uvm_ws, "agent/alu_driver.svh", "get_next_item(req)", 14)[0]
+    path, line = target.rsplit(":", 1)
+    assert path.endswith("uvm_driver.svh")
+    with open(os.path.join(EXAMPLE, path)) as f:
+        assert re.search(r"\bREQ\s+req\b", f.read().splitlines()[int(line) - 1])

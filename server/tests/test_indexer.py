@@ -5,8 +5,8 @@ def classes(ws):
     return {c.name: c for c in ws.classes if not c.library}
 
 
-def test_all_classes_found(ws):
-    names = set(classes(ws))
+def test_all_classes_found(any_ws):
+    names = set(classes(any_ws))
     assert {"alu_driver", "alu_error_driver", "alu_agent", "alu_env", "alu_base_test",
             "alu_random_seq", "alu_seq_item"} <= names
     assert len(names) == 19

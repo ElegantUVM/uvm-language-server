@@ -22,14 +22,28 @@ def ws():
 
 
 @pytest.fixture(scope="session")
-def uvm_ws():
-    """Same testbench with the real UVM library; skipped unless UVM_HOME is set."""
+def bundled_ws():
+    """The example on the bundled Accellera UVM 1.2 (the default)."""
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST]))
+    return w
+
+
+@pytest.fixture(scope="session")
+def uvm_ws(bundled_ws):
+    """The example on a real UVM library: $UVM_HOME if set, else the bundled copy."""
     home = os.environ.get("UVM_HOME")
     if not home:
-        pytest.skip("UVM_HOME not set")
+        return bundled_ws
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST], uvm_home=home))
     return w
+
+
+@pytest.fixture(scope="session", params=["builtin", "bundled"])
+def any_ws(request):
+    """For checks that must hold with either UVM model."""
+    return request.getfixturevalue("ws" if request.param == "builtin" else "bundled_ws")
 
 
 def position(rel: str, needle: str, offset: int = 0, occurrence: int = 0):

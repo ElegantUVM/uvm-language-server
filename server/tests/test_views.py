@@ -2,8 +2,8 @@ from uvmls.lints import lint
 from uvmls.views import class_graph, config_db_report, topology
 
 
-def test_roles(ws):
-    role = {c.name: ws.role(c) for c in ws.classes}
+def test_roles(any_ws):
+    role = {c.name: any_ws.role(c) for c in any_ws.classes}
     assert role["alu_driver"] == "driver"
     assert role["alu_error_driver"] == "driver"
     assert role["alu_coverage"] == "subscriber"
@@ -11,11 +11,11 @@ def test_roles(ws):
     assert role["alu_add_only_seq"] == "sequence"
 
 
-def test_type_parameter_binding(ws):
-    drv = ws.find_class("alu_driver")
-    owner, member, bindings = ws.find_member(drv, "req")
+def test_type_parameter_binding(any_ws):
+    drv = any_ws.find_class("alu_driver")
+    owner, member, bindings = any_ws.find_member(drv, "req")
     assert bindings["REQ"] == "alu_seq_item"
-    assert ws.member_type_spec(owner, member, bindings).cls.name == "alu_seq_item"
+    assert any_ws.member_type_spec(owner, member, bindings).cls.name == "alu_seq_item"
 
 
 def test_class_graph_edges(ws):
@@ -35,8 +35,8 @@ def test_class_graph_edges(ws):
     assert node["uvm_report_object"]["libDistance"] == 3  # via uvm_driver -> uvm_component
 
 
-def test_topology_applies_factory_override(ws):
-    t = topology(ws, "alu_error_test")
+def test_topology_applies_factory_override(any_ws):
+    t = topology(any_ws, "alu_error_test")
     agent = t["root"]["children"][0]["children"][0]
     kids = {c["name"]: c for c in agent["children"]}
     assert kids["m_driver"]["type"] == "alu_error_driver"
@@ -45,8 +45,8 @@ def test_topology_applies_factory_override(ws):
     assert kids["m_sequencer"]["role"] == "sequencer"
 
 
-def test_topology_connections(ws):
-    t = topology(ws)
+def test_topology_connections(any_ws):
+    t = topology(any_ws)
     assert t["test"] == "alu_random_test"  # from run_test("alu_random_test")
     conns = {(c["source"].split(".")[-1], c["sourcePort"], c["target"].split(".")[-1], c["targetPort"])
              for c in t["connections"]}
@@ -61,9 +61,10 @@ def test_config_db_report(ws):
     assert len(rows["alu_agent_config"]["gets"]) == 3
 
 
-def test_lint_flags_only_the_planted_problem(ws):
-    found = [(d.code, d.range.path.split("/")[-1]) for ds in lint(ws).values() for d in ds]
+def test_lint_flags_only_the_planted_problem(any_ws):
+    found = [(d.code, d.range.path.split("/")[-1]) for ds in lint(any_ws).values() for d in ds]
     assert found == [("config-db-no-set", "alu_monitor.svh")]
+    assert not [d for d in any_ws.user_diagnostics() if d.severity in ("error", "warning")]
 
 
 def test_lint_unregistered_create_and_type_mismatch(tmp_path):
