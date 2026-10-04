@@ -9,7 +9,7 @@ from collections import deque
 from . import naturaldocs
 from .model import ClassInfo, ConfigDbCall, Typedef, Variable
 from .uvm import COMPONENT_ROLES, ROLE_ORDER, builtin_params, is_tlm_port
-from .workspace import Spec, Workspace
+from .workspace import BUILTIN_TYPES, Spec, Workspace, bind_params, parse_type_text, split_args
 
 
 def _loc(r) -> dict:
@@ -392,6 +392,55 @@ def norm_type(t: str) -> str:
     return re.sub(r"\s+", " ", t.replace("#(", " #(")).strip()
 
 
+def canonical_type(ws: Workspace, text: str, ctx: ClassInfo | None = None, depth: int = 0) -> str | None:
+    """A config_db type as uvm_config_db matches it: typedefs followed, a class by its qualified name,
+    spacing normalized. None when the code alone cannot tell: a type parameter of the class (it
+    depends on the specialization), or a name nothing declares."""
+    t = norm_type(text)
+    if not t or ctx is not None and {p.name for p in ctx.params} & set(re.findall(r"[A-Za-z_]\w*", t)):
+        return None
+    m = re.match(r"^virtual\s+(?:interface\s+)?(\w+)\s*(?:#\s*\((.*)\))?\s*(\.\s*\w+)?$", t)
+    if m:
+        unit = ws.find_unit(m.group(1), "interface")
+        args = _bound(unit.params if unit else [], split_args(m.group(2)) if m.group(2) else [])
+        modport = re.sub(r"\s+", "", m.group(3) or "")
+        return None if args is None else f"virtual {m.group(1)}{args}{modport}"
+    parsed = parse_type_text(t)
+    if parsed is None or parsed[1] in BUILTIN_TYPES:  # bit [7:0], int unsigned
+        return re.sub(r"\s*([^\w\s])\s*", r"\1", t)
+    scope, name, args = parsed
+    package, imports = (ctx.package, ctx.imports) if ctx is not None else (None, ())
+    td = ws.find_typedef(name, scope or package, ctx.name if ctx else None, [scope] if scope else imports)
+    if td is not None and depth < 8:
+        if td.target_text in ("enum", "struct", "union"):
+            return f"{td.package}::{td.name}" if td.package else td.name
+        return canonical_type(ws, td.target_text, ctx, depth + 1)
+    spec = ws.resolve_spec(name, scope, args, ctx)
+    args = _bound(spec.cls.params if spec and spec.cls else [], spec.args) if spec else None
+    return None if args is None else spec.key + args
+
+
+def _bound(params: list, args: list[str]) -> str | None:
+    """A specialization's arguments, the same however they are written: by name, defaults filled
+    in, package prefixes dropped. None for arguments that cannot be matched to parameters."""
+    if not params:
+        return None if args else ""
+    if len([a for a in args if not a.startswith(".")]) > len(params):
+        return None
+    bound = bind_params([(p.name, p.default) for p in params], args, {})
+    return " #(" + ", ".join(f"{p.name}={re.sub(r'(\w+::)|\s+', '', bound[p.name])}" for p in params) + ")"
+
+
+def mismatched(row: dict) -> list[dict]:
+    """The gets of a config_db field that no set can match: those of another type than the one type
+    every set of the field uses. Sets of several types, or of one the code cannot tell, mean the
+    name is used in several scopes (or the type depends on a parameter): nothing is reported."""
+    kinds = {e["canon"] for e in row["sets"]}
+    if len(kinds) != 1 or None in kinds:
+        return []
+    return [g for g in row["gets"] if g["canon"] is not None and g["canon"] not in kinds]
+
+
 def config_db_calls(ws: Workspace) -> list[tuple[str, ConfigDbCall]]:
     out = []
     for cls in ws.classes:
@@ -414,7 +463,8 @@ def config_db_report(ws: Workspace) -> dict:
         entry = {"op": c.op, "db": c.db, "type": norm_type(c.type_text), "context": c.context,
                  "inst": c.inst, "instLiteral": c.inst_literal, "field": c.field_name,
                  "value": c.value, "owner": owner, "method": c.method,
-                 "conditional": c.conditional, **_loc(c.range)}
+                 "conditional": c.conditional, "optional": c.optional,
+                 "canon": canonical_type(ws, c.type_text, ws.class_by_qual.get(owner)), **_loc(c.range)}
         if not c.field_literal:
             dynamic.append(entry)
             continue
@@ -428,7 +478,7 @@ def config_db_report(ws: Workspace) -> dict:
             status = "no-set"
         elif not g["gets"]:
             status = "no-get"
-        elif get_types - set_types:
+        elif mismatched(g):
             status = "type-mismatch"
         else:
             status = "ok"

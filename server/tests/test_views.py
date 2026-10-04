@@ -94,3 +94,71 @@ endclass
     assert found == [("config-db-type-mismatch", 8, {"field": "depth", "at": [8, 10]}),
                      ("create-unregistered", 7, {"target": "cfg"}),
                      ("utils-mismatch", 11, {"cls": "env"})]
+
+
+CONFIG_DB = '''import uvm_pkg::*;
+typedef virtual dut_if dut_vif;
+class env #(type CFG_T = uvm_object) extends uvm_env;
+  `uvm_component_param_utils(env #(CFG_T))
+  dut_vif vif; CFG_T cfg; int depth; bit en; int knob;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    if (!uvm_config_db #(virtual dut_if)::get(this, "", "vif", vif)) `uvm_fatal("VIF", "no vif")
+    if (!uvm_config_db #(CFG_T)::get(this, "", "cfg", cfg)) `uvm_fatal("CFG", "no cfg")
+    if (!uvm_config_db #(int)::get(this, "", "depht", depth)) `uvm_fatal("D", "no depth")
+    void'(uvm_config_db #(bit)::get(this, "", "enable", en));
+    if (!uvm_config_db #(int)::get(this, "", "knob", knob)) knob = 3;
+    if (depth > 2) begin
+      if (!uvm_config_db #(int)::get(this, "", "extra", knob)) `uvm_fatal("X", "no extra")
+    end
+    if (!uvm_config_db #(int)::get(this, "", "needed", knob)) `uvm_fatal("N", "no needed")
+  endfunction
+endclass
+module tb;
+  initial begin
+    uvm_config_db #(dut_vif)::set(null, "*", "vif", null);
+    uvm_config_db #(uvm_object)::set(null, "*", "cfg", null);
+    uvm_config_db #(int)::set(null, "*", "depth", 4);
+  end
+endmodule
+'''
+
+
+def test_config_db_precision(tmp_path):
+    """Types compare after typedefs; a type parameter could be anything; an optional or conditional
+    get with no set is a note, unless a set of a close name looks like a typo."""
+    from uvmls.project import ProjectConfig
+    from uvmls.workspace import Workspace
+    (tmp_path / "t.sv").write_text(CONFIG_DB)
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    rows = {r["field"]: r for r in config_db_report(w)["fields"]}
+    assert rows["vif"]["status"] == "ok" and rows["cfg"]["status"] == "ok"
+    found = {d.data["field"]: (d.code, d.severity, d.message) for ds in lint(w).values() for d in ds}
+    assert set(found) == {"depht", "enable", "knob", "extra", "needed"}
+    assert found["depht"] == ("config-db-no-set", "warning", "uvm_config_db get of 'depht' (int) has no matching set "
+                              "in the indexed sources (it may come from +uvm_set_config_* on the command line); "
+                              "did you mean 'depth' (set in t.sv:23)?")
+    assert found["enable"][:2] == found["knob"][:2] == ("config-db-no-set", "info")
+    assert found["knob"][2].endswith("no matching set in the indexed sources; the code carries on without it")
+    assert found["extra"][1:] == ("info", "uvm_config_db get of 'extra' (int) has no matching set in the indexed "
+                                  "sources; it is read only under a condition")
+    assert found["needed"][1] == "warning"
+
+
+def test_config_db_type_mismatch_needs_one_type_set(tmp_path):
+    # A name used in several scopes, set with two types: a get of a third is not known to fail.
+    from uvmls.project import ProjectConfig
+    from uvmls.workspace import Workspace
+    text = CONFIG_DB.replace('uvm_config_db #(int)::set(null, "*", "depth", 4);',
+                             'uvm_config_db #(int)::set(null, "*", "depth", 4);\n'
+                             '    uvm_config_db #(bit)::set(null, "*.other", "vif", 0);')
+    (tmp_path / "t.sv").write_text(text.replace("#(virtual dut_if)::get", "#(virtual other_if)::get"))
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    assert not [d for ds in lint(w).values() for d in ds if d.code == "config-db-type-mismatch"]
+    (tmp_path / "t.sv").write_text(CONFIG_DB.replace("#(virtual dut_if)::get", "#(virtual other_if)::get"))
+    w.reindex_all()
+    [d] = [d for ds in lint(w).values() for d in ds if d.code == "config-db-type-mismatch"]
+    assert d.message == "'vif' is set as dut_vif but read as virtual other_if; uvm_config_db matches on the " \
+                        "exact type, so this get will fail"

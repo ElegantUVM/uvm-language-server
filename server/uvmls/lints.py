@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import bisect
+import os
 import re
 
 from .model import Diag, Variable
 from .uvm import COMPONENT_ROLES
-from .views import config_db_report
-from .workspace import Workspace, bind_params, parse_type_text
+from .views import config_db_report, mismatched
+from .workspace import BUILTIN_TYPES, Workspace, bind_params, parse_type_text
 
 
 UTILS_RE = re.compile(r"^uvm_(object|component)(_abstract)?(_param)?_utils(_begin)?$")
@@ -33,8 +34,6 @@ def swapped_macro(macro: str | None, kind: str) -> str | None:
     return None
 
 
-BUILTIN_TYPES = {"string", "bit", "logic", "reg", "int", "integer", "byte", "shortint", "longint", "time",
-                 "real", "realtime", "shortreal", "chandle", "event", "void"}
 # What a constructor argument may be for the factory to pass it a uvm_component.
 COMPONENT_BASES = {"uvm_component", "uvm_report_object", "uvm_object", "uvm_void"}
 
@@ -246,21 +245,32 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
     def add(r, msg, severity, code, **data):
         out.setdefault(r.path, []).append(Diag(r, msg, severity, code, "uvm", data=data or None))
 
-    # config_db: a get nothing sets, or a set whose type no get uses.
+    # config_db: a get nothing sets (worth a warning when the code needs the value, or when a set
+    # of a name close to it looks like a typo), or a get of another type than what is set.
     report = config_db_report(ws)
     dynamic_sets = any(e["op"] == "set" for e in report["dynamic"])
     for row in report["fields"]:
-        set_types = {e["type"] for e in row["sets"]}
         for g in row["gets"]:
             r = _range(g)
             if not row["sets"] and not dynamic_sets:
-                add(r, f"uvm_config_db get of '{row['field']}' ({g['type']}) has no matching set "
-                       "in the indexed sources (it may come from +uvm_set_config_* on the command line)",
-                    "warning", "config-db-no-set", field=row["field"], at=[r.line, r.col])
-            elif row["sets"] and g["type"] not in set_types:
-                add(r, f"'{row['field']}' is set as {', '.join(sorted(set_types))} but read as "
-                       f"{g['type']}; uvm_config_db matches on the exact type, so this get will fail",
-                    "warning", "config-db-type-mismatch", field=row["field"], at=[r.line, r.col])
+                near = near_misses(report, g)
+                said = f"uvm_config_db get of '{row['field']}' ({g['type']}) has no matching set in the indexed sources"
+                if g["optional"]:
+                    said += "; the code carries on without it"
+                elif g["conditional"]:
+                    said += "; it is read only under a condition"
+                else:
+                    said += " (it may come from +uvm_set_config_* on the command line)"
+                if len(near) == 1:
+                    s0 = near[0][1]
+                    said += f"; did you mean '{near[0][0]}' (set in {os.path.basename(s0['file'])}:{s0['line'] + 1})?"
+                add(r, said, "warning" if near or not (g["optional"] or g["conditional"]) else "info",
+                    "config-db-no-set", field=row["field"], at=[r.line, r.col])
+        for g in mismatched(row):
+            r = _range(g)
+            add(r, f"'{row['field']}' is set as {row['sets'][0]['type']} but read as {g['type']}; "
+                   "uvm_config_db matches on the exact type, so this get will fail",
+                "warning", "config-db-type-mismatch", field=row["field"], at=[r.line, r.col])
 
     no_parent = "error" if _parent_required(ws) else "warning"
     unknown_macros: dict[str, list[int]] = {}  # lines whose meaning a macro nobody defines hides
@@ -339,6 +349,38 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
             elif ws.is_component(target) and not cr.parent_expr:
                 add(cr.range, f"component {target.name} is created without a parent", no_parent,
                     "create-no-parent", cls=cls.qualname, at=at)
+    return out
+
+
+def osa_distance(a: str, b: str) -> int:
+    """Edits (insert, delete, change, swap two neighbours) that turn one word into the other."""
+    d = [[i + j if not i * j else 0 for j in range(len(b) + 1)] for i in range(len(a) + 1)]
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[len(a)][len(b)]
+
+
+def near_misses(report: dict, get: dict) -> list[tuple[str, dict]]:
+    """Field names set with the get's type that its own name may be a typo of: the same but for case
+    and underscores, or one edit away (two for a name of 8 or more), with the first set of each."""
+    name = get["field"]
+    if len(name) < 4:
+        return []
+    key, limit, kind = name.lower().replace("_", ""), 1 if len(name) < 8 else 2, get["canon"] or get["type"]
+    out = []
+    for row in report["fields"]:
+        other = row["field"]
+        if other == name or len(other) < 4 or not row["sets"]:
+            continue
+        if other.lower().replace("_", "") != key and \
+                (abs(len(other) - len(name)) > limit or osa_distance(name, other) > limit):
+            continue
+        same_type = next((e for e in row["sets"] if (e["canon"] or e["type"]) == kind), None)
+        if same_type:
+            out.append((other, same_type))
     return out
 
 

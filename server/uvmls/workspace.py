@@ -19,6 +19,8 @@ from .uvm import (
     looks_like_config,
 )
 
+BUILTIN_TYPES = {"string", "bit", "logic", "reg", "int", "integer", "byte", "shortint", "longint", "time",
+                 "real", "realtime", "shortreal", "chandle", "event", "void"}
 TYPE_HEAD_RE = re.compile(r"^\s*(?:(\w+)\s*::\s*)?(\w+)\s*(#\s*\((.*)\))?\s*$", re.DOTALL)
 
 

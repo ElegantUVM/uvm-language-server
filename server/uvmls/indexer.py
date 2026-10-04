@@ -59,6 +59,8 @@ LINE_COMMENT, BLOCK_COMMENT = P.TriviaKind.LineComment, P.TriviaKind.BlockCommen
 END_OF_LINE, WHITESPACE = P.TriviaKind.EndOfLine, P.TriviaKind.Whitespace
 RULE_CHARS = "-=*#~_+/\\"  # what a separator line in a comment is made of
 TYPEDEF_KINDS = (K.TypedefDeclaration, K.ForwardTypedefDeclaration)
+FAILURE_CALLS = {"$fatal", "$error", "uvm_report_fatal", "uvm_report_error"}
+FAILURE_RE = re.compile(r"fatal|error", re.IGNORECASE)
 DECLARATION_KINDS = {  # the block items that are not statements
     K.DataDeclaration, K.TypedefDeclaration, K.ForwardTypedefDeclaration,
     K.ParameterDeclarationStatement, K.PackageImportDeclaration, K.LetDeclaration,
@@ -1004,7 +1006,8 @@ class Extractor:
                     inst_literal=inst_lit is not None,
                     field_name=field_lit if field_lit is not None else (compact(field_arg) if field_arg is not None else ""),
                     field_literal=field_lit is not None, value=value, owner=ctx.owner,
-                    method=ctx.method, conditional=ctx.conditional, range=r))
+                    method=ctx.method, conditional=ctx.conditional, range=r,
+                    optional=op == "get" and self.goes_on_without(node)))
             return
 
         # Factory overrides
@@ -1058,6 +1061,40 @@ class Extractor:
         if last == "run_test" and len(segs) == 1:
             name = string_literal(args[0]) if args else None
             sink.run_tests.append((name or "", r))
+
+    def goes_on_without(self, call) -> bool:
+        """Whether code that reads a value carries on when it is not there: the result is ignored
+        (void'(...), a call statement), or the `if` it is tested in does something other than report
+        an error when it is missing (a default value, say)."""
+        p = call.parent
+        while p is not None and p.kind == K.ParenthesizedExpression:
+            p = p.parent
+        if p is None or p.kind in (K.VoidCastedCallStatement, K.ExpressionStatement):
+            return p is not None
+        negated = p.kind == K.UnaryLogicalNotExpression
+        if negated:
+            p = p.parent
+            while p is not None and p.kind == K.ParenthesizedExpression:
+                p = p.parent
+        pred = p.parent if p is not None and p.kind == K.ConditionalPattern else None
+        stmt = pred.parent if pred is not None else None
+        if stmt is None or stmt.kind != K.ConditionalStatement or len(nodes(pred.conditions)) != 1:
+            return False
+        missing = stmt.statement if negated else (stmt.elseClause.clause if stmt.elseClause else None)
+        return missing is None or not self.reports_failure(missing)
+
+    def reports_failure(self, node) -> bool:
+        """Whether a statement reports an error: $fatal, $error, uvm_report_fatal/_error, or a macro
+        whose name says so (`uvm_fatal, `uvm_error, `DV_CHECK_FATAL, ...)."""
+        sm = self.sm
+        for tok in iter_tokens(node):
+            if tok.kind in (TK.SystemIdentifier, TK.Identifier) and tok.valueText in FAILURE_CALLS:
+                return True
+            if sm.isMacroLoc(tok.location):
+                name = self.macro_call(tok.location)[0]
+                if name and FAILURE_RE.search(name):
+                    return True
+        return False
 
     def on_assign(self, node, ctx: BodyCtx, sink: Sink):
         rhs = unwrap(node.right)

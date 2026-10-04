@@ -131,6 +131,7 @@ class ConfigDbCall:
     method: str
     conditional: bool
     range: Range
+    optional: bool = False  # a get the code goes on without: void'(get(...)), if (!get(...)) x = default;
 
 
 @dataclass
