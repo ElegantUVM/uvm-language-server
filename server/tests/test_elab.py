@@ -118,6 +118,27 @@ def test_diagnostics_inside_macro_expansions_land_in_the_user_file(bundled_ws):
     assert any("expanded from macro 'uvm_object_utils'" in n["message"] for n in body[0]["related"])
 
 
+def test_an_info_task_is_not_its_own_related_information(tmp_path):
+    # slang prints a Note-severity diagnostic ($info) as a "note:" line itself, and, as the
+    # module has two instances, after an "in instance: top.a.g" line.
+    (tmp_path / "t.sv").write_text(
+        "`define CHECK(w) if (w < 8) begin : m $info(\"m is %0d\", w); end\n"
+        "module sub #(parameter int W = 3) ();\n"
+        "  if (W < 8) begin : g\n    $info(\"W is %0d\", W);\n  end\n"
+        "  `CHECK(W)\n"
+        "endmodule\n"
+        "module top; sub #(3) a(); sub #(4) b(); endmodule\n")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    r = elaborate(request_for(w))
+    assert [(d["line"], d["severity"], d["message"], [n["message"] for n in d["related"]])
+            for d in r["diagnostics"]] == [
+        (3, "info", "$info encountered: W is 3", []),
+        (3, "info", "$info encountered: W is 4", []),
+        (5, "info", "$info encountered: m is 3", ["expanded from macro 'CHECK'"]),
+        (5, "info", "$info encountered: m is 4", ["expanded from macro 'CHECK'"])]
+
+
 def test_library_diagnostics_are_never_reported(bundled_ws):
     uvm_driver = os.path.join(BUNDLED_UVM, "comps", "uvm_driver.svh")
     text = edited(uvm_driver, "endclass", "  function void broken(); undefined_thing = 1; endfunction\nendclass")

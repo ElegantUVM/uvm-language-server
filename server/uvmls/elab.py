@@ -196,16 +196,15 @@ class _Notes:
         eng.addClient(c)
         eng.setErrorLimit(0)
 
-    def of(self, diag) -> list[dict]:
+    def of(self, diag, severity) -> list[dict]:
         self.client.clear()
         self.eng.issue(diag)
-        out = []
-        for line in self.client.getString().splitlines():
-            m = NOTE_RE.match(line)
-            if m and os.path.isabs(m.group(1)):  # not a generated buffer such as the prelude
-                out.append({"file": self.loc.as_given(norm(m.group(1))), "line": int(m.group(2)) - 1,
-                            "col": int(m.group(3)) - 1, "message": m.group(4)})
-        return out
+        found = [m for m in map(NOTE_RE.match, self.client.getString().splitlines()) if m]
+        if severity == ps.DiagnosticSeverity.Note and diag.location != ps.SourceLocation.NoLocation:
+            found = found[1:]  # an $info is itself printed as a note, ahead of its own notes
+        return [{"file": self.loc.as_given(norm(m.group(1))), "line": int(m.group(2)) - 1,
+                 "col": int(m.group(3)) - 1, "message": m.group(4)}
+                for m in found if os.path.isabs(m.group(1))]  # not a generated buffer such as the prelude
 
 
 def _quote(arg: str) -> str:
@@ -305,7 +304,7 @@ def _elaborate(req: dict) -> dict:
         item = _diag(None, severity, code, message)
         if span is not None:
             item.update(zip(("file", "line", "col", "endLine", "endCol"), span))
-        item["related"] = notes.of(diag)
+        item["related"] = notes.of(diag, sev)
         out.append(item)
     out.sort(key=lambda x: (x["file"] or "", x["line"], x["col"], x["code"], x["message"]))
     return {"diagnostics": out, "tops": [i.name for i in comp.getRoot().topInstances],
