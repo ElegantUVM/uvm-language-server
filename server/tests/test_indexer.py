@@ -75,3 +75,12 @@ def test_syntax_errors_are_reported(tmp_path):
     f.write_text("class c;\n  int x = ;\nendclass\n")
     idx = Indexer([], {}, use_shim=True).parse(str(f))
     assert any(d.severity == "error" and d.range.line == 1 for d in idx.diagnostics)
+
+
+def test_include_skipped_by_its_guard(tmp_path):
+    (tmp_path / "h.svh").write_text("`ifndef H\n`define H\n`endif\n")
+    (tmp_path / "a.sv").write_text('`include "h.svh"\n`include "h.svh"\nmodule a; endmodule\n')
+    idx = Indexer([], {}, use_shim=True).parse(str(tmp_path / "a.sv"))
+    h = str(tmp_path / "h.svh")
+    assert idx.files == {str(tmp_path / "a.sv"), h}
+    assert [(t, r.line) for t, r in idx.includes[str(tmp_path / "a.sv")]] == [(h, 0), (h, 1)]

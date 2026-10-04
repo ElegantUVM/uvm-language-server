@@ -958,11 +958,14 @@ class Extractor:
             self.out.diagnostics.append(Diag(Range(path, line, col, end_line, end_col), msg, severity, code))
 
     def collect_includes(self):
+        earlier: dict[str, str] = {}
         for inc in self.tree.getIncludeDirectives():
-            target = self.path_of(inc.buffer.id) if inc.buffer is not None else None
+            # A header skipped by its include guard has no buffer: it is the one included before.
+            target = self.path_of(inc.buffer.id) if inc.buffer else earlier.get(inc.path)
             syn = inc.syntax
             if target is None or syn is None:
                 continue
+            earlier.setdefault(inc.path, target)
             r = self.node_range(syn)
             if r is None:
                 continue
