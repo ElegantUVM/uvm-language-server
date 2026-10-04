@@ -88,6 +88,7 @@ class SourceSet:
     uvm_source: str = "builtin"  # configured | project | bundled | builtin
     uvm_dir: str | None = None  # the UVM src directory in use
     uvm_version: str | None = None
+    timescale: str | None = None  # a filelist's -timescale, for elaboration
 
 
 def norm(p: str) -> str:
@@ -133,15 +134,16 @@ class FilelistResult:
     include_dirs: list[str] = field(default_factory=list)
     defines: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    timescale: str | None = None
 
 
 def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | None = None) -> FilelistResult:
     """Parse a VCS / Xcelium / Questa style filelist.
 
     Only options that affect parsing are interpreted (-f/-F, +incdir+, -incdir,
-    +define+, -D, -v). Every other option is ignored, so simulator specific
-    flags never break the language server. Relative paths resolve against the
-    filelist's own directory.
+    +define+, -D, -v), plus -timescale for elaboration. Every other option is
+    ignored, so simulator specific flags never break the language server.
+    Relative paths resolve against the filelist's own directory.
     """
     result = result or FilelistResult()
     seen = seen if seen is not None else set()
@@ -204,6 +206,11 @@ def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | 
             i += 1
         elif low == "-v" and nxt:
             result.files.append(resolve(nxt))
+            i += 1
+        elif low.startswith("-timescale="):  # VCS
+            result.timescale = tok.split("=", 1)[1]
+        elif low == "-timescale" and nxt:  # Xcelium, Questa
+            result.timescale = nxt
             i += 1
         elif not tok.startswith(("-", "+")) and is_sv_file(tok):
             result.files.append(resolve(tok))
@@ -278,6 +285,7 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
     defines = dict(config.defines)
     library_roots: set[str] = set()
     roots: list[str] = []
+    timescale = None
 
     uvm_src = _uvm_src_dir(config.uvm_home)
     if config.uvm_home and not uvm_src:
@@ -294,6 +302,7 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
             include_dirs += r.include_dirs
             defines.update(r.defines)
             roots += r.files
+            timescale = r.timescale or timescale
     else:
         mode = "discovery"
         files = discover_files(config.workspace_roots, config.exclude)
@@ -350,4 +359,4 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
     return SourceSet(roots=roots, include_dirs=include_dirs, defines=defines,
                      library_roots=library_roots, has_real_uvm_macros=has_real,
                      mode=mode, warnings=warnings, uvm_source=uvm_source, uvm_dir=uvm_dir,
-                     uvm_version=uvm_version(uvm_dir) if uvm_dir else None)
+                     uvm_version=uvm_version(uvm_dir) if uvm_dir else None, timescale=timescale)

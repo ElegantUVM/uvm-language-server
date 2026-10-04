@@ -39,9 +39,10 @@ def request_for(ws, overrides: dict[str, str] | None = None, tops=(), args=()) -
     """The elaboration request for a workspace's sources; overrides hold unsaved editor text."""
     s = ws.sources
     library = [d for d in (s.uvm_dir, os.path.dirname(BUNDLED_UVM), SHIM_DIR) if d]
+    args = (["--timescale", s.timescale] if s.timescale else []) + list(args or ())
     return {"roots": list(s.roots), "includeDirs": list(s.include_dirs), "defines": dict(s.defines),
             "overrides": dict(overrides or {}), "tops": list(tops or ()), "library": library,
-            "args": list(args or ())}
+            "args": args}
 
 
 def skip_reason(ws) -> str | None:

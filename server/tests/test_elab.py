@@ -122,6 +122,20 @@ def test_missing_file_is_reported_and_the_rest_still_elaborates(tmp_path):
     assert r["tops"] == ["top"]
 
 
+def test_filelist_timescale_reaches_slang(tmp_path):
+    # Some design elements with a `timescale and some without is an error, unless the
+    # simulator is given a default, as filelists often do.
+    (tmp_path / "dut.sv").write_text("`timescale 1ns/1ps\nmodule dut; endmodule\n")
+    (tmp_path / "top.sv").write_text("module top; dut u(); endmodule\n")
+    codes = {}
+    for name, extra in (("plain.f", ""), ("vcs.f", "-timescale=1ns/1ps\n")):
+        (tmp_path / name).write_text(f"dut.sv\ntop.sv\n{extra}")
+        w = Workspace()
+        w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / name)]))
+        codes[name] = [d["code"] for d in elaborate(request_for(w))["diagnostics"]]
+    assert codes == {"plain.f": ["MissingTimeScale"], "vcs.f": []}
+
+
 def test_skip_reasons(ws, bundled_ws, tmp_path):
     assert skip_reason(bundled_ws) is None
     assert "built-in UVM model" in skip_reason(ws)

@@ -51,6 +51,9 @@ def test_filelist_options(tmp_path, monkeypatch):
     assert r.defines == {"A": "1", "B": "", "C": "2"}
     assert r.include_dirs == [str(tmp_path / "ip" / "inc")]
     assert r.files == [str(tmp_path / "ip" / "ip_pkg.sv"), str(tmp_path / "tb.sv")]
+    assert r.timescale == "1ns/1ps"
+    (tmp_path / "xrun.f").write_text("-timescale 1ps/1fs\ntb.sv\n")
+    assert parse_filelist(str(tmp_path / "xrun.f")).timescale == "1ps/1fs"
 
 
 def test_repo_root_discovery_ignores_macro_shims(tmp_path):
