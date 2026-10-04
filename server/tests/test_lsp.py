@@ -617,3 +617,53 @@ def test_cancelling_elaborate_does_not_stop_a_run_others_wait_on(client):
             client.notifications.append(msg)
     assert "error" not in results[ids[1]], results[ids[1]]
     assert results[ids[1]]["result"]["state"] == "done"
+
+
+def _alive(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
+def _cpu_seconds(pid):
+    with open(f"/proc/{pid}/stat") as f:
+        fields = f.read().rsplit(")", 1)[1].split()
+    return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
+def test_the_worker_ends_with_the_server(tmp_path):
+    """A server that is killed or crashes runs no shutdown code; its worker must not outlive it."""
+    spin = ["package p;", "  function automatic int spin(int s);", "    int a = s;",
+            "    for (int i = 0; i < 300000; i++) a = a * 1103515245 + 12345;", "    return a;",
+            "  endfunction", "endpackage", "module top;", "  import p::*;"]
+    (tmp_path / "top.sv").write_text("\n".join(spin + [f"  localparam int P{i} = spin({i});" for i in range(100)]
+                                               + ["endmodule", ""]))
+    (tmp_path / "top.f").write_text("top.sv\n")
+    c = start(tmp_path, filelists=[str(tmp_path / "top.f")], elaboration="onSave")
+    worker = None
+    try:
+        c.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "running")
+        deadline = time.time() + 5
+        while worker is None and time.time() < deadline:
+            with open(f"/proc/{c.proc.pid}/task/{c.proc.pid}/children") as f:
+                for pid in map(int, f.read().split()):
+                    with open(f"/proc/{pid}/cmdline", "rb") as g:
+                        if b"elab-worker" in g.read():
+                            worker = pid
+        assert worker, "no elaboration worker"
+        while _cpu_seconds(worker) < 0.5 and time.time() < deadline + 5:  # it has its request
+            time.sleep(0.05)
+        c.proc.kill()  # as a crash or a plain kill: no shutdown, no exit
+        c.proc.wait()
+        deadline = time.time() + 3
+        while _alive(worker) and time.time() < deadline:
+            time.sleep(0.05)
+        assert not _alive(worker), "the elaboration worker outlived the server"
+    finally:
+        if c.proc.poll() is None:
+            c.proc.kill()
+        if worker and _alive(worker):
+            os.kill(worker, 9)

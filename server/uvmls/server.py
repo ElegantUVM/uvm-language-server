@@ -374,9 +374,11 @@ class UvmLanguageServer(LanguageServer):
         env["PYTHONPATH"] = os.pathsep.join(
             [PACKAGE_PARENT] + [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p])
         try:
+            # On the event loop's thread: the worker ends when the thread that started it does.
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "uvmls", "elab-worker", stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
+                sys.executable, "-m", "uvmls", "elab-worker", str(os.getpid()), str(ELAB_TIMEOUT),
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, env=env)
         except OSError as e:
             return {"error": f"cannot start {sys.executable}: {e}"}
         if run != self._elab_run:  # superseded while starting

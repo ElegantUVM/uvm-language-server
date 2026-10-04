@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import time
 from collections import Counter
@@ -404,8 +405,23 @@ def elaborate(request: dict) -> dict:
     return result
 
 
+def _bind_to_parent(parent: int, timeout: float):
+    """End with the language server, and after `timeout` seconds, even in the middle of a compile.
+    pyslang holds the GIL, so no Python thread or signal handler could run then; the kernel can."""
+    if sys.platform.startswith("linux"):
+        import ctypes
+        ctypes.CDLL(None).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
+    if parent and os.getppid() != parent:  # it was gone before that
+        os._exit(1)
+    if timeout > 0 and hasattr(signal, "alarm"):
+        signal.alarm(int(timeout) + 5)  # SIGALRM's default action ends the process
+
+
 def worker():
-    """`python -m uvmls elab-worker`: one JSON request on stdin, one JSON result on stdout."""
+    """`python -m uvmls elab-worker [SERVER_PID TIMEOUT]`: one JSON request on stdin, one JSON
+    result on stdout."""
+    args = sys.argv[2:4]
+    _bind_to_parent(int(args[0]) if args else 0, float(args[1]) if len(args) > 1 else 0)
     sys.stdout.flush()
     result_fd = os.dup(1)
     os.dup2(2, 1)  # anything slang prints goes to stderr, never into the result
