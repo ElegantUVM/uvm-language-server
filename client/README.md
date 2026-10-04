@@ -9,7 +9,7 @@ UVM-aware SystemVerilog support for VS Code, built on the [slang](https://github
 - **UVM lint.** Unregistered classes created through the factory, `uvm_object_utils` on a component, virtual classes passed to `create()`, and config_db mismatches.
 - **Elaboration diagnostics.** slang compiles and elaborates the whole design in a background process when you save (`uvm.elaboration`), and reports what a simulator's elaboration would: type errors, unknown members, wrong argument counts, missing modules or packages. Errors raised inside a macro point at your code, not the macro. Errors the UVM library reports on its own are left out, while errors your code causes inside it (a constructor without a parent, a wrong type parameter) are reported, pointing at your type. The status bar shows the result; **UVM: Elaborate Now** runs it on demand.
 
-Point `uvm.filelists` at the same `.f` files your simulator uses, or leave it empty and every SystemVerilog file in the workspace is indexed with include paths inferred.
+Point `uvm.filelists` at the same `.f` files your simulator uses, or leave it empty and every SystemVerilog file in the workspace is indexed with include paths inferred; simulator output folders such as `work/` are skipped, and `uvm.exclude` leaves out more.
 The UVM library comes from `uvm.uvmHome` when set, else from `$UVM_HOME`, else from the project's own `uvm_pkg.sv` when it compiles one, and otherwise from the Accellera UVM 1.2 that ships with the extension. Turn off `uvm.useBundledUvm` to use a lightweight built-in UVM model instead.
 
 Base syntax highlighting comes from a SystemVerilog syntax extension such as *Verilog-HDL/SystemVerilog* (`mshr-h.veriloghdl`); this extension adds UVM-specific highlighting on top rather than replacing it.

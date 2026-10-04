@@ -180,7 +180,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "Glob patterns to skip in discovery mode."
+          "markdownDescription": "Glob patterns of files and folders to leave out in discovery mode, matched below each workspace folder as in `#files.exclude#`: `legacy/**`, `**/*_old.sv`. An absolute pattern matches the full path. Simulator output folders (`work`, `csrc`, `simv.daidir`, `xcelium.d`, `INCA_libs`, `obj_dir`) and `.git`, `.venv`, `node_modules` and `__pycache__` inside the workspace are always left out."
         },
         "uvm.pythonPath": {
           "type": "string",

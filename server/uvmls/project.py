@@ -14,13 +14,14 @@ project already compiles, the Accellera UVM 1.2 bundled with this package, or
 
 from __future__ import annotations
 
-import fnmatch
+import functools
 import os
 import re
 import shlex
 from dataclasses import dataclass, field
 
 SV_EXTENSIONS = (".sv", ".svh", ".v", ".vh", ".svi", ".svp", ".sva")
+# Matched below each workspace root, like uvm.exclude: a workspace inside ~/work is indexed.
 DEFAULT_EXCLUDES = [
     "**/.git/**", "**/node_modules/**", "**/.venv/**", "**/__pycache__/**",
     "**/csrc/**", "**/simv.daidir/**", "**/xcelium.d/**", "**/INCA_libs/**",
@@ -76,7 +77,7 @@ class ProjectConfig:
             uvm_home=expand(uvm_home) if uvm_home else None,
             env_uvm_home=expand(env_uvm_home) if env_uvm_home else None,
             bundled_uvm=s.get("useBundledUvm") is not False,
-            exclude=list(s.get("exclude") or []),
+            exclude=[p for p in s.get("exclude") or [] if isinstance(p, str) and p],
         )
 
 
@@ -113,21 +114,102 @@ def is_bundled(path: str) -> bool:
     return os.path.realpath(path).startswith(_BUNDLED_REAL)
 
 
-def _excluded(path: str, patterns: list[str]) -> bool:
-    p = path.replace(os.sep, "/")
-    return any(fnmatch.fnmatch(p, pat) or fnmatch.fnmatch(p + "/", pat) for pat in patterns)
+def _brace_choices(pattern: str) -> list[str]:
+    """The patterns a glob's `{a,b}` groups stand for: 'x/{a,b}/**' -> ['x/a/**', 'x/b/**']."""
+    m = re.search(r"\{([^{}]*)\}", pattern)  # innermost first, so groups nest
+    if not m:
+        return [pattern]
+    return [p for choice in m.group(1).split(",")
+            for p in _brace_choices(pattern[:m.start()] + choice + pattern[m.end():])]
+
+
+def _segment_re(seg: str) -> str:
+    """One path segment of a glob: `*`, `?` and `[...]` (`[!...]`) never match a '/'."""
+    out, i = [], 0
+    while i < len(seg):
+        c = seg[i]
+        i += 1
+        if c == "*":
+            while seg[i:i + 1] == "*":
+                i += 1
+            out.append("[^/]*")
+        elif c == "?":
+            out.append("[^/]")
+        elif c == "[":
+            negate = seg[i:i + 1] == "!"
+            start = i + 1 if negate else i
+            end = seg.find("]", start + 1)  # a ']' right after the '[' is one of the set
+            if end < 0:
+                out.append(re.escape(c))
+                continue
+            chars = "".join(ch if ch == "-" else re.escape(ch) for ch in seg[start:end])
+            out.append(f"[^/{chars}]" if negate else f"[{chars}]")
+            i = end + 1
+        else:
+            out.append(re.escape(c))
+    return "".join(out)
+
+
+def _glob_re(pattern: str) -> str:
+    """A glob as VS Code reads one: a `**` segment stands for any number of path segments, none
+    included, so '**/work/**' matches 'work', 'work/a.sv' and 'rtl/work/a.sv'."""
+    segs = pattern.rstrip("/").split("/")
+    segs = [s for i, s in enumerate(segs) if not (s == "**" and i and segs[i - 1] == "**")]
+    out = ""
+    for i, seg in enumerate(segs):
+        if seg != "**":
+            out += ("" if i == 0 or segs[i - 1] == "**" else "/") + _segment_re(seg)
+        elif len(segs) == 1:
+            out += ".*"
+        elif i == 0:
+            out += "(?:.*/)?"  # '**/x': x at any depth
+        else:
+            out += "(?:/.*)?" + ("/" if i < len(segs) - 1 else "")  # 'x/**': x and all below it
+    return out
+
+
+_GLOB_FLAGS = re.DOTALL | (re.IGNORECASE if os.path.normcase("A") == "a" else 0)  # as fnmatch
+
+
+@functools.lru_cache(maxsize=None)
+def _glob(pattern: str) -> re.Pattern | None:
+    """A glob compiled for '/'-separated paths; None if it cannot be (a range such as [z-a])."""
+    choices = "|".join(_glob_re(p) for p in _brace_choices(pattern))
+    try:
+        return re.compile(f"(?:{choices})\\Z", _GLOB_FLAGS)
+    except re.error:
+        return None
+
+
+def _exclusion(patterns: list[str]):
+    """A test of whether exclude patterns leave out a path, given relative to its workspace root
+    and in full: a relative pattern applies below each root, an absolute one to the full path."""
+    below, full = [], []
+    for p in patterns:
+        p = p.replace(os.sep, "/")
+        rx = _glob(p)
+        if rx:
+            (full if p.startswith("/") or os.path.isabs(p) else below).append(rx)
+
+    def excluded(rel: str, path: str) -> bool:
+        path = path.replace(os.sep, "/")
+        return any(rx.match(rel) for rx in below) or any(rx.match(path) for rx in full)
+    return excluded
 
 
 def discover_files(roots: list[str], exclude: list[str]) -> list[str]:
-    patterns = DEFAULT_EXCLUDES + exclude
+    """The SystemVerilog files below the roots that neither DEFAULT_EXCLUDES nor `exclude` (VS
+    Code globs, as in files.exclude) leave out."""
+    excluded = _exclusion(DEFAULT_EXCLUDES + exclude)
     out = []
-    for root in roots:
+    for root in map(norm, roots):
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = sorted(d for d in dirnames
-                                 if not _excluded(os.path.join(dirpath, d) + "/", patterns))
+            rel = os.path.relpath(dirpath, root).replace(os.sep, "/")
+            prefix = "" if rel == "." else rel + "/"
+            dirnames[:] = sorted(d for d in dirnames if not excluded(prefix + d, os.path.join(dirpath, d)))
             for fn in sorted(filenames):
                 full = os.path.join(dirpath, fn)
-                if is_sv_file(fn) and not _excluded(full, patterns):
+                if is_sv_file(fn) and not excluded(prefix + fn, full):
                     out.append(norm(full))
     return out
 

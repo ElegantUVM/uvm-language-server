@@ -3,8 +3,8 @@ import os
 import pytest
 
 from uvmls.project import (
-    BUNDLED_UVM, ProjectConfig, build_source_set, discover_files, is_bundled, parse_filelist,
-    uvm_version,
+    BUNDLED_UVM, DEFAULT_EXCLUDES, ProjectConfig, build_source_set, discover_files, is_bundled,
+    parse_filelist, uvm_version,
 )
 
 from conftest import EXAMPLE, FILELIST
@@ -208,3 +208,42 @@ def test_discovery_skips_the_vendored_uvm(tmp_path):
     ss = build_source_set(ProjectConfig(workspace_roots=[str(tmp_path)]))
     assert ss.uvm_source == "bundled"
     assert ss.roots == [os.path.join(BUNDLED_UVM, "uvm_pkg.sv"), str(tmp_path / "tb.sv")]
+
+
+@pytest.mark.parametrize("name", [p.removeprefix("**/").removesuffix("/**") for p in DEFAULT_EXCLUDES])
+def test_default_excludes_apply_below_the_workspace_root(tmp_path, name):
+    # A project kept in ~/work is indexed; a work/ directory inside it (a simulator library) is not.
+    root = tmp_path / name / "proj"
+    for d in (root, root / name, root / "sim" / name):
+        d.mkdir(parents=True)
+        (d / "tb.sv").write_text("module tb; endmodule\n")
+    assert discover_files([str(root)], []) == [str(root / "tb.sv")]
+    assert build_source_set(ProjectConfig(workspace_roots=[str(root)])).roots[-1] == str(root / "tb.sv")
+
+
+def test_exclude_patterns_are_globs_below_each_root_unless_absolute(tmp_path):
+    roots = [tmp_path / "b", tmp_path / "work" / "a"]
+    for root in roots:
+        for f in ("tb.sv", "legacy/old.sv", "rtl/legacy/old.sv", "rtl/alu.sv", "rtl/alu_old.sv"):
+            (root / f).parent.mkdir(parents=True, exist_ok=True)
+            (root / f).write_text("module m; endmodule\n")
+    every = sorted(str(p) for p in tmp_path.rglob("*.sv"))
+
+    def left_out(*exclude):
+        kept = discover_files([str(r) for r in roots], list(exclude))
+        return [os.path.relpath(f, tmp_path) for f in every if f not in kept]
+
+    def in_both(*files):
+        return sorted(f"{r}/{f}" for r in ("b", "work/a") for f in files)
+
+    assert left_out("legacy/**") == in_both("legacy/old.sv")  # not rtl/legacy
+    assert left_out("**/legacy") == in_both("legacy/old.sv", "rtl/legacy/old.sv")
+    assert left_out("*.sv", "rtl/*_old.sv") == in_both("tb.sv", "rtl/alu_old.sv")  # * stays in one directory
+    assert left_out("legacy/**/old.sv", "{rtl/alu,tb}.sv") == in_both("legacy/old.sv", "rtl/alu.sv", "tb.sv")
+    assert left_out("**/a/**", "**/work/**") == []  # the roots' own paths are not matched
+    assert left_out("[z-a]/**") == []  # a pattern that cannot compile leaves nothing out
+    # An absolute pattern names one root's files.
+    assert left_out(f"{roots[0]}/rtl/**") == ["b/rtl/alu.sv", "b/rtl/alu_old.sv", "b/rtl/legacy/old.sv"]
+    settings = {"exclude": [f"{roots[0]}/legacy/**"]}
+    ss = build_source_set(ProjectConfig.from_settings([str(roots[0])], settings))
+    assert str(roots[0] / "legacy" / "old.sv") not in ss.roots and str(roots[0] / "tb.sv") in ss.roots
