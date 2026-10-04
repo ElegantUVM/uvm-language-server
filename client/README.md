@@ -13,6 +13,7 @@ Point `uvm.filelists` at the same `.f` files your simulator uses, or leave it em
 The UVM library comes from `uvm.uvmHome` when set, else from `$UVM_HOME`, else from the project's own `uvm_pkg.sv` when it compiles one, and otherwise from the Accellera UVM 1.2 that ships with the extension. Turn off `uvm.useBundledUvm` to use a lightweight built-in UVM model instead.
 
 Base syntax highlighting comes from a SystemVerilog syntax extension such as *Verilog-HDL/SystemVerilog* (`mshr-h.veriloghdl`); this extension adds UVM-specific highlighting on top rather than replacing it.
+With Verible installed, set `"verible.arguments": ["--rules_config_search"]` to keep its style warnings about the bundled UVM sources out of Problems: the extension ships a `.rules.verible_lint` that turns Verible's lint off for them, and your own files keep Verible's defaults.
 
 The bundled UVM 1.2 is Accellera's, under the Apache License 2.0. Its `LICENSE.txt` and `NOTICE.txt` are in `server/uvmls/third_party/uvm-1.2/` inside the extension.
 The npm packages bundled into the extension's JavaScript are listed with their licence texts in `THIRD_PARTY_NOTICES.txt`: elkjs, under the Eclipse Public License 2.0 (source code at https://github.com/kieler/elkjs), the vscode-languageclient packages (MIT), semver and minimatch (ISC), and brace-expansion and balanced-match (MIT).

@@ -19,8 +19,8 @@ uvmls = "uvmls.server:main"
 include = ["uvmls*"]
 
 [tool.setuptools.package-data]
-uvmls = ["shim/*.svh", "third_party/uvm-1.2/*.txt", "third_party/uvm-1.2/*.md",
-         "third_party/uvm-1.2/src/**/*"]
+uvmls = ["shim/*.svh", "third_party/.rules.verible_lint", "third_party/uvm-1.2/*.txt",
+         "third_party/uvm-1.2/*.md", "third_party/uvm-1.2/src/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
