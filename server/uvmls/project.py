@@ -102,9 +102,13 @@ def is_sv_file(path: str) -> bool:
     return path.endswith(SV_EXTENSIONS)
 
 
+_BUNDLED_REAL = os.path.realpath(os.path.dirname(BUNDLED_UVM)) + os.sep
+
+
 def is_bundled(path: str) -> bool:
-    """Part of the UVM copy shipped with this package (library code even when not in use)."""
-    return path.startswith(os.path.dirname(BUNDLED_UVM) + os.sep)
+    """Part of the UVM copy shipped with this package (library code even when not in use), by
+    resolved path: slang and the editor may name it through different symlinks."""
+    return os.path.realpath(path).startswith(_BUNDLED_REAL)
 
 
 def _excluded(path: str, patterns: list[str]) -> bool:

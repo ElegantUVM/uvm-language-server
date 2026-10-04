@@ -105,3 +105,17 @@ def test_open_uvm_source_is_not_reparsed_or_taken_for_user_code():
     w = workspace(bundled_uvm=False)
     w.update_document(UVM_DRIVER, text)
     assert w.stats()["classes"] == 19 and w.find_class("uvm_driver") is None
+
+
+def test_open_uvm_source_under_another_name_is_not_taken_for_user_code(tmp_path):
+    # The bundled file reached through a symlink: the editor's name and slang's resolved name differ.
+    (tmp_path / "uvm").symlink_to(os.path.dirname(BUNDLED_UVM))
+    alias = str(tmp_path / "uvm" / "src" / "comps" / "uvm_driver.svh")
+    with open(UVM_DRIVER) as f:
+        text = f.read()
+    for name in (alias, os.path.realpath(UVM_DRIVER)):
+        w = workspace()
+        w.update_document(name, text)  # opened while the bundled copy is in use
+        assert w.stats()["classes"] == 19 and not w.ephemeral
+        w.configure(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST], bundled_uvm=False))
+        assert w.stats()["classes"] == 19 and not w.ephemeral  # still open after switching
