@@ -114,6 +114,7 @@ class UvmLanguageServer(LanguageServer):
         self.elab_diags: dict[str, list[Diag]] = {}
         self.elab_texts: dict[str, str] = {}  # the unsaved editor text those diagnostics come from
         self.elab_shown: list[str] = []  # the severity Problems shows for each of them
+        self.elab_basis: dict[str, str] = {}  # the text of open files when the latest run started
         self.elab_status: dict = {"state": "off"}
         self._elab_run = 0  # bumped by every start or stop; older runs discard their results
         self._elab_task: asyncio.Future | None = None
@@ -144,13 +145,19 @@ class UvmLanguageServer(LanguageServer):
     async def flush(self):
         paths, self.pending = self.pending, set()
         loop = asyncio.get_running_loop()
+        docs, basis = self.documents, self.elab_basis
 
-        def work():
+        def work() -> list[str]:
             for p in paths:
-                doc = self.documents.get(p)
-                self.ws.update_document(p, doc)
-        await loop.run_in_executor(None, work)
+                self.ws.update_document(p, docs.get(p))
+            # An open file that is the file on disk again (reloaded after another program changed
+            # it, or reverted) but not what the latest run compiled: no save will elaborate it.
+            return [p for p in paths if p in docs and p in basis and docs[p] != basis[p]
+                    and _same_text(p, docs[p], None)]
+        reloaded = await loop.run_in_executor(None, work)
         self.after_index()
+        if self._elab_timer is None and any(self.documents.get(p) != self.elab_basis.get(p) for p in reloaded):
+            self.schedule_elaboration(ELAB_SAVE_DELAY)
 
     @property
     def documents(self) -> dict[str, str]:
@@ -248,6 +255,7 @@ class UvmLanguageServer(LanguageServer):
     def start_elaboration(self) -> asyncio.Future:
         """Elaborate now, superseding any run in progress. The task's result is the status."""
         self.stop_elaboration()
+        self.elab_basis = self.documents
         self._elab_task = asyncio.ensure_future(self.elaborate(self._elab_run))
         return self._elab_task
 
@@ -449,6 +457,7 @@ async def did_change_configuration(ls: UvmLanguageServer, params: T.DidChangeCon
 @server.feature(T.TEXT_DOCUMENT_DID_OPEN)
 def did_open(ls: UvmLanguageServer, params: T.DidOpenTextDocumentParams):
     path = uri_to_path(params.text_document.uri)
+    ls.elab_basis.setdefault(path, params.text_document.text)  # the latest run read it from disk
     if is_sv_file(path):
         ls.schedule(path)
 
@@ -492,7 +501,9 @@ async def did_change_watched(ls: UvmLanguageServer, params: T.DidChangeWatchedFi
                if is_sv_file(p) and p not in open_docs]
     for path in changed:
         ls.schedule(path)
-    if changed:  # an open file's save already triggered it
+    # An open file's change arrives as didChange too: its save elaborates, and flush does when it
+    # is reloaded or reverted to the file on disk.
+    if changed:
         ls.schedule_elaboration(ELAB_SAVE_DELAY)
 
 

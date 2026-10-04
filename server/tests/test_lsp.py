@@ -2,8 +2,11 @@
 
 import json
 import os
+import queue
+import shutil
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -21,24 +24,40 @@ class Client:
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
         self.next_id = 0
         self.notifications = []
+        self.messages = queue.Queue()
+        threading.Thread(target=self._pump, daemon=True).start()
 
     def send(self, msg):
         body = json.dumps(msg).encode()
         self.proc.stdin.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
         self.proc.stdin.flush()
 
-    def read(self):
-        headers = {}
-        while True:
-            line = self.proc.stdout.readline()
-            if not line:
-                raise EOFError("server exited")
-            line = line.decode().strip()
-            if not line:
-                break
-            k, v = line.split(":", 1)
-            headers[k.lower()] = v.strip()
-        return json.loads(self.proc.stdout.read(int(headers["content-length"])))
+    def _pump(self):
+        """Read the server's messages in the background, so a wait can time out."""
+        try:
+            while True:
+                headers = {}
+                while True:
+                    line = self.proc.stdout.readline()
+                    if not line:
+                        raise EOFError("server exited")
+                    line = line.decode().strip()
+                    if not line:
+                        break
+                    k, v = line.split(":", 1)
+                    headers[k.lower()] = v.strip()
+                self.messages.put(json.loads(self.proc.stdout.read(int(headers["content-length"]))))
+        except (EOFError, ValueError, OSError) as e:
+            self.messages.put(e)
+
+    def read(self, timeout=30):
+        try:
+            msg = self.messages.get(timeout=timeout)
+        except queue.Empty:
+            raise TimeoutError("no message from the server") from None
+        if isinstance(msg, Exception):
+            raise EOFError("server exited") from msg
+        return msg
 
     def request(self, method, params):
         self.next_id += 1
@@ -67,7 +86,10 @@ class Client:
             if m["method"] == method and pred(m):
                 return self.notifications.pop(i)
         while time.time() < deadline:
-            msg = self.read()
+            try:
+                msg = self.read(timeout=max(0.01, deadline - time.time()))
+            except TimeoutError:
+                break
             if "method" in msg and "id" in msg:
                 self.send({"jsonrpc": "2.0", "id": msg["id"], "result": None})
             elif msg.get("method") == method and pred(msg):
@@ -435,5 +457,51 @@ def test_elaboration_counts_what_problems_shows(tmp_path):
         shown = [(d["code"], d["severity"]) for d in msg["params"]["diagnostics"]]
         assert shown == [("CouldNotOpenIncludeFile", 1)]
         assert (status["errors"], status["warnings"]) == (1, 0)
+    finally:
+        c.close()
+
+
+def test_reverted_buffer_is_elaborated_again(client):
+    a, b = uri("agent/alu_driver.svh"), uri("agent/alu_monitor.svh")
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+        ta = f.read()
+    with open(os.path.join(EXAMPLE, "agent/alu_monitor.svh")) as f:
+        tb = f.read()
+    for u, t in ((a, ta), (b, tb)):
+        client.notify("textDocument/didOpen", {"textDocument": {
+            "uri": u, "languageId": "systemverilog", "version": 1, "text": t}})
+    client.notify("textDocument/didChange", {"textDocument": {"uri": a, "version": 2},
+                                             "contentChanges": [{"text": ta.replace("m_cfg.vif", "m_cfg.vfi")}]})
+    client.forget("uvm/elaborationStatus")
+    client.notify("textDocument/didSave", {"textDocument": {"uri": b}})  # compiles a's unsaved text
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 1
+    client.forget("uvm/elaborationStatus")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": a, "version": 3},
+                                             "contentChanges": [{"text": ta}]})  # File: Revert, no save
+    status = client.wait_for("uvm/elaborationStatus", finished, timeout=10)["params"]
+    for u in (a, b):
+        client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+    assert status["errors"] == 0
+
+
+def test_open_file_changed_by_another_program_is_elaborated(tmp_path):
+    ex = tmp_path / "alu_tb"
+    shutil.copytree(EXAMPLE, ex)
+    c = start(ex, filelists=[str(ex / "alu_tb.f")])
+    try:
+        assert c.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+        path = ex / "agent" / "alu_driver.svh"
+        u = f"file://{path}"
+        text = path.read_text()
+        c.notify("textDocument/didOpen", {"textDocument": {
+            "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
+        broken = text.replace("m_cfg.vif", "m_cfg.vfi")
+        path.write_text(broken)  # git checkout, a generator, ...
+        c.forget("uvm/elaborationStatus")
+        # VS Code reloads the unmodified editor and its watcher reports the change; no didSave.
+        c.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                            "contentChanges": [{"text": broken}]})
+        c.notify("workspace/didChangeWatchedFiles", {"changes": [{"uri": u, "type": 2}]})
+        assert c.wait_for("uvm/elaborationStatus", finished, timeout=10)["params"]["errors"] == 1
     finally:
         c.close()
