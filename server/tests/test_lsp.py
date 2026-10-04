@@ -57,6 +57,10 @@ class Client:
     def notify(self, method, params):
         self.send({"jsonrpc": "2.0", "method": method, "params": params})
 
+    def forget(self, *methods):
+        """Drop queued notifications, so a later wait_for sees only what happens next."""
+        self.notifications = [m for m in self.notifications if m["method"] not in methods]
+
     def wait_for(self, method, pred=lambda m: True, timeout=20):
         deadline = time.time() + timeout
         for i, m in enumerate(self.notifications):
@@ -86,16 +90,23 @@ def uri(rel):
     return "file://" + os.path.join(EXAMPLE, rel)
 
 
+def finished(m):
+    return m["params"]["state"] in ("done", "skipped", "failed")
+
+
 @pytest.fixture(scope="module")
 def client():
     c = Client()
     c.request("initialize", {
         "processId": None, "rootUri": "file://" + EXAMPLE, "capabilities": {},
         "workspaceFolders": [{"uri": "file://" + EXAMPLE, "name": "alu_tb"}],
-        "initializationOptions": {"settings": {"filelists": [FILELIST]}},
+        "initializationOptions": {"settings": {"filelists": [FILELIST], "elaboration": "onSave"}},
     })
     c.notify("initialized", {})
     c.wait_for("uvm/indexChanged")
+    # The first elaboration publishes everything again; let it finish before the tests start.
+    status = c.wait_for("uvm/elaborationStatus", finished)["params"]
+    assert status["state"] == "done" and status["errors"] == 0, status
     yield c
     c.close()
 
@@ -135,6 +146,7 @@ def test_live_edit_updates_index_and_diagnostics(client):
     path = os.path.join(EXAMPLE, "env/alu_env.svh")
     with open(path) as f:
         text = f.read()
+    client.forget("textDocument/publishDiagnostics")
     client.notify("textDocument/didOpen", {"textDocument": {
         "uri": uri("env/alu_env.svh"), "languageId": "systemverilog", "version": 1, "text": text}})
     edited = text.replace(
@@ -149,6 +161,7 @@ def test_live_edit_updates_index_and_diagnostics(client):
                     lambda m: m["params"]["uri"].endswith("alu_monitor.svh") and not m["params"]["diagnostics"])
     rows = {r["field"]: r for r in client.request("uvm/configDb", {})["fields"]}
     assert rows["checks_enable"]["status"] == "ok"
+    client.forget("textDocument/publishDiagnostics")
     client.notify("textDocument/didClose", {"textDocument": {"uri": uri("env/alu_env.svh")}})
     client.wait_for("textDocument/publishDiagnostics",
                     lambda m: m["params"]["uri"].endswith("alu_monitor.svh") and m["params"]["diagnostics"])
@@ -162,9 +175,13 @@ def test_use_bundled_uvm_setting(client):
         msg = client.wait_for("uvm/indexChanged", lambda m: m["params"]["stats"]["uvm"]["source"] == source)
         return msg["params"]["stats"]
 
+    client.forget("uvm/elaborationStatus")
     stats = configure("builtin", useBundledUvm=False)
     assert stats["libraryClasses"] == 0 and stats["classes"] == 19
+    status = client.wait_for("uvm/elaborationStatus", finished)["params"]
+    assert status["state"] == "skipped" and "built-in UVM model" in status["message"]
     assert configure("bundled")["libraryClasses"] > 300
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["state"] == "done"
 
 
 def test_document_symbols_and_type_hierarchy(client):
@@ -174,3 +191,105 @@ def test_document_symbols_and_type_hierarchy(client):
         "textDocument": {"uri": uri("agent/alu_driver.svh")}, "position": {"line": 1, "character": 8}})
     subs = client.request("typeHierarchy/subtypes", {"item": items[0]})
     assert [s["name"] for s in subs] == ["alu_error_driver"]
+
+
+def elab_diags(msg):
+    return [d for d in msg["params"]["diagnostics"] if d.get("source") == "slang-elab"]
+
+
+def test_elaboration_on_save(client):
+    path = os.path.join(EXAMPLE, "agent/alu_driver.svh")
+    with open(path) as f:
+        text = f.read()
+    u = uri("agent/alu_driver.svh")
+    line = text[:text.index("m_cfg.vif")].count("\n")
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
+    broken = text.replace("m_cfg.vif", "m_cfg.vfi")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                             "contentChanges": [{"text": broken}]})
+    client.forget("textDocument/publishDiagnostics", "uvm/elaborationStatus")
+    client.notify("textDocument/didSave", {"textDocument": {"uri": u}})
+    msg = client.wait_for("textDocument/publishDiagnostics",
+                          lambda m: m["params"]["uri"] == u and elab_diags(m))
+    [d] = elab_diags(msg)
+    assert d["code"] == "UnknownMember" and d["severity"] == 1
+    assert d["message"] == "no member named 'vfi' in 'alu_agent_config'"
+    assert d["range"]["start"]["line"] == line
+    status = client.wait_for("uvm/elaborationStatus", finished)["params"]
+    assert (status["state"], status["errors"], status["uvm"]) == ("done", 1, "bundled Accellera UVM 1.2")
+    assert status["message"] == "top: tb_top"
+
+    # Fixed and saved: the error goes away.
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 3},
+                                             "contentChanges": [{"text": text}]})
+    client.forget("textDocument/publishDiagnostics", "uvm/elaborationStatus")
+    client.notify("textDocument/didSave", {"textDocument": {"uri": u}})
+    client.wait_for("textDocument/publishDiagnostics", lambda m: m["params"]["uri"] == u and not elab_diags(m))
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+    summary = client.request("uvm/elaborate", {})
+    assert (summary["state"], summary["errors"], summary["warnings"]) == ("done", 0, 0)
+    assert summary["seconds"] > 0 and summary["uvm"] == "bundled Accellera UVM 1.2"
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+
+
+def test_elaboration_off_on_demand_and_on_change(client):
+    u = uri("agent/alu_driver.svh")
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+        text = f.read()
+
+    def configure(mode):
+        client.forget("uvm/elaborationStatus", "textDocument/publishDiagnostics")
+        client.notify("workspace/didChangeConfiguration",
+                      {"settings": {"uvm": {"filelists": [FILELIST], "elaboration": mode}}})
+
+    def published(with_elab):
+        return client.wait_for("textDocument/publishDiagnostics",
+                               lambda m: m["params"]["uri"] == u and bool(elab_diags(m)) == with_elab)
+
+    configure("off")
+    assert client.wait_for("uvm/elaborationStatus")["params"]["state"] == "off"
+    client.notify("textDocument/didOpen", {"textDocument": {
+        "uri": u, "languageId": "systemverilog", "version": 1, "text": text.replace("m_cfg.vif", "m_cfg.vfi")}})
+    # Elaborate Now works whatever the setting, and compiles the unsaved text.
+    assert client.request("uvm/elaborate", {})["errors"] == 1
+    published(True)
+    configure("onSave")  # turned on: runs at once
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 1
+    configure("off")  # turned off: its diagnostics go away
+    published(False)
+    configure("onChange")
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 1
+    client.forget("uvm/elaborationStatus", "textDocument/publishDiagnostics")
+    client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
+                                             "contentChanges": [{"text": text}]})
+    published(False)  # no save needed
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+    configure("onSave")
+    client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
+
+
+def test_watched_file_change_elaborates(client):
+    client.forget("uvm/elaborationStatus")
+    client.notify("workspace/didChangeWatchedFiles",
+                  {"changes": [{"uri": uri("agent/alu_monitor.svh"), "type": 2}]})
+    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["state"] == "done"
+
+
+def test_a_newer_run_supersedes_an_older_one(client):
+    client.forget("uvm/elaborationStatus")
+    ids = []
+    for _ in range(2):
+        client.next_id += 1
+        ids.append(client.next_id)
+        client.send({"jsonrpc": "2.0", "id": client.next_id, "method": "uvm/elaborate", "params": {}})
+    results = {}
+    while len(results) < 2:
+        msg = client.read()
+        if msg.get("id") in ids and "method" not in msg:
+            results[msg["id"]] = msg["result"]
+        elif "method" in msg:
+            client.notifications.append(msg)
+    # The first run is killed and reports nothing; both requests get the second run's status.
+    done = [m["params"] for m in client.notifications if m["method"] == "uvm/elaborationStatus" and finished(m)]
+    assert len(done) == 1 and results[ids[0]] == results[ids[1]] == done[0]

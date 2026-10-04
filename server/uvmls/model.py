@@ -259,6 +259,7 @@ class Diag:
     severity: str  # error | warning | info | hint
     code: str
     source: str = "slang"
+    related: list[tuple[Range, str]] = field(default_factory=list)  # slang notes
 
 
 @dataclass

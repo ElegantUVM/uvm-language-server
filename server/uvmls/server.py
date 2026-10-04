@@ -3,25 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import sys
+import time
 from urllib.parse import unquote, urlparse
 
 from lsprotocol import types as T
 from pygls.lsp.server import LanguageServer
 from pygls.uris import from_fs_path
 
-from . import __version__
+from . import __version__, elab
 from .lints import lint
-from .model import Range
+from .model import Diag, Range
 from .navigation import Navigator
 from .project import ProjectConfig, is_sv_file, norm
 from .views import class_graph, config_db_report, topology
-from .workspace import Workspace
+from .workspace import Workspace, _same_text
 
 log = logging.getLogger("uvmls")
 
 DEBOUNCE_SECONDS = 0.25
+ELAB_MODES = ("off", "onSave", "onChange")
+ELAB_SAVE_DELAY = 0.3  # coalesces a "Save All"
+ELAB_CHANGE_DELAY = 1.0  # after the last edit, in onChange mode
+ELAB_TIMEOUT = 120.0
+PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SYMBOL_KINDS = {
     "class": T.SymbolKind.Class, "interface": T.SymbolKind.Interface,
@@ -60,6 +68,14 @@ def location(r: Range) -> T.Location:
     return T.Location(path_to_uri(r.path), lsp_range(r))
 
 
+def lsp_diagnostic(d: Diag) -> T.Diagnostic:
+    return T.Diagnostic(range=lsp_range(d.range), message=d.message,
+                        severity=SEVERITY.get(d.severity, T.DiagnosticSeverity.Warning),
+                        code=d.code, source=d.source,
+                        related_information=[T.DiagnosticRelatedInformation(location(r), msg)
+                                             for r, msg in d.related] or None)
+
+
 class UvmLanguageServer(LanguageServer):
     def __init__(self):
         super().__init__("uvm-language-server", __version__)
@@ -70,6 +86,12 @@ class UvmLanguageServer(LanguageServer):
         self.published: set[str] = set()
         self.pending: set[str] = set()
         self._debounce: asyncio.TimerHandle | None = None
+        self.elab_diags: dict[str, list[Diag]] = {}
+        self.elab_status: dict = {"state": "off"}
+        self._elab_run = 0  # bumped by every start or stop; older runs discard their results
+        self._elab_task: asyncio.Future | None = None
+        self._elab_proc: asyncio.subprocess.Process | None = None
+        self._elab_timer: asyncio.TimerHandle | None = None
 
     # -- indexing ------------------------------------------------------------
 
@@ -82,6 +104,8 @@ class UvmLanguageServer(LanguageServer):
         for w in self.ws.sources.warnings if self.ws.sources else []:
             self.window_log_message(T.LogMessageParams(T.MessageType.Warning, w))
         self.after_index()
+        if self.elab_mode != "off":
+            self.start_elaboration()
 
     def schedule(self, path: str):
         self.pending.add(path)
@@ -121,14 +145,163 @@ class UvmLanguageServer(LanguageServer):
             if not isinstance(lint_cfg, dict) or lint_cfg.get("enabled", True):
                 for path, diags in lint(self.ws).items():
                     per_file.setdefault(path, []).extend(diags)
+        for path, diags in self.elab_diags.items():
+            # Parse errors come from both; keep the index's (it adds hints, e.g. for includes).
+            have = per_file.get(path, [])
+            known = {(d.range.line, d.message) for d in have} | {(d.range.line, d.code) for d in have}
+            extra = [d for d in diags if (d.range.line, d.message) not in known
+                     and (d.range.line, d.code) not in known]
+            if extra:
+                per_file.setdefault(path, []).extend(extra)
         for path in self.published - set(per_file):
             self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), []))
         for path, diags in per_file.items():
-            items = [T.Diagnostic(range=lsp_range(d.range), message=d.message,
-                                  severity=SEVERITY.get(d.severity, T.DiagnosticSeverity.Warning),
-                                  code=d.code, source=d.source) for d in diags]
+            items = [lsp_diagnostic(d) for d in diags]
             self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), items))
         self.published = set(per_file)
+
+    # -- elaboration -----------------------------------------------------------
+
+    @property
+    def elab_mode(self) -> str:
+        mode = self.settings.get("elaboration")
+        return mode if mode in ELAB_MODES else "onSave"
+
+    def schedule_elaboration(self, delay: float):
+        """Elaborate `delay` seconds from now unless the setting is off; a later call resets it."""
+        if self.elab_mode == "off":
+            return
+        if self._elab_timer is not None:
+            self._elab_timer.cancel()
+        self._elab_timer = asyncio.get_running_loop().call_later(delay, self.start_elaboration)
+
+    def start_elaboration(self) -> asyncio.Future:
+        """Elaborate now, superseding any run in progress. The task's result is the status."""
+        self.stop_elaboration()
+        self._elab_task = asyncio.ensure_future(self.elaborate(self._elab_run))
+        return self._elab_task
+
+    def stop_elaboration(self):
+        """Cancel a scheduled run and kill a running worker; their results are discarded."""
+        if self._elab_timer is not None:
+            self._elab_timer.cancel()
+            self._elab_timer = None
+        self._elab_run += 1
+        if self._elab_proc is not None:
+            _kill(self._elab_proc)
+        self._elab_proc = None
+
+    def clear_elaboration(self):
+        self.stop_elaboration()
+        self.elab_diags = {}
+        self.publish_diagnostics()
+        self.notify_elaboration({"state": "off"})
+
+    def notify_elaboration(self, status: dict):
+        self.elab_status = {"state": status["state"], "errors": status.get("errors", 0),
+                            "warnings": status.get("warnings", 0), "seconds": status.get("seconds", 0),
+                            "message": status.get("message", ""), "uvm": status.get("uvm", "")}
+        self.protocol.notify("uvm/elaborationStatus", self.elab_status)
+
+    def elab_overrides(self) -> dict[str, str]:
+        """Unsaved editor text the compile uses instead of the files on disk."""
+        files = self.ws.files()
+        return {p: t for p, t in self.documents.items() if is_sv_file(p) or p in files}
+
+    async def elaborate(self, run: int) -> dict | None:
+        """One run in a worker process; None if a newer run or a stop superseded it."""
+        try:
+            return await self._elaborate(run)
+        except Exception as e:  # never leave the client showing "running"
+            log.exception("elaboration")
+            if run != self._elab_run:
+                return None
+            self.notify_elaboration({"state": "failed", "message": f"elaboration failed: {e}"})
+            return self.elab_status
+
+    async def _elaborate(self, run: int) -> dict | None:
+        with self.ws.lock:
+            reason = elab.skip_reason(self.ws)
+            request = None if reason else elab.request_for(self.ws, self.elab_overrides())
+            uvm = elab.uvm_label(self.ws.sources)
+        if reason:
+            self.elab_diags = {}
+            self.publish_diagnostics()
+            self.notify_elaboration({"state": "skipped", "message": f"not elaborated: {reason}", "uvm": uvm})
+            return self.elab_status
+        self.notify_elaboration({"state": "running", "uvm": uvm})
+        t0 = time.monotonic()
+        result = await self.run_worker(run, request)
+        if result is None or run != self._elab_run:
+            return None
+        per_file: dict[str, list[Diag]] = {}
+        notes = []
+        for d in result.get("diagnostics", []):
+            if not d["file"]:
+                notes.append(f"{d['severity']}: {d['message']}")
+                continue
+            related = [(Range(n["file"], n["line"], n["col"], n["line"], n["col"]), n["message"])
+                       for n in d["related"]]
+            per_file.setdefault(d["file"], []).append(
+                Diag(Range(d["file"], d["line"], d["col"], d["endLine"], d["endCol"]), d["message"],
+                     d["severity"], d["code"], elab.SOURCE, related))
+        counts = result.get("counts") or {}
+        if result.get("error"):
+            notes = [f"elaboration failed: {result['error']}"]
+        else:
+            tops = result.get("tops") or []
+            notes.insert(0, f"top: {', '.join(tops)}" if tops else
+                         "no top module; packages and classes were checked")
+            if counts.get("libraryErrors"):
+                notes.append(f"{counts['libraryErrors']} error(s) inside the UVM library are not shown")
+        self.elab_diags = per_file
+        self.publish_diagnostics()
+        self.notify_elaboration({"state": "failed" if result.get("error") else "done",
+                                 "errors": counts.get("errors", 0), "warnings": counts.get("warnings", 0),
+                                 "seconds": round(time.monotonic() - t0, 2), "message": "; ".join(notes),
+                                 "uvm": uvm})
+        return self.elab_status
+
+    async def run_worker(self, run: int, request: dict) -> dict | None:
+        """`python -m uvmls elab-worker` on the request: pyslang holds the GIL while it compiles."""
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [PACKAGE_PARENT] + [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p])
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "uvmls", "elab-worker", stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
+        except OSError as e:
+            return {"error": f"cannot start {sys.executable}: {e}"}
+        if run != self._elab_run:  # superseded while starting
+            _kill(proc)
+            return None
+        self._elab_proc = proc
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(json.dumps(request).encode()), ELAB_TIMEOUT)
+        except asyncio.TimeoutError:
+            return {"error": f"it took longer than {ELAB_TIMEOUT:.0f} s and was stopped"}
+        finally:  # also when the server shuts down and cancels this task
+            _kill(proc)
+            if self._elab_proc is proc:
+                self._elab_proc = None
+        if run != self._elab_run:
+            return None
+        if err.strip():
+            self.window_log_message(T.LogMessageParams(
+                T.MessageType.Log, f"elaboration worker: {err.decode(errors='replace')[-4000:]}"))
+        try:
+            return json.loads(out)
+        except ValueError:
+            return {"error": f"the worker exited with status {proc.returncode} (see the log)"}
+
+
+def _kill(proc: asyncio.subprocess.Process):
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
 
 
 server = UvmLanguageServer()
@@ -162,6 +335,22 @@ def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
 @server.feature(T.INITIALIZED)
 async def initialized(ls: UvmLanguageServer, params: T.InitializedParams):
     await ls.full_index()
+    if ls.elab_mode == "off":
+        ls.notify_elaboration({"state": "off"})
+
+
+@server.feature(T.SHUTDOWN)
+def on_shutdown(ls: UvmLanguageServer, params):
+    ls.stop_elaboration()
+
+
+@server.feature(T.EXIT)
+def on_exit(ls: UvmLanguageServer, params):
+    ls.stop_elaboration()
+
+
+def _without(settings: dict, key: str) -> dict:
+    return {k: v for k, v in settings.items() if k != key}
 
 
 @server.feature(T.WORKSPACE_DID_CHANGE_CONFIGURATION)
@@ -170,8 +359,14 @@ async def did_change_configuration(ls: UvmLanguageServer, params: T.DidChangeCon
     if isinstance(settings, dict) and "uvm" in settings:
         settings = settings["uvm"]
     if isinstance(settings, dict) and settings != ls.settings:
-        ls.settings = settings
-        await ls.full_index()
+        was_off = ls.elab_mode == "off"
+        old, ls.settings = ls.settings, settings
+        if ls.elab_mode == "off":
+            ls.clear_elaboration()
+        if _without(old, "elaboration") != _without(settings, "elaboration"):
+            await ls.full_index()  # elaborates afterwards unless it is off
+        elif was_off and ls.elab_mode != "off":
+            ls.start_elaboration()
 
 
 @server.feature(T.TEXT_DOCUMENT_DID_OPEN)
@@ -184,11 +379,14 @@ def did_open(ls: UvmLanguageServer, params: T.DidOpenTextDocumentParams):
 @server.feature(T.TEXT_DOCUMENT_DID_CHANGE)
 def did_change(ls: UvmLanguageServer, params: T.DidChangeTextDocumentParams):
     ls.schedule(uri_to_path(params.text_document.uri))
+    if ls.elab_mode == "onChange":
+        ls.schedule_elaboration(ELAB_CHANGE_DELAY)
 
 
 @server.feature(T.TEXT_DOCUMENT_DID_SAVE)
 def did_save(ls: UvmLanguageServer, params: T.DidSaveTextDocumentParams):
     ls.schedule(uri_to_path(params.text_document.uri))
+    ls.schedule_elaboration(ELAB_SAVE_DELAY)
 
 
 @server.feature(T.TEXT_DOCUMENT_DID_CLOSE)
@@ -197,8 +395,11 @@ def did_close(ls: UvmLanguageServer, params: T.DidCloseTextDocumentParams):
 
     async def later():
         await asyncio.sleep(0)
+        unsaved = ls.ws.overrides.get(path)
         ls.ws.update_document(path, None)
         ls.after_index()
+        if unsaved is not None and not _same_text(path, unsaved, None):
+            ls.schedule_elaboration(ELAB_SAVE_DELAY)  # the last run compiled the discarded text
     asyncio.ensure_future(later())
 
 
@@ -209,10 +410,13 @@ async def did_change_watched(ls: UvmLanguageServer, params: T.DidChangeWatchedFi
     if structural or filelist_changed:
         await ls.full_index()
         return
-    for c in params.changes:
-        path = uri_to_path(c.uri)
-        if is_sv_file(path) and path not in ls.documents:
-            ls.schedule(path)
+    open_docs = ls.documents
+    changed = [p for p in (uri_to_path(c.uri) for c in params.changes)
+               if is_sv_file(p) and p not in open_docs]
+    for path in changed:
+        ls.schedule(path)
+    if changed:  # an open file's save already triggered it
+        ls.schedule_elaboration(ELAB_SAVE_DELAY)
 
 
 # -- navigation ----------------------------------------------------------------
@@ -438,6 +642,17 @@ def uvm_class_at(ls: UvmLanguageServer, params):
 async def uvm_reindex(ls: UvmLanguageServer, params):
     await ls.full_index()
     return ls.ws.stats()
+
+
+@server.feature("uvm/elaborate")
+async def uvm_elaborate(ls: UvmLanguageServer, params):
+    """Elaborate now, whatever the setting; returns the status once the latest run is done."""
+    task = ls.start_elaboration()
+    status = await task
+    while status is None and ls._elab_task is not task:  # superseded: wait for the newer run
+        task = ls._elab_task
+        status = await task
+    return status or ls.elab_status
 
 
 def main(argv=None):
