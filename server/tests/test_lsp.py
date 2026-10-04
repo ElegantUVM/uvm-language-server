@@ -550,7 +550,7 @@ def test_elaboration_off_results_do_not_outlive_a_fix(client):
     assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
 
 
-def on_change(client, mode="onChange"):
+def set_elaboration(client, mode):
     client.notify("workspace/didChangeConfiguration",
                   {"settings": {"uvm": {"filelists": [FILELIST], "elaboration": mode}}})
 
@@ -561,7 +561,7 @@ def test_an_edit_in_on_change_mode_supersedes_a_run_in_progress(client):
         text = f.read()
     v2 = text.replace("m_cfg.vif", "m_cfg.vfi")
     line = v2[:v2.index("m_cfg.vfi")].count("\n")
-    on_change(client)
+    set_elaboration(client, "onChange")
     client.notify("textDocument/didOpen", {"textDocument": {
         "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
     client.forget("uvm/elaborationStatus", "textDocument/publishDiagnostics")
@@ -582,7 +582,7 @@ def test_an_edit_in_on_change_mode_supersedes_a_run_in_progress(client):
     client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 4},
                                              "contentChanges": [{"text": text}]})
     assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
-    on_change(client, "onSave")
+    set_elaboration(client, "onSave")
     client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
 
 
@@ -590,7 +590,7 @@ def test_elaborate_now_answers_with_the_run_that_superseded_it(client):
     u = uri("agent/alu_driver.svh")
     with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
         text = f.read()
-    on_change(client)
+    set_elaboration(client, "onChange")
     client.notify("textDocument/didOpen", {"textDocument": {
         "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
     client.forget("uvm/elaborationStatus")
@@ -611,7 +611,7 @@ def test_elaborate_now_answers_with_the_run_that_superseded_it(client):
     client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 3},
                                              "contentChanges": [{"text": text}]})
     assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
-    on_change(client, "onSave")
+    set_elaboration(client, "onSave")
     client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
 
 

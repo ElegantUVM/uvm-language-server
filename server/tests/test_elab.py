@@ -229,7 +229,7 @@ def test_errors_the_design_causes_inside_the_library_are_reported(bundled_ws):
         ("alu_scoreboard.svh", 1, "IMP = alu_scoreboard")]
 
 
-def test_errors_the_library_reports_on_its_own_stay_hidden(tmp_path):
+def test_errors_the_library_reports_on_its_own_stay_hidden():
     # UVM 1.2 does not compile cleanly under slang with QUESTA defined; none of that is the design's.
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST], defines={"QUESTA": ""}))
