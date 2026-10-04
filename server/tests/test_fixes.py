@@ -176,6 +176,17 @@ def test_create_no_parent_passes_this(tmp_path, planted):
     assert (fix.title, fix.preferred, fix.safe) == ("Pass 'this' as the parent", True, True)
 
 
+def test_create_no_parent_of_a_uvm_component(tmp_path):
+    text = COMPONENT.replace("  drv m_drv, d2;", "  drv m_drv, d2;\n  uvm_sequencer #(uvm_sequence_item) sqr;").replace(
+        'm_drv = drv::type_id::create("m_drv", this);',
+        'm_drv = drv::type_id::create("m_drv", this);\n    sqr = uvm_sequencer #(uvm_sequence_item)::type_id::create("sqr");')
+    for bundled in (False, True):
+        w = index(tmp_path, {"t.sv": "import uvm_pkg::*;\n" + text}, bundled=bundled)
+        [d] = findings(w, "create-no-parent")
+        assert d.message == "component uvm_sequencer is created without a parent"
+        assert offered(w, d)[0].title == "Pass 'this' as the parent"
+
+
 def test_create_no_parent_after_a_comment(tmp_path):
     # The parent goes right after the name, never into a comment that ends the line.
     planted = COMPONENT.replace('create("m_drv", this)', 'create("m_drv" // its name\n    )')
@@ -234,6 +245,7 @@ class env extends uvm_env;
   `uvm_component_utils(env)
   mon m;
   cfg c;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
   function void build_phase(uvm_phase phase);
     m = mon::type_id::create("m", this);
     c = cfg::type_id::create("c");
@@ -244,6 +256,7 @@ CFG = """class cfg extends uvm_object;
   `uvm_object_utils(cfg)
 
   int n;
+  function new(string name = "cfg"); super.new(name); endfunction
 endclass
 """
 
@@ -573,6 +586,65 @@ endclass
     found = {d.data["cls"]: d for d in findings(w, "factory-ctor")}
     assert set(found) == {"sub_drv", "arg_drv"}
     assert offered(w, found["sub_drv"]) == [] and offered(w, found["arg_drv"]) == []
+
+
+# -- fix-all -------------------------------------------------------------------------------
+
+
+def all_fixed(w, path, code=None):
+    from uvmls.fixes import fix_all
+    ctx = Context(w, FileTexts(), Client(roots=[os.path.dirname(path)]), path)
+    return fix_all(ctx, [d for ds in lint(w).values() for d in ds if d.range.path == path], code)
+
+
+def test_fix_all_makes_a_shared_edit_once(tmp_path):
+    text = ENV.replace("  `uvm_component_utils(mon)\n", "").replace(
+        'm = mon::type_id::create("m", this);', 'm = mon::type_id::create("m", this);\n    m = mon::type_id::create("m2");')
+    w = index(tmp_path, {"env.sv": text, "cfg.svh": CFG})
+    path = str(tmp_path / "env.sv")
+    changes, fixed = all_fixed(w, path)
+    # Two creates of mon, registered once.
+    assert [d.code for d in fixed] == ["create-unregistered", "create-unregistered"] and len(changes) == 1
+    text = apply(FileText.from_disk(path).text, changes)
+    with open(path, "w") as f:
+        f.write(text)
+    w.reindex_all()
+    # Each pass fixes what it can: now the second create's missing parent shows, and is fixed.
+    changes, fixed = all_fixed(w, path, "create-no-parent")
+    assert [d.code for d in fixed] == ["create-no-parent"]
+    after = apply(FileText.from_disk(path).text, changes)
+    assert after.count("`uvm_component_utils(mon)") == 1 and 'create("m2", this)' in after
+
+
+def test_fix_all_only_safe_fixes_in_this_file(tmp_path):
+    text = ENV.replace("\n", '\n`include "cfg.svh"\n', 1) + """class seq extends uvm_sequence;
+  `uvm_object_utils(seq)
+  mon m;
+  function new(string name = "seq"); super.new(name); endfunction
+  task body(); m = mon::type_id::create("m"); endtask
+endclass
+"""
+    w = index(tmp_path, {"env.sv": text, "cfg.svh": CFG.replace("  `uvm_object_utils(cfg)\n", "")})
+    path = str(tmp_path / "env.sv")
+    assert {d.code for ds in lint(w).values() for d in ds} == {"create-unregistered", "create-no-parent"}
+    # cfg is registered in its own file, and the sequence's parent would be null: neither is safe here.
+    assert all_fixed(w, path) == ([], [])
+
+
+def test_fix_all_leaves_a_clashing_edit_for_the_next_pass(tmp_path, monkeypatch):
+    from uvmls import fixes
+    from uvmls.fixes import Fix, TextChange
+    w = index(tmp_path, {"env.sv": ENV.replace('"m", this', '"m"').replace('create("c")', 'create("c", this)'),
+                         "cfg.svh": CFG})
+    path = str(tmp_path / "env.sv")
+    [d] = findings(w, "create-no-parent")
+    later = type(d.range)(d.range.path, d.range.line + 1, 0, d.range.line + 1, 1)
+    other = type(d)(later, "x", "error", "create-unregistered", "uvm", data={"target": "mon"})
+    edits = {"create-no-parent": [TextChange(path, 10, 12, "a")], "create-unregistered": [TextChange(path, 11, 11, "b")]}
+    monkeypatch.setattr(fixes, "fixes_for", lambda ctx, d: [Fix("t", edits[d.code], safe=True)])
+    ctx = Context(w, FileTexts(), Client(roots=[str(tmp_path)]), path)
+    changes, fixed = fixes.fix_all(ctx, [other, d])
+    assert changes == edits["create-no-parent"] and len(fixed) == 1  # the one first in the file wins
 
 
 # -- compile proof: fixed code elaborates with the bundled UVM 1.2 -----------------------

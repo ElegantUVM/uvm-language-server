@@ -503,3 +503,31 @@ def fixes_for(ctx: Context, d) -> list[Fix]:
             fix.changes, fix.preferred, fix.safe = [], False, False
             out.append(fix)
     return out
+
+
+SAFE_CODES = {"create-no-parent", "create-unregistered", "utils-mismatch", "factory-ctor"}  # can have a safe fix
+
+
+def _clash(a: TextChange, b: TextChange) -> bool:
+    """Two edits of a file that cannot both apply: they overlap, or start at the same place."""
+    return a.path == b.path and (a.start == b.start or (a.start < b.end and b.start < a.end))
+
+
+def fix_all(ctx: Context, diags, code: str | None = None) -> tuple[list[TextChange], list]:
+    """The safe fixes of the findings (all, or those of one code) in the file asked about, merged:
+    an edit two findings share is made once; an edit that clashes with one already taken (an earlier
+    finding's) is left for the next pass. Returns the edits and the findings they fix."""
+    taken: list[TextChange] = []
+    fixed = []
+    for d in sorted(diags, key=lambda d: (d.range.line, d.range.col)):
+        if d.source != "uvm" or d.code not in SAFE_CODES or (code and d.code != code):
+            continue
+        fix = next((f for f in fixes_for(ctx, d) if f.safe and f.changes and not f.disabled), None)
+        if fix is None or any(c.path != ctx.path for c in fix.changes):
+            continue
+        new = [c for c in fix.changes if c not in taken]
+        if any(_clash(c, t) for c in new for t in taken):
+            continue
+        taken += new
+        fixed.append(d)
+    return taken, fixed

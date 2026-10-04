@@ -833,8 +833,10 @@ class _Actions:
         return a
 
 
-def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], then: str | None) -> list:
-    """The code actions for a document's diagnostics (call with the workspace locked)."""
+def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], then: str | None,
+                 fix_all: bool = False) -> list:
+    """The code actions for a document's diagnostics, and its fix-all source action if asked for
+    (call with the workspace locked)."""
     path = uri_to_path(uri)
     docs = {uri_to_path(u): (doc.source, doc.version) for u, doc in ls.workspace.text_documents.items()}
     uris = {uri_to_path(u): u for u in ls.workspace.text_documents}
@@ -848,6 +850,7 @@ def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], 
     published = ls.published.get(path, [])
     now = docs.get(path, (None,))[0]
     out = []
+    per_code: dict[str, T.CodeAction | None] = {}
     order = sorted(incoming, key=lambda d: (d.severity or 4, d.range.start.line, d.range.start.character))
     for d in order:
         finding = current_finding(d, published, then, now)
@@ -855,6 +858,19 @@ def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], 
             continue
         for fix in fixes.fixes_for(ctx, finding):
             out.append(make.action(fix, [d]))
+        if finding.code in fixes.SAFE_CODES and finding.source == "uvm":
+            if finding.code not in per_code:
+                changes, fixed = fixes.fix_all(ctx, published, finding.code)
+                per_code[finding.code] = make.action(fixes.Fix(
+                    f"Fix all {len(fixed)} '{finding.code}' problems in this file", changes),
+                    [lsp_diagnostic(x) for x in fixed]) if len(fixed) >= 2 else None
+            if per_code[finding.code] is not None:
+                out.append(per_code[finding.code])
+    if fix_all:
+        changes, fixed = fixes.fix_all(ctx, published)
+        if changes:
+            out.append(make.action(fixes.Fix("Fix all auto-fixable UVM problems", changes),
+                                   [lsp_diagnostic(x) for x in fixed], FIX_ALL_KIND))
     return out
 
 
@@ -867,7 +883,8 @@ async def code_action(ls: UvmLanguageServer, params: T.CodeActionParams):
     only = [str(getattr(k, "value", k)) for k in params.context.only] if params.context.only else None
     incoming = [d for d in params.context.diagnostics if _fixable(ls, path, d)] \
         if _kind_wanted(T.CodeActionKind.QuickFix, only) else []
-    if not incoming:
+    fix_all = _kind_wanted(FIX_ALL_KIND, only)  # asked for by name only (codeActionsOnSave, say)
+    if not incoming and not fix_all:
         return None  # moving the cursor over clean code: no wait, no lock
     then = ls.diag_texts.get(path)  # the text the client's diagnostics describe, before the flush
     if not await ls.fresh():
@@ -875,7 +892,7 @@ async def code_action(ls: UvmLanguageServer, params: T.CodeActionParams):
         return None
     t1 = time.perf_counter()
     with ls.ws.lock:
-        actions = code_actions(ls, uri, incoming, then)
+        actions = code_actions(ls, uri, incoming, then, fix_all)
     log.debug("codeAction: %d action(s) in %.1f ms after waiting %.1f ms", len(actions),
               (time.perf_counter() - t1) * 1000, (t1 - t0) * 1000)
     return actions or None

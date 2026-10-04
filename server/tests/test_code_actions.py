@@ -267,6 +267,29 @@ def test_a_fix_in_another_file(client, tb):
     published(client, env_path, lambda ds: not ds)
 
 
+def test_fix_all(client, tb):
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    doc.change(original.replace('create("m_driver", this)', 'create("m_driver")')
+               .replace('create("m_sequencer", this)', 'create("m_sequencer")'))
+    ds = doc.diagnostics(lambda ds: len(ds) == 2)
+    acts = doc.actions(ds[:1])  # the lightbulb on one of them; never the source action unasked
+    assert [(a["title"], a["kind"], a.get("isPreferred")) for a in acts] == [
+        ("Pass 'this' as the parent", "quickfix", True),
+        ("Fix all 2 'create-no-parent' problems in this file", "quickfix", None)]
+    assert len(acts[1]["diagnostics"]) == 2
+    assert applied(doc.text, edits_for(acts[1], doc.uri, doc.version)) == original
+    # Source Action / codeActionsOnSave ask by kind, and get only that.
+    for only in (["source.fixAll"], ["source"], ["source.fixAll.uvm"]):
+        [a] = doc.actions([], only=only)
+        assert (a["title"], a["kind"]) == ("Fix all auto-fixable UVM problems", "source.fixAll.uvm")
+        assert applied(doc.text, edits_for(a, doc.uri, doc.version)) == original
+    assert doc.actions(ds[:1], only=["quickfix"])[-1]["kind"] == "quickfix"
+    doc.change(original)
+    assert doc.actions([], only=["source.fixAll"]) == []  # nothing to fix: no action
+    doc.close()
+
+
 def test_a_stale_diagnostic_maps_to_the_finding_that_moved():
     # Two findings that read the same: the one the client's (older) diagnostic was about is the
     # one at the line its line moved to, not merely the nearest.

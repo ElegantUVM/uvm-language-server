@@ -149,10 +149,16 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
             if cr.kind != "factory" or cr.type is None:
                 continue
             spec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls)
-            if spec is None or spec.cls is None or spec.cls.library:
+            if spec is None:
                 continue
             target = spec.cls
             at = [cr.range.line, cr.range.col]
+            if target is None or target.library:  # a UVM class: only its parent can be missing
+                role = ws.role(target) if target else ws.role_of_name(spec.name)
+                if role in COMPONENT_ROLES and not cr.parent_expr:
+                    add(cr.range, f"component {cr.type.name} is created without a parent", no_parent,
+                        "create-no-parent", cls=cls.qualname, at=at)
+                continue
             if target.is_virtual:
                 add(cr.range, f"{target.name} is a virtual class and cannot be created", "error",
                     "create-virtual", cls=cls.qualname, at=at, target=target.qualname)
