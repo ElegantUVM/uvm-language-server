@@ -12,8 +12,9 @@ The goal is a DVT-class experience for UVM testbenches that is open, fast, and v
 | **config_db** | Every `set`/`get` grouped by field. Flags a get with no set, and a set/get type mismatch (an exact-type miss that fails silently at runtime). |
 | **Navigation** | Definition, type definition, hover, references, completion, document/workspace symbols, type hierarchy, `` `include `` links and code lenses. Resolution follows class type parameters (`req` in `extends uvm_driver #(my_item)` is a `my_item`), virtual interfaces, clocking blocks, `extern` methods and package scopes. |
 | **Diagnostics** | slang parse errors, plus UVM lint: unregistered class created through the factory, `uvm_object_utils` on a component (or the reverse), `create()` on a virtual class, a config_db get without a set, config_db type mismatch, and a component created without a parent. |
+| **Elaboration** | slang compiles and elaborates the whole design in a separate process and reports what a simulator's elaboration would: type errors, unknown members, wrong argument counts, missing modules or packages, bad overrides (source `slang-elab`). `uvm.elaboration` runs it on save (the default), also as you type (`onChange`, about a second after the last edit, unsaved text included) or never (`off`); **UVM: Elaborate Now** runs it on demand. An error inside a macro expansion points at the macro argument you wrote, or else at the whole macro call in your file. Nothing inside the UVM library is reported. slang's notes ("did you mean", "declared here") are related information. The status bar shows a spinner, then the error and warning counts; its tooltip names the UVM library, the top modules and the time taken. |
 | **Projects** | Reads simulator filelists (`-f`/`-F`, `+incdir+`, `+define+`, `-D`, `$VAR`, and unknown VCS/Xcelium/Questa options are ignored), or works with zero configuration by indexing every `.sv/.svh` file and inferring include paths. The UVM library is `uvm.uvmHome`/`$UVM_HOME` when set, else the project's own `uvm_pkg.sv` (in a filelist, the workspace or an include directory), else the Accellera UVM 1.2 that ships with the extension. Turning off `uvm.useBundledUvm` falls back to a built-in UVM macro shim and class model. |
-| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on findings), `graph`, `topology`, `configdb`, `stats`, all with `--json`. `--uvm-home DIR` or `--no-bundled-uvm` picks the UVM library. |
+| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on findings), `elab -f tb.f [--top T]` (full elaboration; exit code 1 on errors, 2 if it could not run), `graph`, `topology`, `configdb`, `stats`, all with `--json`. `--uvm-home DIR` or `--no-bundled-uvm` picks the UVM library. |
 
 ## Try it
 
@@ -37,6 +38,7 @@ Command line on the example:
 cd examples/alu_tb
 PYTHONPATH=../../server ../../.venv/bin/python -m uvmls topology -f alu_tb.f --test alu_error_test
 PYTHONPATH=../../server ../../.venv/bin/python -m uvmls lint -f alu_tb.f
+PYTHONPATH=../../server ../../.venv/bin/python -m uvmls elab -f alu_tb.f
 ```
 
 Tests: `cd server && ../.venv/bin/python -m pytest -q`. The example tests run on the built-in model, the bundled UVM 1.2, or both. With `UVM_HOME` set, the real-library navigation test uses that UVM instead of the bundled one.
@@ -54,6 +56,7 @@ server/uvmls/
                  type-parameter binding, UVM roles, incremental re-indexing
   views.py       class graph, topology and config_db report (JSON for the webview and CLI)
   lints.py       UVM checks
+  elab.py        full slang compile and elaboration; the server runs it as `python -m uvmls elab-worker`
   navigation.py  definition / hover / references / completion / symbols
   server.py      LSP over stdio (pygls) plus custom requests uvm/classGraph, uvm/topology, uvm/configDb
   cli.py         command line
@@ -83,6 +86,9 @@ On this machine (WSL2, Python 3.14, pyslang 12):
 | Same project, re-index after editing one file | 0.05 s |
 | Same project, class graph / topology (800 instances) | 0.07 s / 0.02 s |
 | Webview first render, same project (package overview) | 1.1 s; drill-down 0.2 s; all 2,000 classes in one diagram 11 s |
+| Elaboration, ALU example with the bundled UVM 1.2: compile + elaborate / through the server's worker process / `elab -f` CLI | 0.09 s / 0.16 s / 0.17 s |
+| Elaboration, synthetic project (no top module, no UVM copy of its own) | 0.6 s compile + elaborate; 0.85 s through the worker; `elab -f` CLI 0.8-1.0 s |
+| Hover while the synthetic project elaborates | median 0.4 ms as when idle, slowest 14 ms (it runs in its own process) |
 
 The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench.
 
@@ -113,4 +119,6 @@ Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this pr
 - The bundled library is UVM 1.2. A project on UVM 1.1d or IEEE 1800.2 should set `uvm.uvmHome` (or `$UVM_HOME`) or list its own `uvm_pkg.sv` in the filelist; otherwise navigation and the class graph show the 1.2 declarations.
 - Every full re-index (startup, a settings change, a file created or deleted) parses the UVM library again: about 0.25 s.
 - With `uvm.useBundledUvm` off, the built-in model knows only the common UVM base classes and a few of their members, has no UVM sources to navigate into, and cannot be elaborated.
+- Elaboration gets the same files, include directories and defines as the index, nothing else from the filelist: options such as `-timescale`, `-y`/`+libext+` library directories or a simulator's compatibility switches are not passed to slang, which is also stricter than most simulators about non-standard code. A design that depends on them can show errors its simulator would not.
+- Elaboration is skipped in discovery mode when a module, interface, program or package is defined in more than one file (usually several testbenches in one workspace); set `uvm.filelists`. A file that exists only in an unsaved editor cannot be a compilation root.
 - No license has been chosen yet (`UNLICENSED` in the manifests); pick one before publishing. The bundled UVM 1.2 is Apache-2.0; its `LICENSE.txt` and `NOTICE.txt` ship next to it and must stay there.
