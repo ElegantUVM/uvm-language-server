@@ -243,6 +243,8 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
     out: dict[str, list[Diag]] = {}
 
     def add(r, msg, severity, code, **data):
+        if code in ws.ignores.get(r.path, {}).get(r.line, ()):
+            return  # `// uvm-lint: ignore code` on its line, or on a line of its own above it
         out.setdefault(r.path, []).append(Diag(r, msg, severity, code, "uvm", data=data or None))
 
     # config_db: a get nothing sets (worth a warning when the code needs the value, or when a set

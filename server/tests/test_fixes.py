@@ -5,6 +5,7 @@ import os
 import pytest
 
 from uvmls.fixes import Client, Context, FileText, FileTexts, fixes_for, indent_unit, insert_member, mask
+from uvmls.indexer import ignore_directives
 from uvmls.lints import lint
 from uvmls.project import ProjectConfig
 from uvmls.workspace import Workspace
@@ -1106,6 +1107,126 @@ def test_fix_all_leaves_a_clashing_edit_for_the_next_pass(tmp_path, monkeypatch)
     ctx = Context(w, FileTexts(), Client(roots=[str(tmp_path)]), path)
     changes, fixed = fixes.fix_all(ctx, [other, d])
     assert changes == edits["create-no-parent"] and len(fixed) == 1  # the one first in the file wins
+
+
+# -- ignore directive ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text,found", [
+    ("x = 1; // uvm-lint: ignore create-new\n", [(0, 0, ("create-new",))]),
+    ("  // uvm-lint: ignore a, b ,c -- why\n\n  // more\n  /* and more */\n  x = 1;\n", [(0, 4, ("a", "b", "c"))]),
+    ("x; /* c */ // uvm-lint: ignore a\n", [(0, 0, ("a",))]),
+    ("/* a\n*/ // uvm-lint: ignore a\nx;\n", [(1, 2, ("a",))]),  # after a block comment's end: no code
+    ("\t\tx;\t//uvm-lint:\tignore\ta\n", [(0, 0, ("a",))]),
+    ("\r\n// uvm-lint: ignore a\r\n\r\nx;\r\n", [(1, 3, ("a",))]),
+    ("\r// uvm-lint: ignore a\r\rx;\r", [(1, 3, ("a",))]),  # slang counts a lone CR as a line end too
+    ("x; // uvm-lint: ignore a", [(0, 0, ("a",))]),
+    ("x;\n// uvm-lint: ignore a", [(1, None, ("a",))]),  # no code after it
+    ("`ifdef A\n// uvm-lint: ignore a\n`endif\nx;\n", [(1, 2, ("a",))]),  # never past the `endif
+    ("// uvm-lint: ignore a\n// uvm-lint: ignore b\nx; // uvm-lint: ignore c\n",
+     [(0, 2, ("a",)), (1, 2, ("b",)), (2, 2, ("c",))]),
+    # Not directives: in a string or a block comment, not at the comment's start, or not the words.
+    ('x = "// uvm-lint: ignore a"; y;\n', []),
+    ("/* // uvm-lint: ignore a */ x;\n/*\n// uvm-lint: ignore b\n*/\ny;\n", []),
+    ("x; // a // uvm-lint: ignore a\nx; // see uvm-lint: ignore a\n", []),
+    ("x; // uvm-lint: ignored a\nx; // uvm-lint: ignore\nx; // UVM-LINT: ignore a\nx; /// uvm-lint: ignore a\n", []),
+])
+def test_ignore_directives(text, found):
+    directives = ignore_directives(text)
+    assert [(d.line, d.target, d.codes) for d in directives] == found
+    assert all(text[:d.end].endswith(d.codes[-1]) for d in directives)
+
+
+IGNORED = """import uvm_pkg::*;
+`define MAKE(T, n) n = T::type_id::create(`"n`")
+class mon extends uvm_monitor;
+  `uvm_component_utils(mon)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class env extends uvm_env;
+  `uvm_component_utils(env)
+  mon a, b, c, d, e, f, g, h;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    a = mon::type_id::create("a");  // uvm-lint: ignore create-no-parent
+    // uvm-lint: ignore no-such-code, create-no-parent
+
+    // (a blank line and a comment above)
+    b = mon::type_id::create("b");  // uvm-lint: ignore create-new
+    `MAKE(mon, c);  // uvm-lint: ignore create-no-parent
+    d = mon::type_id::create("d");  // uvm-lint: ignore create-new, factory-ctor
+    e = mon::type_id::create("e");  /* uvm-lint: ignore create-no-parent */
+    f = mon::type_id::create("// uvm-lint: ignore create-no-parent");
+    g = mon::type_id::create("g");  // uvm-lint: ignore create-no-parents
+    h = mon::type_id::create("h");
+  endfunction
+endclass
+"""
+
+
+def lines_of(w: Workspace, code: str) -> list[int]:
+    return [d.range.line for d in findings(w, code)]
+
+
+def test_lint_leaves_out_ignored_findings(tmp_path):
+    # a: after it; b: on a line of its own above it (with another directive on its line); c: from a
+    # macro, reported where it is used. The others name other codes, or are not directives.
+    w = index(tmp_path, {"t.sv": IGNORED})
+    assert lines_of(w, "create-no-parent") == [17, 18, 19, 20, 21]
+    assert w.ignores == {str(tmp_path / "t.sv"): {
+        11: ["create-no-parent"], 15: ["no-such-code", "create-no-parent", "create-new"],
+        16: ["create-no-parent"], 17: ["create-new", "factory-ctor"], 20: ["create-no-parents"]}}
+    # Without them, every create reports it.
+    (tmp_path / "t.sv").write_text(IGNORED.replace("uvm-lint", "lint"))
+    w.reindex_all()
+    assert lines_of(w, "create-no-parent") == [11, 15, 16, 17, 18, 19, 20, 21] and w.ignores == {}
+
+
+def test_ignore_directives_in_an_editor_and_in_a_shared_header(tmp_path):
+    # A header two roots include: its directives count once whichever root it is read from, and
+    # those in an editor's unsaved text count until it is closed.
+    text = IGNORED.replace("uvm-lint", "lint")
+    w = index(tmp_path, {"h.svh": text, "a.sv": '`include "h.svh"\nmodule a; endmodule\n',
+                         "b.sv": '`include "h.svh"\nmodule b; endmodule\n'})
+    assert len(w.indices) == 2 and lines_of(w, "create-no-parent") == [11, 15, 16, 17, 18, 19, 20, 21]
+    path = str(tmp_path / "h.svh")
+    w.update_document(path, text.replace('create("h");', 'create("h");  // uvm-lint: ignore create-no-parent'))
+    assert lines_of(w, "create-no-parent") == [11, 15, 16, 17, 18, 19, 20]
+    w.update_document(path, None)
+    assert lines_of(w, "create-no-parent") == [11, 15, 16, 17, 18, 19, 20, 21]
+
+
+def test_fix_all_leaves_ignored_findings_alone(tmp_path):
+    text = ENV.replace('"m", this', '"m"').replace('create("c")', 'create("c", this)')
+    w = index(tmp_path, {"env.sv": text.replace('create("m");', 'create("m");\n    m = mon::type_id::create("m2");'),
+                         "cfg.svh": CFG})
+    path = str(tmp_path / "env.sv")
+    assert [d.code for d in all_fixed(w, path)[1]] == ["create-no-parent", "create-no-parent"]
+    with open(path, "w") as f:
+        f.write(text.replace('create("m");', 'create("m");  // uvm-lint: ignore create-no-parent\n'
+                                             '    m = mon::type_id::create("m2");'))
+    w.reindex_all()
+    changes, fixed = all_fixed(w, path)
+    assert [d.range.line for d in fixed] == [13]
+    assert 'create("m");  // uvm' in apply(FileText.from_disk(path).text, changes)
+
+
+def test_the_cli_leaves_out_ignored_findings(tmp_path, capsys):
+    import json
+
+    from uvmls import cli
+    planted = ENV.replace('"m", this', '"m"')
+    index(tmp_path, {"env.sv": planted, "cfg.svh": CFG})
+
+    def run(*args) -> tuple[int, str]:
+        with pytest.raises(SystemExit) as e:
+            cli.main(["lint", str(tmp_path), "--no-bundled-uvm", *args])
+        return e.value.code, capsys.readouterr().out
+
+    status, out = run("--json")
+    assert status == 1 and [(d["code"], d["line"]) for d in json.loads(out)] == [("create-no-parent", 13)]
+    (tmp_path / "env.sv").write_text(planted.replace('create("m");', 'create("m");  // uvm-lint: ignore create-no-parent'))
+    assert run() == (0, "")
 
 
 # -- compile proof: fixed code elaborates with the bundled UVM 1.2 -----------------------

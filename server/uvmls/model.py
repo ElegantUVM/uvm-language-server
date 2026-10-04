@@ -297,4 +297,5 @@ class FileIndex:
     diagnostics: list[Diag] = field(default_factory=list)
     includes: dict[str, list[tuple[str, Range]]] = field(default_factory=dict)
     identifiers: dict[str, list[Range]] = field(default_factory=dict)
+    ignores: dict[str, dict[int, list[str]]] = field(default_factory=dict)  # file -> line -> lint codes ignored there
     library: bool = False

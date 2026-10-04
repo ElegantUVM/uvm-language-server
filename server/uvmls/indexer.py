@@ -8,6 +8,7 @@ that file's root to be re-parsed.
 
 from __future__ import annotations
 
+import bisect
 import os
 import re
 from dataclasses import dataclass, replace
@@ -50,6 +51,10 @@ MACRO_DIRECTIVE_RE = re.compile(  # a `define, or a conditional around one
     r"^[ \t]*`(?:define[ \t]+(?P<name>[A-Za-z_]\w*)(?P<params>\([^)]*\))?.*"
     r"|(?P<cond>ifdef|ifndef|elsif|else|endif)\b[ \t]*(?P<arg>\w*).*)$", re.MULTILINE)
 NEGATED = {"ifdef": "ifndef", "ifndef": "ifdef"}
+EOL_RE = re.compile(r"\r\n|\r|\n")  # as slang counts lines
+MASK_RE = re.compile(r'//[^\r\n]*|/\*.*?(?:\*/|\Z)|"(?P<body>(?:\\.|[^"\\\r\n])*)(?P<close>"?)', re.S)
+NOT_EOL_RE = re.compile(r"[^\r\n]")
+IGNORE_RE = re.compile(r"//\s*uvm-lint:\s*ignore\s+([\w-]+(?:\s*,\s*[\w-]+)*)")  # at a line comment's start
 QUALIFIER_TOKENS = {
     TK.RandKeyword: "rand", TK.RandCKeyword: "randc", TK.StaticKeyword: "static",
     TK.LocalKeyword: "local", TK.ProtectedKeyword: "protected", TK.ConstKeyword: "const",
@@ -85,6 +90,51 @@ def _continued(text: str, start: int) -> bool:
     if end > 0 and text[end - 1] == "\r":
         end -= 1
     return end > 0 and text[end - 1] == "\\"
+
+
+def mask(text: str) -> str:
+    """`text` with comments and the insides of string literals blanked out, newlines kept, so a
+    scan for `;`, brackets or keywords sees only code; offsets do not change."""
+    def blank(m: re.Match) -> str:
+        if m.group(0)[0] == '"':
+            return '"' + NOT_EOL_RE.sub(" ", m.group("body")) + m.group("close")
+        return NOT_EOL_RE.sub(" ", m.group(0))
+    return MASK_RE.sub(blank, text)
+
+
+@dataclass(frozen=True)
+class IgnoreDirective:
+    """`// uvm-lint: ignore code, ...`: lint findings with those codes that start on its target line
+    are not reported."""
+
+    line: int
+    target: int | None  # its own line after code; else the next line with code (None: there is none)
+    codes: tuple[str, ...]
+    end: int  # offset in the text right after its last code, where another one is added
+
+
+def ignore_codes(m: re.Match) -> tuple[str, ...]:
+    return tuple(re.split(r"\s*,\s*", m.group(1)))
+
+
+def ignore_directives(text: str) -> list[IgnoreDirective]:
+    """The ignore directives in a file's text. Only a line comment is one: the same words in a
+    string or a block comment are not. An `ifdef around one does not matter, since a finding can
+    only be on a line that is compiled, and one on a line of its own never reaches past a line of
+    code (an `endif included)."""
+    if "uvm-lint" not in text:
+        return []
+    starts = [0] + [m.end() for m in EOL_RE.finditer(text)]
+    code = [i for i, line in enumerate(EOL_RE.split(mask(text))) if line.strip()]  # lines with code
+    out = []
+    for m in MASK_RE.finditer(text):
+        found = IGNORE_RE.match(m.group(0)) if m.group(0).startswith("//") else None
+        if found:
+            line = bisect.bisect_right(starts, m.start()) - 1
+            i = bisect.bisect_left(code, line)  # a line comment ends its line: code on it is before it
+            target = code[i] if i < len(code) else None
+            out.append(IgnoreDirective(line, target, ignore_codes(found), m.start() + found.end(1)))
+    return out
 
 
 def _shim_text() -> str:
@@ -1181,6 +1231,8 @@ class Extractor:
         return path != self.root and path.startswith(self.library_dirs)
 
     def collect_macros(self):
+        """Every file's `define macros, and its lint ignore directives, from its text (an open
+        editor's, else the disk's)."""
         for path in sorted(self.out.files):
             if not self.library and self.in_library(path):
                 continue  # the library's own root records those
@@ -1191,6 +1243,8 @@ class Extractor:
                         text = f.read()
                 except OSError:
                     continue
+            if not self.library:
+                self.collect_ignores(path, text)
             line, pos = 0, 0
             branches: list[tuple[list, list]] = []  # per open `ifdef: (tested, what this branch needs)
             for m in MACRO_DIRECTIVE_RE.finditer(text):
@@ -1214,6 +1268,15 @@ class Extractor:
                     branches[-1] = (branches[-1][0], [(NEGATED[k], n) for k, n in branches[-1][0]])
                 elif branches and cond == "endif":
                     branches.pop()
+
+    def collect_ignores(self, path: str, text: str):
+        lines: dict[int, list[str]] = {}
+        for d in ignore_directives(text):
+            if d.target is not None:
+                codes = lines.setdefault(d.target, [])
+                codes += [c for c in d.codes if c not in codes]
+        if lines:
+            self.out.ignores[path] = lines
 
     def collect_identifiers(self):
         ids = self.out.identifiers

@@ -20,29 +20,17 @@ from .lints import (
     param_problem, skipped_super, swapped_macro,
 )
 from .elab import SOURCE as ELAB_SOURCE
+from .indexer import EOL_RE, MASK_RE, NOT_EOL_RE, mask
 from .model import Range
 from .project import discover_files, is_bundled, parse_filelist
 from .views import canonical_type, config_db_report, mismatched
 
 log = logging.getLogger("uvmls")
 
-EOL_RE = re.compile(r"\r\n|\r|\n")
 RAW_EOL_RE = re.compile(rb"\r\n|\r|\n")
-MASK_RE = re.compile(r'//[^\r\n]*|/\*.*?(?:\*/|\Z)|"(?P<body>(?:\\.|[^"\\\r\n])*)(?P<close>"?)', re.S)
-NOT_EOL_RE = re.compile(r"[^\r\n]")
 
 
 # -- text ------------------------------------------------------------------------
-
-
-def mask(text: str) -> str:
-    """`text` with comments and the insides of string literals blanked out, newlines kept, so a
-    scan for `;`, brackets or keywords sees only code; offsets do not change."""
-    def blank(m: re.Match) -> str:
-        if m.group(0)[0] == '"':
-            return '"' + NOT_EOL_RE.sub(" ", m.group("body")) + m.group("close")
-        return NOT_EOL_RE.sub(" ", m.group(0))
-    return MASK_RE.sub(blank, text)
 
 
 def opens_comment(text: str) -> bool:

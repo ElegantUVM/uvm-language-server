@@ -150,6 +150,7 @@ class Workspace:
         self.subclasses: dict[str, list[ClassInfo]] = {}
         self.by_path: dict[str, list] = {}
         self.library_files: set[str] = set()
+        self.ignores: dict[str, dict[int, list[str]]] = {}  # file -> line -> lint codes ignored there
         self._role_cache: dict[str, str] = {}
         self._spec_cache: dict = {}
 
@@ -248,6 +249,8 @@ class Workspace:
                 lst = self.macros_by_name.setdefault(m.name, [])
                 if not any(x.range == m.range for x in lst):
                     lst.append(m)
+            for path, lines in idx.ignores.items():
+                self.ignores.setdefault(path, lines)  # a file two roots include: the same text
         # A definition in an `ifdef branch that cannot be in effect (UVM's empty stubs under
         # `ifdef UVM_EMPTY_MACROS) is left out, unless nothing else defines the macro. A macro
         # defined only in such branches (QUESTA under `ifdef MODEL_TECH) is not defined either.
