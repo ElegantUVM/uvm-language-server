@@ -86,3 +86,20 @@ def test_with_real_uvm(uvm_ws):
     assert path.endswith("uvm_driver.svh")
     with open(os.path.join(EXAMPLE, path)) as f:
         assert re.search(r"\bREQ\s+req\b", f.read().splitlines()[int(line) - 1])
+
+
+def _labels(ws, probe):
+    """Completion labels for `probe` in place of the drive_item(req) line of alu_driver's run_phase."""
+    path, line, _, text = position("agent/alu_driver.svh", "drive_item(req);")
+    lines = text.split("\n")
+    lines[line] = probe
+    return {c["label"] for c in Navigator(ws).completions(path, line, len(probe), "\n".join(lines))}
+
+
+def test_completion_offers_what_the_class_can_use(bundled_ws):
+    labels = _labels(bundled_ws, "    seq_item_port.")
+    assert {"get_next_item", "try_next_item", "item_done", "put_response", "connect"} <= labels  # macro-made API
+    assert not labels & {"m_if", "m_if_mask", "m_def_index", "m_provided_by", "m_imp_list"}  # protected, local
+    labels = _labels(bundled_ws, "    this.")
+    assert {"m_cfg", "drive_item", "get_full_name", "get_type_name", "m_children"} <= labels  # m_children: protected
+    assert not labels & {"m_leaf_name", "m_inst_id", "m_main_stream", "m_set_full_name"}  # local to UVM classes

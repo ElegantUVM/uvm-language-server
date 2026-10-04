@@ -12,6 +12,9 @@ from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Vari
 from .workspace import Spec, Workspace
 
 WORD = re.compile(r"[A-Za-z0-9_$]")
+# What the utils and field macros generate in a user class; other generated methods are API
+# (a TLM port's get_next_item, item_done, put ...).
+UTILS_METHODS = {"get_type", "get_object_type", "create", "get_type_name", "__m_uvm_field_automation"}
 
 
 @dataclass
@@ -484,12 +487,12 @@ class Navigator:
             spec = self.type_of(t)
             if spec is None or spec.cls is None:
                 return self._builtin_member_completions(spec.name) if spec else []
-            return self._class_member_completions(spec.cls)
+            return self._class_member_completions(spec.cls, cls)
         if meth is not None:
             for v in meth.args + meth.locals:
                 items.append({"label": v.name, "kind": "variable", "detail": v.type_text})
         if cls is not None:
-            items += self._class_member_completions(cls)
+            items += self._class_member_completions(cls, cls)
         if unit is not None:
             items += self._unit_completions(unit)
         for c in ws.classes:
@@ -508,7 +511,16 @@ class Navigator:
                 out.append(it)
         return out
 
-    def _class_member_completions(self, cls: ClassInfo) -> list[dict]:
+    def _class_member_completions(self, cls: ClassInfo, ctx: ClassInfo | None) -> list[dict]:
+        """The members of `cls` that code in class `ctx` (None: outside any class) can use: a
+        local member only in the class that declares it, a protected one there and in subclasses."""
+        inside = {e.spec.cls.qualname for e in self.ws.chain(ctx) if e.spec.cls} if ctx else set()
+
+        def visible(c: ClassInfo, quals: list[str]) -> bool:
+            if "local" in quals:
+                return ctx is not None and c.qualname == ctx.qualname
+            return "protected" not in quals or c.qualname in inside
+
         out = []
         seen = set()
         for entry in self.ws.chain(cls):
@@ -521,11 +533,13 @@ class Navigator:
                         out.append({"label": name, "kind": "field", "detail": f"{t} ({entry.spec.name})"})
                 continue
             for v in c.properties:
-                if v.name not in seen and not (v.generated and v.name != "p_sequencer"):
+                if v.name not in seen and not (v.generated and v.name != "p_sequencer") \
+                        and visible(c, v.qualifiers):
                     seen.add(v.name)
                     out.append({"label": v.name, "kind": "field", "detail": f"{v.type_text} ({c.name})"})
             for m in c.methods:
-                if m.name not in seen and not m.generated and m.name != "new":
+                if m.name not in seen and not (m.generated and m.name in UTILS_METHODS) \
+                        and m.name != "new" and visible(c, m.qualifiers):
                     seen.add(m.name)
                     out.append({"label": m.name, "kind": "method", "detail": m.signature})
         return out
