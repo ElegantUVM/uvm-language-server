@@ -217,3 +217,107 @@ def insert_member(ft: FileText, cls, item: str) -> TextChange | None:
     gap = eol if nxt.strip() and not mask(nxt).strip().startswith("endclass") else ""
     at = ft.starts[line + 1]
     return TextChange(ft.path, at, at, indent + item + eol + gap)
+
+
+def call_args(masked: str) -> tuple[int, list[tuple[int, int]]] | None:
+    """For the masked text of a call that ends with `)`: the offset of its `(` and the span of each
+    argument (commas inside brackets do not split)."""
+    close = len(masked.rstrip()) - 1
+    if close < 0 or masked[close] != ")":
+        return None
+    depth, start = 0, None
+    for i in range(close, -1, -1):
+        c = masked[i]
+        if c in ")]}":
+            depth += 1
+        elif c in "([{":
+            depth -= 1
+            if depth == 0:
+                start = i
+                break
+    if start is None or masked[start] != "(":
+        return None
+    args, begin, depth = [], start + 1, 0
+    for i in range(start + 1, close):
+        c = masked[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append((begin, i))
+            begin = i + 1
+    if args or masked[begin:close].strip():
+        args.append((begin, close))
+    return start, args
+
+
+IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+
+
+def method_of(ws, cls, name: str):
+    """A class's own method by name: its prototype when the body is out of the class."""
+    return next((m for m in cls.methods if m.name == name), None) or ws.impls.get((cls.qualname, name))
+
+
+def _create_no_parent(ctx: Context, d) -> list[Fix]:
+    """`T::type_id::create("x")` of a component: pass `this` (a component's method) or null."""
+    ws, data = ctx.ws, d.data or {}
+    cls = ws.class_by_qual.get(data.get("cls"))
+    at = list(data.get("at") or ())
+    cr = cls and next((c for c in ws.calls_of(cls).creates if c.kind == "factory"
+                       and c.range.path == d.range.path and [c.range.line, c.range.col] == at), None)
+    if cr is None or cr.parent_expr is not None:
+        return []
+    ft = ctx.files.get(cr.range.path)
+    span = ft and ft.span(cr.range)
+    if span is None:
+        return []
+    masked = mask(ft.text[span[0]:span[1]])
+    parsed = call_args(masked)
+    if parsed is None or "type_id::create" not in masked or len(parsed[1]) != cr.nargs:
+        return []
+    meth = method_of(ws, cls, cr.method)
+    this = ws.is_component(cls) and not (meth and "static" in meth.qualifiers)
+    parent = "this" if this else "null"
+    said = "'this'" if this else "null"
+    start, args = parsed
+    if len(args) == 1:
+        pos = span[0] + args[0][0] + len(masked[args[0][0]:args[0][1]].rstrip())
+        fix = Fix(f"Pass {said} as the parent", [TextChange(ft.path, pos, pos, f", {parent}")])
+    elif not args and cr.target and IDENT_RE.fullmatch(cr.target):
+        pos = span[0] + start + 1
+        fix = Fix(f'Pass "{cr.target}" as the name and {said} as the parent',
+                  [TextChange(ft.path, pos, pos, f'"{cr.target}", {parent}')])
+    else:
+        return []
+    # A component's create cannot compile without a parent: `this` is the one fix, and harmless.
+    fix.preferred = fix.safe = this
+    return [fix]
+
+
+FIXERS = {
+    ("uvm", "create-no-parent"): _create_no_parent,
+}
+
+
+def fixes_for(ctx: Context, d) -> list[Fix]:
+    """The quick fixes for a current diagnostic (a model.Diag), each checked against the index and
+    the text; a fix that would edit a file it may not is dropped, or disabled with the reason."""
+    fixer = FIXERS.get((d.source, d.code))
+    if fixer is None:
+        return []
+    try:
+        found = fixer(ctx, d)
+    except Exception:  # a fix must never break the request
+        log.exception("quick fix for %s", d.code)
+        return []
+    out = []
+    for fix in found:
+        reason = next((r for r in map(ctx.not_editable, {c.path for c in fix.changes}) if r), None)
+        if reason is None:
+            out.append(fix)
+        elif ctx.client.disabled_support:
+            fix.disabled, fix.preferred, fix.safe = reason, False, False
+            out.append(fix)
+    return out

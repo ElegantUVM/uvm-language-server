@@ -30,6 +30,7 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
                        f"{g['type']}; uvm_config_db matches on the exact type, so this get will fail",
                     "warning", "config-db-type-mismatch", field=row["field"], at=[r.line, r.col])
 
+    no_parent = "error" if _parent_required(ws) else "warning"
     for cls in ws.classes:
         if cls.library:
             continue
@@ -60,9 +61,17 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
                 add(cr.range, f"{target.name} is not registered with the factory (add {macro}({target.name}))",
                     "warning", "create-unregistered", target=target.qualname)
             elif ws.is_component(target) and not cr.parent_expr:
-                add(cr.range, f"component {target.name} is created without a parent", "info",
+                add(cr.range, f"component {target.name} is created without a parent", no_parent,
                     "create-no-parent", cls=cls.qualname, at=at)
     return out
+
+
+def _parent_required(ws: Workspace) -> bool:
+    """Whether the UVM in use has no default for create()'s parent, so that leaving it out does
+    not compile (UVM 1.1, 1.2 and 1800.2 all have none; the built-in model cannot tell)."""
+    reg = ws.class_by_qual.get("uvm_pkg::uvm_component_registry")
+    create = next((m for m in reg.methods if m.name == "create"), None) if reg else None
+    return bool(create and len(create.args) > 1 and create.args[1].default is None)
 
 
 def _range(entry: dict):

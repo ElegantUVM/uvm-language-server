@@ -1,0 +1,249 @@
+"""textDocument/codeAction over stdio, as VS Code asks for it."""
+
+import os
+import re
+import shutil
+
+import pytest
+
+from conftest import EXAMPLE
+from test_lsp import Client
+
+CAPABILITIES = {
+    "workspace": {"workspaceEdit": {"documentChanges": True}},
+    "textDocument": {
+        "codeAction": {"dataSupport": True, "disabledSupport": True, "isPreferredSupport": True,
+                       "codeActionLiteralSupport": {"codeActionKind": {"valueSet": [
+                           "", "quickfix", "refactor", "source", "source.fixAll"]}}},
+        "publishDiagnostics": {"dataSupport": True},
+    },
+}
+
+
+def start(root, capabilities=CAPABILITIES, **options) -> Client:
+    c = Client()
+    c.request("initialize", {
+        "processId": None, "rootUri": f"file://{root}", "capabilities": capabilities,
+        "workspaceFolders": [{"uri": f"file://{root}", "name": "tb"}],
+        "initializationOptions": {"settings": {"filelists": [os.path.join(root, "alu_tb.f")],
+                                               "elaboration": "off"}, **options}})
+    c.notify("initialized", {})
+    c.wait_for("uvm/indexChanged")
+    return c
+
+
+@pytest.fixture(scope="module")
+def tb(tmp_path_factory):
+    root = tmp_path_factory.mktemp("cab") / "alu_tb"
+    shutil.copytree(EXAMPLE, root)
+    return str(root)
+
+
+@pytest.fixture(scope="module")
+def client(tb):
+    c = start(tb)
+    yield c
+    c.close()
+
+
+class Doc:
+    """An open document: its text and version as the editor has them."""
+
+    def __init__(self, client: Client, path: str, text: str | None = None):
+        self.client, self.path, self.uri = client, path, f"file://{path}"
+        with open(path, newline="") as f:
+            self.text = f.read() if text is None else text
+        self.version = 1
+        client.forget("textDocument/publishDiagnostics")  # only what this document's text gets
+        client.notify("textDocument/didOpen", {"textDocument": {
+            "uri": self.uri, "languageId": "systemverilog", "version": 1, "text": self.text}})
+
+    def change(self, text: str):
+        self.version += 1
+        self.text = text
+        self.client.forget("textDocument/publishDiagnostics")
+        self.client.notify("textDocument/didChange", {"textDocument": {"uri": self.uri, "version": self.version},
+                                                      "contentChanges": [{"text": text}]})
+
+    def close(self):
+        self.client.notify("textDocument/didClose", {"textDocument": {"uri": self.uri}})
+
+    def diagnostics(self, pred=lambda ds: True, timeout=20):
+        """The next diagnostics published for this document that satisfy pred."""
+        msg = self.client.wait_for("textDocument/publishDiagnostics",
+                                   lambda m: m["params"]["uri"] == self.uri and pred(m["params"]["diagnostics"]),
+                                   timeout=timeout)
+        return msg["params"]["diagnostics"]
+
+    def actions(self, diagnostics, only=None, trigger=1):
+        rng = diagnostics[0]["range"] if diagnostics else {"start": {"line": 0, "character": 0},
+                                                            "end": {"line": 0, "character": 0}}
+        context = {"diagnostics": diagnostics, "triggerKind": trigger}
+        if only is not None:
+            context["only"] = only
+        return self.client.request("textDocument/codeAction", {
+            "textDocument": {"uri": self.uri}, "range": rng, "context": context}) or []
+
+
+def utf16_offset(text: str, line: int, character: int) -> int:
+    starts = [0] + [m.end() for m in re.finditer(r"\r\n|\r|\n", text)]
+    pos, units = starts[line], 0
+    while units < character:
+        units += 2 if ord(text[pos]) > 0xFFFF else 1
+        pos += 1
+    return pos
+
+
+def applied(text: str, edits: list) -> str:
+    for e in sorted(edits, key=lambda e: (e["range"]["start"]["line"], e["range"]["start"]["character"]),
+                    reverse=True):
+        s, t = e["range"]["start"], e["range"]["end"]
+        a, b = utf16_offset(text, s["line"], s["character"]), utf16_offset(text, t["line"], t["character"])
+        text = text[:a] + e["newText"] + text[b:]
+    return text
+
+
+def edits_for(action, uri, version=None) -> list:
+    """The edits an action makes to one document, checking the version it was made for."""
+    edit = action["edit"]
+    if "documentChanges" in edit:
+        [dc] = [dc for dc in edit["documentChanges"] if dc["textDocument"]["uri"] == uri]
+        assert dc["textDocument"]["version"] == version
+        return dc["edits"]
+    return edit["changes"][uri]
+
+
+def test_capabilities(tb):
+    c = Client()
+    try:
+        r = c.request("initialize", {"processId": None, "rootUri": f"file://{tb}", "capabilities": CAPABILITIES})
+        assert r["capabilities"]["codeActionProvider"] == {"codeActionKinds": ["quickfix", "source.fixAll.uvm"],
+                                                           "resolveProvider": False}
+    finally:
+        c.close()
+
+
+def agent(tb):
+    return os.path.join(tb, "agent", "alu_agent.svh")
+
+
+def test_round_trip(client, tb):
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    doc.change(original.replace('create("m_driver", this)', 'create("m_driver")'))
+    [d] = doc.diagnostics(lambda ds: ds)
+    assert d["code"] == "create-no-parent" and d["data"]["cls"] == "alu_pkg::alu_agent"
+    [a] = doc.actions([d])
+    assert (a["title"], a["kind"], a["isPreferred"], a["diagnostics"]) == ("Pass 'this' as the parent", "quickfix", True, [d])
+    doc.change(applied(doc.text, edits_for(a, doc.uri, doc.version)))
+    assert doc.text == original
+    doc.diagnostics(lambda ds: not ds)
+    assert doc.actions([d]) == []  # fixed: the old diagnostic gets nothing
+    doc.close()
+
+
+def test_a_stale_diagnostic_is_fixed_where_its_finding_is_now(client, tb):
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    doc.change(original.replace('create("m_driver", this)', 'create("m_driver")'))
+    [d] = doc.diagnostics(lambda ds: ds)
+    # Three lines above it, then at once a request with the diagnostic the editor still has.
+    doc.change("// one\n// two\n// three\n" + doc.text)
+    [a] = doc.actions([d])
+    edits = edits_for(a, doc.uri, doc.version)  # made for the new version
+    assert edits[0]["range"]["start"]["line"] == d["range"]["start"]["line"] + 3
+    assert applied(doc.text, edits) == "// one\n// two\n// three\n" + original
+    # Fixed by hand meanwhile: the same old diagnostic gets nothing.
+    doc.change(original)
+    assert doc.actions([d]) == []
+    doc.close()
+
+
+def test_an_automatic_request_right_after_an_edit_waits_for_the_index(client, tb):
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    doc.change(original.replace('create("m_driver", this)', 'create("m_driver")'))
+    [d] = doc.diagnostics(lambda ds: ds)
+    # The lightbulb's request (Automatic) can come before the edit is indexed (250 ms later): it
+    # waits for it, instead of answering from where the call was before the edit.
+    doc.change("\n\n" + doc.text)
+    [a] = doc.actions([d], trigger=2)
+    assert applied(doc.text, edits_for(a, doc.uri, doc.version)) == "\n\n" + original
+    doc.diagnostics(lambda ds: ds and ds[0]["range"]["start"]["line"] == d["range"]["start"]["line"] + 2)
+    doc.change(original)
+    doc.close()
+
+
+def test_other_sources_get_nothing(client, tb):
+    doc = Doc(client, agent(tb))
+    foreign = {"range": {"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 5}},
+               "message": "something", "severity": 2, "code": "create-no-parent", "source": "verible"}
+    assert doc.actions([foreign]) == []
+    doc.close()
+
+
+def test_edits_count_utf16_units(client, tb):
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    emoji = original.replace('m_driver    = alu_driver::type_id::create("m_driver", this);',
+                             'm_driver    = alu_driver::type_id::create(/*😀é*/"m_driver", this);')
+    doc.change(emoji.replace('"m_driver", this)', '"m_driver")'))
+    [d] = doc.diagnostics(lambda ds: ds)
+    [a] = doc.actions([d])
+    [e] = edits_for(a, doc.uri, doc.version)
+    line = doc.text.split("\n")[e["range"]["start"]["line"]]
+    assert e["range"]["start"]["character"] == len(line[:line.index('"m_driver")') + 10].encode("utf-16-le")) // 2
+    assert applied(doc.text, [e]) == emoji
+    doc.change(original)
+    doc.close()
+
+
+def test_plain_changes_without_document_changes(tb):
+    c = start(tb, capabilities={"textDocument": {"publishDiagnostics": {"dataSupport": True}}})
+    try:
+        doc = Doc(c, agent(tb))
+        original = doc.text
+        doc.change(original.replace('create("m_driver", this)', 'create("m_driver")'))
+        [d] = doc.diagnostics(lambda ds: ds)
+        [a] = doc.actions([d])
+        assert "documentChanges" not in a["edit"]
+        assert applied(doc.text, edits_for(a, doc.uri)) == original
+        assert "disabled" not in a and a["isPreferred"]
+    finally:
+        c.close()
+
+
+def test_a_client_without_data_support(tb):
+    c = start(tb, capabilities={})
+    try:
+        doc = Doc(c, agent(tb))
+        original = doc.text
+        doc.change(original.replace('create("m_driver", this)', 'create("m_driver")'))
+        [d] = doc.diagnostics(lambda ds: ds)
+        d.pop("data")  # such a client sends it back without
+        [a] = doc.actions([d])
+        assert applied(doc.text, edits_for(a, doc.uri)) == original
+    finally:
+        c.close()
+
+
+def test_a_stale_diagnostic_maps_to_the_finding_that_moved():
+    # Two findings that read the same: the one the client's (older) diagnostic was about is the
+    # one at the line its line moved to, not merely the nearest.
+    from lsprotocol import types as T
+
+    from uvmls.model import Diag, Range
+    from uvmls.server import current_finding
+
+    def diag(line):
+        return Diag(Range("f", line, 4, line, 9), "component a is created without a parent", "error",
+                    "create-no-parent", "uvm", data={"cls": "a", "at": [line, 4]})
+    then = "".join(f"l{i}\n" for i in range(20))
+    now = "\n" * 6 + then  # six lines above both
+    sent = T.Diagnostic(T.Range(T.Position(9, 4), T.Position(9, 9)), "component a is created without a parent",
+                        code="create-no-parent", source="uvm", data={"cls": "a", "at": [9, 4]})
+    found = current_finding(sent, [diag(12), diag(15)], then, now)
+    assert found.range.line == 15  # 9 + 6, although 12 is nearer to 9
+    assert current_finding(sent, [diag(12), diag(15)], None, None).range.line == 12  # no text: nearest
+    other = T.Diagnostic(sent.range, sent.message, code="create-no-parent", source="uvm", data={"cls": "b", "at": [9, 4]})
+    assert current_finding(other, [diag(12)], then, now) is None

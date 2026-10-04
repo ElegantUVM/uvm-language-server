@@ -24,3 +24,4 @@ uvmls = ["shim/*.svh", "third_party/.rules.verible_lint", "third_party/uvm-1.2/*
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:pygls"]

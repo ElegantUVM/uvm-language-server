@@ -12,10 +12,11 @@ from dataclasses import replace
 from urllib.parse import unquote, urlparse
 
 from lsprotocol import types as T
+from pygls.capabilities import get_capability
 from pygls.lsp.server import LanguageServer
 from pygls.uris import from_fs_path
 
-from . import __version__, elab
+from . import __version__, elab, fixes
 from .lints import lint
 from .model import Diag, Range
 from .navigation import Navigator
@@ -110,8 +111,11 @@ class UvmLanguageServer(LanguageServer):
         self.settings: dict = {}
         self.workspace_roots: list[str] = []
         self.published: dict[str, list[Diag]] = {}  # what the client was last sent, per file
+        self.diag_texts: dict[str, str | None] = {}  # the editor text those describe (None: the disk's)
+        self.client_commands: frozenset[str] = frozenset()  # client-side commands it can run
         self.pending: set[str] = set()
         self._debounce: asyncio.TimerHandle | None = None
+        self._flush_task: asyncio.Future | None = None
         self.elab_diags: dict[str, list[Diag]] = {}
         self.elab_texts: dict[str, str] = {}  # the unsaved editor text those diagnostics come from
         self.elab_shown: list[str] = []  # the severity Problems shows for each of them
@@ -145,7 +149,30 @@ class UvmLanguageServer(LanguageServer):
         loop = asyncio.get_running_loop()
         if self._debounce is not None:
             self._debounce.cancel()
-        self._debounce = loop.call_later(DEBOUNCE_SECONDS, lambda: asyncio.ensure_future(self.flush()))
+        self._debounce = loop.call_later(DEBOUNCE_SECONDS, self._start_flush)
+
+    def _start_flush(self):
+        self._debounce = None
+        self._flush_task = asyncio.ensure_future(self.flush())
+
+    async def fresh(self, timeout: float = 2.0) -> bool:
+        """Wait until the index, the lint results and `published` describe the current text of
+        every open document: pending edits are indexed now, without waiting for the debounce.
+        False if that takes longer than `timeout`. Cancelling the wait never cancels the indexing."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while self.pending or (self._flush_task is not None and not self._flush_task.done()):
+            if self._flush_task is None or self._flush_task.done():
+                if self._debounce is not None:
+                    self._debounce.cancel()
+                self._start_flush()
+            try:
+                await asyncio.wait_for(asyncio.shield(self._flush_task), max(0.0, deadline - loop.time()))
+            except asyncio.TimeoutError:
+                return False
+            except Exception:  # logged by the flush itself; the index may not be current
+                return False
+        return True
 
     async def flush(self):
         paths, self.pending = self.pending, set()
@@ -214,6 +241,8 @@ class UvmLanguageServer(LanguageServer):
                 items = [lsp_diagnostic(d) for d in diags]
                 self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), items))
         self.published = per_file
+        # Unchanged or not, what the client shows now describes this text.
+        self.diag_texts = {path: docs.get(path) for path in per_file}
 
     def current_elab_diags(self, path: str, diags: list[Diag], docs: dict[str, str]) -> list[Diag]:
         """The last run's diagnostics for a file, on the lines they are on now: an edit since that run
@@ -444,6 +473,8 @@ def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
     ls.workspace_roots = roots
     opts = params.initialization_options or {}
     ls.settings = opts.get("settings", opts) if isinstance(opts, dict) else {}
+    commands = opts.get("clientCommands") if isinstance(opts, dict) else None
+    ls.client_commands = frozenset(c for c in commands or () if isinstance(c, str))
 
 
 @server.feature(T.INITIALIZED)
@@ -704,6 +735,150 @@ def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
                     title="$(list-tree) show topology", command="uvm.showTopology",
                     arguments=[{"test": sym.name}])))
     return lenses
+
+
+# -- code actions ------------------------------------------------------------------
+
+FIX_ALL_KIND = "source.fixAll.uvm"
+FIX_SOURCES = ("uvm", "slang", elab.SOURCE)
+FIX_DATA = {  # what another source's diagnostic must carry for a quick fix
+    "CouldNotOpenIncludeFile": ("include",), "TypoKeyword": ("from", "to"),
+    "TypoIdentifier": ("from", "to"), "UnknownMember": ("from", "to"),
+}
+POSITION_KEYS = ("at",)  # data that changes when lines move; the finding stays the same
+
+
+def _kind_wanted(kind: str, only: list[str] | None) -> bool:
+    if only is None:
+        return kind == T.CodeActionKind.QuickFix
+    return any(kind == o or kind.startswith(o + ".") for o in only)
+
+
+def _fixable(ls: UvmLanguageServer, path: str, d: T.Diagnostic) -> bool:
+    """Whether a diagnostic the client sent is ours, and one a quick fix may apply to."""
+    if d.source not in FIX_SOURCES:
+        return False
+    if d.source == "uvm":
+        return True  # any lint finding can at least be ignored on its line
+    keys = FIX_DATA.get(str(d.code))
+    if keys is None:
+        return False
+    data = _plain(d.data)
+    if isinstance(data, dict):
+        return all(k in data for k in keys)
+    return any(x.code == d.code and x.message == d.message and x.range.line == d.range.start.line
+               for x in ls.published.get(path, ()))  # a client that does not send data back
+
+
+def _identity(data) -> dict | None:
+    data = _plain(data)
+    return {k: v for k, v in data.items() if k not in POSITION_KEYS} if isinstance(data, dict) else None
+
+
+def current_finding(d: T.Diagnostic, published: list[Diag], then: str | None, now: str | None) -> Diag | None:
+    """The finding, as the index has it now, that a diagnostic from the client is about. The
+    client's copy can predate the latest edit: it is matched on what it says, nearest the line it
+    has moved to since the text `then` that it describes."""
+    data = _identity(d.data)
+    same = [x for x in published if x.source == d.source and x.code == d.code and x.message == d.message
+            and (data is None or _identity(x.data) == data)]
+    if not same:
+        return None
+    line, col = d.range.start.line, d.range.start.character
+    if then is not None and now is not None and then != now:
+        moved = shift_lines(then, now)(line)
+        line = line if moved is None else moved
+    return min(same, key=lambda x: (abs(x.range.line - line), abs(x.range.col - col)))
+
+
+class _Actions:
+    """Turns fixes into LSP code actions for one request."""
+
+    def __init__(self, ls: UvmLanguageServer, files: fixes.FileTexts, uris: dict[str, str]):
+        caps = ls.client_capabilities
+        self.versioned = bool(get_capability(caps, "workspace.workspace_edit.document_changes", False))
+        self.codec = ls.workspace.position_codec
+        self.files, self.uris = files, uris
+
+    def position(self, ft: fixes.FileText, offset: int) -> T.Position:
+        line, col = ft.position(offset)
+        return T.Position(line, self.codec.client_num_units(ft.line(line)[:col]))
+
+    def edit(self, changes: list[fixes.TextChange]) -> T.WorkspaceEdit:
+        by_path: dict[str, list[fixes.TextChange]] = {}
+        for c in changes:
+            by_path.setdefault(c.path, []).append(c)
+        per_file = []
+        for path, cs in by_path.items():
+            ft = self.files.get(path)
+            edits = [T.TextEdit(T.Range(self.position(ft, c.start), self.position(ft, c.end)), c.text)
+                     for c in sorted(cs, key=lambda c: (c.start, c.end))]
+            per_file.append((self.uris.get(path) or path_to_uri(path), ft.version, edits))
+        if self.versioned:  # the client refuses an edit made for an older version of a document
+            return T.WorkspaceEdit(document_changes=[
+                T.TextDocumentEdit(T.OptionalVersionedTextDocumentIdentifier(uri, version), edits)
+                for uri, version, edits in per_file])
+        return T.WorkspaceEdit(changes={uri: edits for uri, _, edits in per_file})
+
+    def action(self, fix: fixes.Fix, diagnostics: list[T.Diagnostic],
+               kind: str = T.CodeActionKind.QuickFix) -> T.CodeAction:
+        a = T.CodeAction(title=fix.title, kind=kind, diagnostics=diagnostics or None,
+                         is_preferred=fix.preferred or None)
+        if fix.changes:
+            a.edit = self.edit(fix.changes)
+        if fix.command:
+            a.command = T.Command(fix.title, fix.command[0], fix.command[1])
+        if fix.disabled:
+            a.disabled = T.CodeActionDisabled(fix.disabled)
+        return a
+
+
+def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], then: str | None) -> list:
+    """The code actions for a document's diagnostics (call with the workspace locked)."""
+    path = uri_to_path(uri)
+    docs = {uri_to_path(u): (doc.source, doc.version) for u, doc in ls.workspace.text_documents.items()}
+    uris = {uri_to_path(u): u for u in ls.workspace.text_documents}
+    uris[path] = uri
+    files = fixes.FileTexts(docs)
+    client = fixes.Client(roots=list(ls.workspace_roots), commands=ls.client_commands,
+                          disabled_support=bool(get_capability(
+                              ls.client_capabilities, "text_document.code_action.disabled_support", False)))
+    ctx = fixes.Context(ls.ws, files, client, path)
+    make = _Actions(ls, files, uris)
+    published = ls.published.get(path, [])
+    now = docs.get(path, (None,))[0]
+    out = []
+    order = sorted(incoming, key=lambda d: (d.severity or 4, d.range.start.line, d.range.start.character))
+    for d in order:
+        finding = current_finding(d, published, then, now)
+        if finding is None:
+            continue
+        for fix in fixes.fixes_for(ctx, finding):
+            out.append(make.action(fix, [d]))
+    return out
+
+
+@server.feature(T.TEXT_DOCUMENT_CODE_ACTION, T.CodeActionOptions(
+    code_action_kinds=[T.CodeActionKind.QuickFix, FIX_ALL_KIND], resolve_provider=False))
+async def code_action(ls: UvmLanguageServer, params: T.CodeActionParams):
+    t0 = time.perf_counter()
+    uri = params.text_document.uri
+    path = uri_to_path(uri)
+    only = [str(getattr(k, "value", k)) for k in params.context.only] if params.context.only else None
+    incoming = [d for d in params.context.diagnostics if _fixable(ls, path, d)] \
+        if _kind_wanted(T.CodeActionKind.QuickFix, only) else []
+    if not incoming:
+        return None  # moving the cursor over clean code: no wait, no lock
+    then = ls.diag_texts.get(path)  # the text the client's diagnostics describe, before the flush
+    if not await ls.fresh():
+        log.debug("codeAction: the index did not catch up in time")
+        return None
+    t1 = time.perf_counter()
+    with ls.ws.lock:
+        actions = code_actions(ls, uri, incoming, then)
+    log.debug("codeAction: %d action(s) in %.1f ms after waiting %.1f ms", len(actions),
+              (time.perf_counter() - t1) * 1000, (t1 - t0) * 1000)
+    return actions or None
 
 
 # -- custom requests ---------------------------------------------------------------
