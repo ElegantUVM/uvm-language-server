@@ -216,7 +216,7 @@ class UvmLanguageServer(LanguageServer):
             log.exception("elaboration")
             if run != self._elab_run:
                 return None
-            self.notify_elaboration({"state": "failed", "message": f"elaboration failed: {e}"})
+            self.notify_elaboration({"state": "failed", "message": f"{type(e).__name__}: {e}"})
             return self.elab_status
 
     async def _elaborate(self, run: int) -> dict | None:
@@ -227,7 +227,7 @@ class UvmLanguageServer(LanguageServer):
         if reason:
             self.elab_diags = {}
             self.publish_diagnostics()
-            self.notify_elaboration({"state": "skipped", "message": f"not elaborated: {reason}", "uvm": uvm})
+            self.notify_elaboration({"state": "skipped", "message": reason, "uvm": uvm})
             return self.elab_status
         self.notify_elaboration({"state": "running", "uvm": uvm})
         t0 = time.monotonic()
@@ -247,7 +247,7 @@ class UvmLanguageServer(LanguageServer):
                      d["severity"], d["code"], elab.SOURCE, related))
         counts = result.get("counts") or {}
         if result.get("error"):
-            notes = [f"elaboration failed: {result['error']}"]
+            notes = [result["error"]]
         else:
             tops = result.get("tops") or []
             notes.insert(0, f"top: {', '.join(tops)}" if tops else

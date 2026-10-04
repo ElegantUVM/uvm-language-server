@@ -15,6 +15,8 @@ let client: LanguageClient | undefined;
 let starting: Promise<boolean> | undefined;
 let status: vscode.StatusBarItem;
 let watcher: vscode.FileSystemWatcher | undefined;
+let lastStats: Stats | undefined;
+let lastElab: ElabStatus | undefined;
 
 /** The Python package lives next to the extension in the source tree, or inside it when packaged. */
 function serverDir(ctx: vscode.ExtensionContext): string {
@@ -96,6 +98,7 @@ function settings(): Record<string, unknown> {
     useBundledUvm: cfg.get("useBundledUvm"),
     exclude: cfg.get("exclude"),
     lint: { enabled: cfg.get("lint.enabled") },
+    elaboration: cfg.get("elaboration"),
   };
 }
 
@@ -219,6 +222,7 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
   };
 
   const c = new LanguageClient("uvmls", "UVM Language Server", serverOptions, clientOptions);
+  lastElab = undefined;
   c.onDidChangeState((e) => {
     if (e.newState === State.Starting) {
       status.text = "$(sync~spin) UVM: indexing";
@@ -231,6 +235,12 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
   c.onNotification("uvm/indexChanged", (p: { stats: Stats }) => {
     updateStatus(p.stats);
     GraphPanel.current?.refresh();
+  });
+  c.onNotification("uvm/elaborationStatus", (e: ElabStatus) => {
+    lastElab = e;
+    if (lastStats) {
+      updateStatus(lastStats);
+    }
   });
   try {
     await c.start();
@@ -273,15 +283,87 @@ function uvmLibrary(s: Stats): string {
   return "built-in model";
 }
 
+interface ElabStatus {
+  state: "running" | "done" | "skipped" | "failed" | "off";
+  errors: number;
+  warnings: number;
+  seconds: number;
+  message: string;
+  uvm: string;
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+/** One line about the last elaboration, for the tooltip and the Elaborate Now message. */
+function elabSummary(e: ElabStatus): string {
+  switch (e.state) {
+    case "running":
+      return `running with ${e.uvm}…`;
+    case "done":
+      return `${plural(e.errors, "error")}, ${plural(e.warnings, "warning")} in ${e.seconds}s with ${e.uvm}` +
+        (e.message ? ` (${e.message})` : "");
+    case "skipped":
+      return `skipped: ${e.message}`;
+    case "failed":
+      return `failed: ${e.message}`;
+    default:
+      return "off (uvm.elaboration)";
+  }
+}
+
+/** The elaboration state next to the class count: a spinner, the counts, or a mark. */
+function elabBadge(e: ElabStatus | undefined): string {
+  switch (e?.state) {
+    case "running":
+      return " $(sync~spin)";
+    case "done": {
+      const parts = [e.errors ? `$(error) ${e.errors}` : "", e.warnings ? `$(warning) ${e.warnings}` : ""];
+      return " " + (parts.filter(Boolean).join(" ") || "$(pass)");
+    }
+    case "skipped":
+      return " $(circle-slash)";
+    case "failed":
+      return " $(warning)";
+    default:
+      return "";
+  }
+}
+
 function updateStatus(s: Stats) {
-  status.text = `$(type-hierarchy) UVM: ${s.classes} classes`;
+  lastStats = s;
+  status.text = `$(type-hierarchy) UVM: ${s.classes} classes${elabBadge(lastElab)}`;
   status.command = "uvm.showClassGraph";
   status.tooltip = new vscode.MarkdownString(
     `**UVM Language Server**\n\n${s.classes} classes in ${s.files} files ` +
       `(${s.mode} mode, indexed in ${s.seconds}s)\n\n` +
       `UVM library: ${uvmLibrary(s)}` +
+      (lastElab ? `\n\nElaboration (slang): ${elabSummary(lastElab)}` : "") +
       "\n\nClick to open the class graph.",
   );
+}
+
+async function elaborateNow(ctx: vscode.ExtensionContext) {
+  if (!(await ensureClient(ctx, true)) || !client) {
+    return;
+  }
+  let e: ElabStatus;
+  try {
+    e = await client.sendRequest<ElabStatus>("uvm/elaborate", {});
+  } catch (err) {
+    vscode.window.showErrorMessage(`UVM elaboration failed: ${err instanceof Error ? err.message : err}`);
+    return;
+  }
+  const text = `UVM elaboration: ${elabSummary(e)}`;
+  if (e.errors || e.warnings) {
+    const choice = await vscode.window.showInformationMessage(text, "Show Problems");
+    if (choice) {
+      vscode.commands.executeCommand("workbench.actions.view.problems");
+    }
+  } else {
+    vscode.window.showInformationMessage(text);
+  }
 }
 
 async function classAtCursor(): Promise<string | undefined> {
@@ -325,6 +407,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
         updateStatus(s);
       }
     }),
+    vscode.commands.registerCommand("uvm.elaborate", () => elaborateNow(ctx)),
     vscode.commands.registerCommand("uvm.setup", () => ensureClient(ctx, true)),
     vscode.commands.registerCommand("uvm.restartServer", async () => {
       await client?.stop().catch(() => undefined);

@@ -93,6 +93,11 @@
         "category": "UVM"
       },
       {
+        "command": "uvm.elaborate",
+        "title": "Elaborate Now",
+        "category": "UVM"
+      },
+      {
         "command": "uvm.restartServer",
         "title": "Restart Language Server",
         "category": "UVM"
@@ -181,6 +186,21 @@
           "type": "boolean",
           "default": true,
           "description": "Report UVM lint findings (config_db mismatches, unregistered classes, ...)."
+        },
+        "uvm.elaboration": {
+          "type": "string",
+          "enum": [
+            "off",
+            "onSave",
+            "onChange"
+          ],
+          "enumDescriptions": [
+            "Only when you run UVM: Elaborate Now.",
+            "After a file is saved and after the workspace is re-indexed.",
+            "Also about a second after you stop typing, without saving."
+          ],
+          "default": "onSave",
+          "markdownDescription": "Compile and elaborate the design with slang, in a separate process, to report what a simulator's elaboration would: type errors, unknown members, wrong argument counts, missing modules or packages and the like (source `slang-elab`). It uses the same files, include directories and defines as the index, and the text of open editors. Needs a real UVM library (the bundled one is fine)."
         }
       }
     }
