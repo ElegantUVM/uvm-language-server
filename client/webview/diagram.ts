@@ -65,6 +65,7 @@ const PAD_X = 14;
 const BEND_RADIUS = 5;
 
 const measureCtx = document.createElement("canvas").getContext("2d")!;
+let diagramCount = 0;
 
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -104,6 +105,9 @@ export class Diagram {
 
   constructor(private container: HTMLElement, private events: DiagramEvents) {
     this.svg = document.createElementNS(SVG_NS, "svg");
+    // An SVG's <style> rules and marker ids apply to the whole page; this id keeps them to this
+    // diagram, so a hidden one painted in the previous theme cannot restyle the visible one.
+    this.svg.id = `diagram-${++diagramCount}`;
     this.svg.setAttribute("class", "diagram");
     this.svg.setAttribute("width", "100%");
     this.svg.setAttribute("height", "100%");
@@ -394,7 +398,7 @@ export class Diagram {
 
   private styles(): string {
     const t = this.theme;
-    return `
+    const css = `
       text { font-family: ${t.font}; fill: ${t.fg}; user-select: none; }
       .stereo { font-size: 11px; fill: ${t.muted}; }
       .name { font-size: 13px; font-weight: 600; }
@@ -421,6 +425,13 @@ export class Diagram {
       .faded { opacity: 0.16; }
       .viewport.animate { transition: transform 220ms ease; }
     `;
+    // Every selector, prefixed with this diagram's id.
+    return css.replace(/[^{}]+(?=\{)/g, (selectors) =>
+      selectors.split(",").map((s) => `#${this.svg.id} ${s.trim()}`).join(", ") + " ");
+  }
+
+  private markerUrl(shape: string, color: string): string {
+    return `url(#${this.svg.id}-${shape}-${color})`;
   }
 
   private markerDefs(): string {
@@ -437,7 +448,7 @@ export class Diagram {
     let out = "";
     for (const key of MARKER_COLORS) {
       for (const [shape, draw] of Object.entries(shapes)) {
-        out += `<marker id="mk-${shape}-${key}" markerWidth="20" markerHeight="16" refX="${refX[shape]}" refY="0" ` +
+        out += `<marker id="${this.svg.id}-${shape}-${key}" markerWidth="20" markerHeight="16" refX="${refX[shape]}" refY="0" ` +
           `viewBox="-2 -8 20 16" orient="auto-start-reverse" markerUnits="userSpaceOnUse" overflow="visible">${draw(colors[key])}</marker>`;
       }
     }
@@ -508,7 +519,7 @@ export class Diagram {
     let out = `<g class="${cls}" data-id="${esc(e.id)}" data-ms="${ms}" data-me="${me}" data-color="${colorKey}">` +
       `<path class="hit" d="${d}"/>` +
       `<path class="line" d="${d}"${e.dash ? ` stroke-dasharray="${e.dash}"` : ""}` +
-      (ms ? ` marker-start="url(#mk-${ms}-${colorKey})"` : "") + (me ? ` marker-end="url(#mk-${me}-${colorKey})"` : "") + "/>";
+      (ms ? ` marker-start="${this.markerUrl(ms, colorKey)}"` : "") + (me ? ` marker-end="${this.markerUrl(me, colorKey)}"` : "") + "/>";
     if (e.label && pe.label) {
       const { x, y, w, h } = pe.label;
       out += `<rect class="elabel-bg" x="${fmt(x)}" y="${fmt(y)}" width="${fmt(w)}" height="${fmt(h)}" rx="2"/>` +
@@ -541,10 +552,10 @@ export class Diagram {
     const line = el.querySelector(".line");
     if (!line) return;
     const g = el as HTMLElement;
-    const key = highlight ? "focus" : g.dataset.color;
+    const key = highlight ? "focus" : g.dataset.color!;
     const ms = g.dataset.ms, me = g.dataset.me;
-    if (ms) line.setAttribute("marker-start", `url(#mk-${ms}-${key})`);
-    if (me) line.setAttribute("marker-end", `url(#mk-${me}-${key})`);
+    if (ms) line.setAttribute("marker-start", this.markerUrl(ms, key));
+    if (me) line.setAttribute("marker-end", this.markerUrl(me, key));
   }
 
   private setHover(el: Element | null) {
