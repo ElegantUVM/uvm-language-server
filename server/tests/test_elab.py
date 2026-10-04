@@ -267,3 +267,4 @@ def test_cli_exit_codes(capsys, monkeypatch, broken_example):
     assert code == 1 and json.loads(out.out)["counts"]["errors"] == 1
     code, out = elab(EXAMPLE, "-f", FILELIST, "--no-bundled-uvm")
     assert code == 2 and "elaboration skipped: the built-in UVM model" in out.err
+    assert "drop --no-bundled-uvm or pass --uvm-home" in out.err

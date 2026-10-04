@@ -52,7 +52,7 @@ def skip_reason(ws) -> str | None:
         return "there are no SystemVerilog sources to elaborate"
     if s.uvm_source == "builtin":
         return ("the built-in UVM model cannot be elaborated; turn uvm.useBundledUvm back on "
-                "or set uvm.uvmHome")
+                "or set uvm.uvmHome (CLI: drop --no-bundled-uvm or pass --uvm-home)")
     if s.mode == "discovery":
         roots = set(s.roots)  # not files merely open in the editor
         compiled = set().union(*(idx.files for r, idx in ws.indices.items() if r in roots))
