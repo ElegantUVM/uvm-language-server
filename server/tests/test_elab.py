@@ -161,6 +161,28 @@ def test_a_listed_uvm_pkg_that_does_not_exist_is_one_error(tmp_path, monkeypatch
     assert [d.code for d in w.user_diagnostics()] == ["io"]
 
 
+def test_uvm_home_replaces_a_uvm_the_project_compiles(tmp_path, monkeypatch):
+    # Two copies of uvm_pkg would be a duplicate definition, and a mix of both in the index.
+    monkeypatch.delenv("UVM_HOME", raising=False)
+    shutil.copytree(BUNDLED_UVM, tmp_path / "own" / "src")
+    (tmp_path / "tb.f").write_text(f"+incdir+own/src\nown/src/uvm_pkg.sv\n-f {FILELIST}\n")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb.f")],
+                              uvm_home=os.path.dirname(BUNDLED_UVM)))
+    assert len(w.classes_by_name["uvm_driver"]) == 1
+    r = elaborate(request_for(w))
+    assert r["error"] is None and r["tops"] == ["tb_top"] and r["diagnostics"] == []
+    # Discovery: the vendored copy's files are not roots either.
+    os.remove(tmp_path / "tb.f")
+    shutil.copytree(EXAMPLE, tmp_path / "alu", ignore=shutil.ignore_patterns("*.f"))
+    monkeypatch.setenv("UVM_HOME", os.path.dirname(BUNDLED_UVM))
+    w.configure(ProjectConfig.from_settings([str(tmp_path)], {}))
+    assert w.sources.uvm_source == "configured" and len(w.classes_by_name["uvm_driver"]) == 1
+    assert skip_reason(w) is None
+    r = elaborate(request_for(w))
+    assert r["error"] is None and r["tops"] == ["tb_top"] and r["diagnostics"] == []
+
+
 def test_filelist_timescale_reaches_slang(tmp_path):
     # Some design elements with a `timescale and some without is an error, unless the
     # simulator is given a default, as filelists often do.

@@ -268,6 +268,24 @@ def _is_uvm_pkg(path: str) -> bool:
             and os.path.isfile(os.path.join(os.path.dirname(path), "uvm_pkg.sv")))
 
 
+def _without_other_uvm(uvm_src: str, uvm_dirs: list[str], roots: list[str], include_dirs: list[str],
+                       warnings: list[str]) -> tuple[list[str], list[str]]:
+    """Roots and include directories without any UVM but uvm_src, which uvm.uvmHome or $UVM_HOME
+    selects: a copy the project compiles itself is left out, as is another path to the same one."""
+    others = [d for d in uvm_dirs if d != uvm_src]
+    others += [norm(d) for d in include_dirs if norm(d) != uvm_src and _is_uvm_src(d)]
+    others = list(dict.fromkeys(others))
+    for d in others:
+        if os.path.realpath(d) != os.path.realpath(uvm_src):
+            warnings.append(f"the UVM library in {d} is left out: {uvm_src} (uvmHome or $UVM_HOME) replaces it")
+
+    def other(p: str) -> bool:
+        return any(p == d or p.startswith(d + os.sep) for d in others)
+    own = os.path.join(uvm_src, "uvm_pkg.sv")
+    return ([r for r in roots if r == own or not other(r)],
+            [d for d in include_dirs if norm(d) == uvm_src or not other(norm(d))])
+
+
 def _read(path: str) -> str:
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -339,6 +357,9 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
             unset = " (is a variable in its path unset?)" if "$" in r else ""
             warnings.append(f"{r} does not exist{unset}; it is not used as the UVM library")
     uvm_dirs = list(dict.fromkeys(os.path.dirname(r) for r in roots if _is_uvm_pkg(r)))
+    if uvm_src:
+        roots, include_dirs = _without_other_uvm(uvm_src, uvm_dirs, roots, include_dirs, warnings)
+        uvm_dirs = [uvm_src]
     project_uvm = next((d for d in uvm_dirs if d != uvm_src), None)
     if not uvm_src and project_uvm is None:
         project_uvm = next((norm(d) for d in include_dirs if _is_uvm_src(d)), None)

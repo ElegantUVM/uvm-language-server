@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 from uvmls.project import (
     BUNDLED_UVM, ProjectConfig, build_source_set, discover_files, is_bundled, parse_filelist,
     uvm_version,
@@ -97,6 +99,39 @@ def test_uvm_library_precedence(tmp_path, monkeypatch):
     assert choice(proj, {"filelists": ["tb.f"]}) == ("project", own, "1.2")
     assert choice(other, {}) == ("bundled", BUNDLED_UVM, "1.2")
     assert choice(other, {"useBundledUvm": False}) == ("builtin", None, None)
+
+
+@pytest.mark.parametrize("how", ["setting", "env"])
+@pytest.mark.parametrize("mode", ["filelist", "discovery"])
+def test_configured_uvm_replaces_the_projects_own(tmp_path, monkeypatch, how, mode):
+    home = fake_uvm(tmp_path / "home", "1.2")
+    proj = tmp_path / "proj"
+    own = fake_uvm(proj / "ext" / "uvm", "1.1d")
+    (proj / "tb.sv").write_text("module tb; endmodule\n")
+    (proj / "tb.f").write_text(f"+incdir+{own}\n{own}/uvm_pkg.sv\ntb.sv\n")
+    settings = {"filelists": ["tb.f"]} if mode == "filelist" else {}
+    monkeypatch.delenv("UVM_HOME", raising=False)
+    if how == "env":
+        monkeypatch.setenv("UVM_HOME", str(tmp_path / "home"))
+    else:
+        settings["uvmHome"] = str(tmp_path / "home")
+    ss = build_source_set(ProjectConfig.from_settings([str(proj)], settings))
+    assert (ss.uvm_source, ss.uvm_dir, ss.uvm_version) == ("configured", home, "1.2")
+    assert ss.roots == [os.path.join(home, "uvm_pkg.sv"), str(proj / "tb.sv")]
+    assert not [d for d in ss.include_dirs if d == own or d.startswith(own + os.sep)]
+    assert ss.warnings == [f"the UVM library in {own} is left out: {home} (uvmHome or $UVM_HOME) replaces it"]
+
+
+def test_the_configured_uvm_under_another_name_is_compiled_once(tmp_path):
+    home = fake_uvm(tmp_path / "home", "1.2")
+    (tmp_path / "link").symlink_to(tmp_path / "home")
+    (tmp_path / "tb.sv").write_text("module tb; endmodule\n")
+    (tmp_path / "tb.f").write_text(f"+incdir+{home}\n{home}/uvm_pkg.sv\ntb.sv\n")
+    ss = build_source_set(ProjectConfig.from_settings(
+        [str(tmp_path)], {"uvmHome": str(tmp_path / "link"), "filelists": ["tb.f"]}))
+    assert ss.uvm_dir == str(tmp_path / "link" / "src")
+    assert ss.roots == [str(tmp_path / "link" / "src" / "uvm_pkg.sv"), str(tmp_path / "tb.sv")]
+    assert home not in ss.include_dirs and ss.warnings == []  # the same kit: nothing to warn about
 
 
 def test_project_uvm_on_include_path_or_behind_uvm_sv(tmp_path):
