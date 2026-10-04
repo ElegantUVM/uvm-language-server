@@ -93,8 +93,9 @@ class _Locator:
         self.files = {os.path.realpath(f): f for f in files}
         prefixes = {os.path.realpath(d) + os.sep: d + os.sep for d in dirs}
         self.prefixes = sorted(((r, d) for r, d in prefixes.items() if r != d), key=lambda x: -len(x[0]))
-        self.library = [norm(p) for p in req.get("library") or []]
+        self.library = [os.path.realpath(p) for p in req.get("library") or []]
         self._paths: dict[int, str | None] = {}
+        self._in_library: dict[str, bool] = {}
 
     def as_given(self, path: str) -> str:
         if path in self.files:
@@ -113,7 +114,10 @@ class _Locator:
         return self._paths[bid]
 
     def is_library(self, path: str) -> bool:
-        return any(path == d or path.startswith(d + os.sep) for d in self.library)
+        if path not in self._in_library:  # by resolved path, whichever alias led to the file
+            real = os.path.realpath(path)
+            self._in_library[path] = any(real == d or real.startswith(d + os.sep) for d in self.library)
+        return self._in_library[path]
 
     def file_loc(self, loc):
         """(location in a file, expanded): a macro argument where the user wrote it, else the
