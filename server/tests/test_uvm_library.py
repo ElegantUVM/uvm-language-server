@@ -2,13 +2,14 @@
 
 import json
 import os
+import shutil
 
 from uvmls.cli import main as cli
 from uvmls.lints import lint
 from uvmls.model import Diag, FileIndex, Range
 from uvmls.navigation import Navigator
 from uvmls.project import BUNDLED_UVM, ProjectConfig
-from uvmls.views import class_graph
+from uvmls.views import class_graph, topology
 from uvmls.workspace import Workspace
 
 from conftest import EXAMPLE, FILELIST, position
@@ -199,3 +200,38 @@ def test_macro_definitions_point_at_their_define(bundled_ws):
                     lines[m.range.path] = f.read().split("\n")
             text = lines[m.range.path][m.range.line]
             assert text[m.range.col:].startswith(name) and "`define" in text[:m.range.col], (m, text)
+
+
+def test_a_file_that_includes_uvm_pkg_does_not_parse_the_library_again(tmp_path):
+    # The library's own root indexes it; as part of a user root it would be user code.
+    tb = tmp_path / "tb.sv"
+    tb.write_text('`include "uvm_macros.svh"\n`include "uvm_pkg.sv"\nmodule tb;\n  import uvm_pkg::*;\n'
+                  "  class t extends uvm_test;\n    task run_phase(uvm_phase phase);\n    endtask\n"
+                  "  endclass\nendmodule\n")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    idx = w.indices[str(tb)]
+    assert len(idx.files) < 20 and os.path.join(BUNDLED_UVM, "uvm_pkg.sv") in idx.files  # still a link
+    assert not [r for rs in idx.identifiers.values() for r in rs if r.path in w.library_files]
+    text = tb.read_text()
+    line = text.split("\n").index("    task run_phase(uvm_phase phase);")
+    refs = Navigator(w).references(str(tb), line, 20, text)
+    assert refs and {r.path for r in refs} == {str(tb)}
+    assert not any(cs.creates or cs.config_db or cs.connects for q, cs in w.calls.items()
+                   if w.class_by_qual[q].library)
+    assert w.find_class("t").base.name == "uvm_test" and w.user_diagnostics() == []
+
+
+def test_topology_is_the_same_when_a_package_includes_uvm_pkg(tmp_path):
+    shutil.copytree(EXAMPLE, tmp_path / "alu")
+    pkg = tmp_path / "alu" / "agent" / "alu_pkg.sv"
+    pkg.write_text('`include "uvm_macros.svh"\n`include "uvm_pkg.sv"\n' + pkg.read_text())
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path / "alu")], filelists=[str(tmp_path / "alu" / "alu_tb.f")]))
+
+    def shape(t):
+        def node(n):
+            return (n["name"], n["type"], [node(c) for c in n["children"]])
+        return node(t["root"]), sorted((c["source"], c["sourcePort"], c["target"], c["targetPort"])
+                                       for c in t["connections"])
+    assert shape(topology(w)) == shape(topology(workspace()))

@@ -33,6 +33,7 @@ UNSET_VAR_RE = re.compile(r"\$\{?(\w+)")  # what os.path.expandvars leaves of an
 BUNDLED_UVM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party", "uvm-1.2", "src")
 UVM_REV_RE = re.compile(r"^[ \t]*`define[ \t]+UVM_(MAJOR|MINOR|FIX)_REV[ \t]+(\S+)", re.MULTILINE)
 IEEE_UVM_RE = re.compile(r'"Accellera:(1800\.2[^:"]*):UVM:([^"]+)"')
+GUARD_RE = re.compile(r"^[ \t]*`ifndef[ \t]+(\w+)[ \t]*\r?\n[ \t]*`define[ \t]+\1\b", re.MULTILINE)
 
 
 @dataclass
@@ -91,6 +92,7 @@ class SourceSet:
     uvm_source: str = "builtin"  # configured | project | bundled | builtin
     uvm_dir: str | None = None  # the UVM src directory in use
     uvm_version: str | None = None
+    uvm_guard: str | None = None  # the include guard of its uvm_pkg.sv (UVM_PKG_SV)
     timescale: str | None = None  # a filelist's -timescale, for elaboration
 
 
@@ -310,6 +312,12 @@ def uvm_version(src_dir: str) -> str | None:
     return None
 
 
+def uvm_guard(src_dir: str) -> str | None:
+    """The include guard of a UVM source directory's uvm_pkg.sv, if it has one."""
+    m = GUARD_RE.search(_read(os.path.join(src_dir, "uvm_pkg.sv")))
+    return m.group(1) if m else None
+
+
 def build_source_set(config: ProjectConfig) -> SourceSet:
     warnings: list[str] = []
     include_dirs = list(config.include_dirs)
@@ -400,4 +408,5 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
     return SourceSet(roots=roots, include_dirs=include_dirs, defines=defines,
                      library_roots=library_roots, has_real_uvm_macros=has_real,
                      mode=mode, warnings=warnings, uvm_source=uvm_source, uvm_dir=uvm_dir,
-                     uvm_version=uvm_version(uvm_dir) if uvm_dir else None, timescale=timescale)
+                     uvm_version=uvm_version(uvm_dir) if uvm_dir else None,
+                     uvm_guard=uvm_guard(uvm_dir) if uvm_dir else None, timescale=timescale)

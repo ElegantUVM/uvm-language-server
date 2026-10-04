@@ -153,7 +153,8 @@ class Workspace:
             self.sources = build_source_set(self.config)
             self.indexer = Indexer(self.sources.include_dirs, self.sources.defines,
                                    use_shim=not self.sources.has_real_uvm_macros,
-                                   library_dirs=sorted({os.path.dirname(r) for r in self.sources.library_roots}))
+                                   library_dirs=sorted({os.path.dirname(r) for r in self.sources.library_roots}),
+                                   library_guard=self.sources.uvm_guard)
             self.indices = {}
             for root in self.sources.roots:
                 self.indices[root] = self.indexer.parse(

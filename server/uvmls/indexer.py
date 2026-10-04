@@ -262,11 +262,14 @@ class Sink:
 
 class Indexer:
     def __init__(self, include_dirs: list[str], defines: dict[str, str], use_shim: bool,
-                 library_dirs=()):
+                 library_dirs=(), library_guard: str | None = None):
         self.include_dirs = list(include_dirs)
         self.defines = dict(defines)
         self.use_shim = use_shim
         self.library_dirs = tuple(os.path.join(d, "") for d in library_dirs)
+        # Predefined in user roots: one that includes uvm_pkg.sv itself does not parse the library
+        # again (its own root indexes it), as user code.
+        self.library_guard = library_guard
         self._shim = _shim_text() if use_shim else ""
         self._real_macros = not use_shim and any(
             os.path.isfile(os.path.join(d, "uvm_macros.svh")) for d in self.include_dirs)
@@ -283,7 +286,10 @@ class Indexer:
         if self.use_shim:
             dirs.append(SHIM_DIR)
         po.additionalIncludePaths = dirs
-        po.predefines = [f"{k}={v}" if v != "" else k for k, v in self.defines.items()]
+        predefines = [f"{k}={v}" if v != "" else k for k, v in self.defines.items()]
+        if self.library_guard and not library:
+            predefines.append(self.library_guard)
+        po.predefines = predefines  # a copy goes to slang: assign the whole list
         bag = ps.Bag([po])
         buffers = []
         if self.use_shim and not library:
@@ -722,7 +728,7 @@ class Extractor:
         if meth is None:
             return None, sink
         meth.is_prototype = False
-        if not self.library:
+        if not self.library and not self.in_library(meth.range.path):
             ctx = BodyCtx(owner, meth.name)
             for st in decl.items:
                 self.walk(st, ctx, sink)
@@ -989,9 +995,13 @@ class Extractor:
             self.out.files.add(target)
             self.out.includes.setdefault(r.path, []).append((target, r))
 
+    def in_library(self, path: str) -> bool:
+        """A file of the UVM library that a user root reaches (its own root indexes it)."""
+        return path != self.root and path.startswith(self.library_dirs)
+
     def collect_macros(self):
         for path in sorted(self.out.files):
-            if not self.library and path != self.root and path.startswith(self.library_dirs):
+            if not self.library and self.in_library(path):
                 continue  # the library's own root records those
             text = self.overrides.get(path)
             if text is None:
@@ -1025,7 +1035,7 @@ class Extractor:
                 if sm.isMacroLoc(loc):
                     continue
             path = self.path_of(loc.buffer)
-            if path is None:
+            if path is None or self.in_library(path):
                 continue
             key = (loc.buffer.id, loc.offset)
             if key in seen:
