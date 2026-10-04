@@ -86,10 +86,10 @@ On this machine (WSL2, Python 3.14, pyslang 12):
 | Same project, re-index after editing one file: bundled UVM 1.2 / built-in model | 0.018 s / 0.011 s |
 | Same project, class graph / topology (800 instances) | 0.07 s / 0.02 s |
 | Webview first render, same project (package overview) | 1.1 s; drill-down 0.2 s; all 2,000 classes in one diagram 11 s |
-| Elaboration, ALU example with the bundled UVM 1.2: compile + elaborate / through the server's worker process / `elab -f` CLI | 0.09 s / 0.16 s / 0.17 s |
-| Elaboration, synthetic project (no top module, no UVM copy of its own) | 0.6 s compile + elaborate; 0.85 s through the worker; `elab -f` CLI 0.8-1.0 s |
+| Elaboration, ALU example with the bundled UVM 1.2: compile + elaborate (with slang's analysis pass) / through the server's worker process / `elab -f` CLI | 0.11 s / 0.20 s / 0.20 s |
+| Elaboration, synthetic project (no top module, no UVM copy of its own) | 0.83 s compile + elaborate; 1.1 s through the worker; `elab -f` CLI 1.2 s |
 | Hover while the synthetic project elaborates | median 0.4 ms as when idle, slowest 14 ms (it runs in its own process) |
-| Peak memory of the elaboration process: ALU example / synthetic project | 0.1 GB / 0.84 GB (freed when it exits) |
+| Peak memory of the elaboration process: ALU example / synthetic project | 0.1 GB / 0.9 GB (freed when it exits) |
 
 The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench.
 
