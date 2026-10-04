@@ -74,7 +74,7 @@ def _elab(ws: Workspace, args) -> int:
         if c.get("omitted"):
             notes.append(f"{c['omitted']} more not listed")
         if c.get("libraryErrors"):
-            notes.append(f"{c['libraryErrors']} error(s) inside the UVM library not shown")
+            notes.append(f"{c['libraryErrors']} error(s) the UVM library reports on its own not shown")
         print(f"{c['errors']} error(s), {c['warnings']} warning(s) in {result['seconds']}s "
               f"({'; '.join(notes)})", file=sys.stderr)
     if result["error"]:

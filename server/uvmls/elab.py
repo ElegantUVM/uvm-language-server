@@ -249,7 +249,8 @@ def _diag(path: str | None, severity: str, code: str, message: str) -> dict:
             "code": code, "message": message, "related": []}
 
 
-def _elaborate(req: dict) -> dict:
+def _compile(req: dict):
+    """(driver, compilation, locator, missing roots) for a request; None if slang rejects its options."""
     overrides = req.get("overrides") or {}
     roots = list(dict.fromkeys(req["roots"]))
     missing = [r for r in roots if not os.path.isfile(r)]  # slang's loader needs the file on disk
@@ -264,7 +265,7 @@ def _elaborate(req: dict) -> dict:
         args += ["--top", top]
     args += list(req.get("args") or []) + [r for r in roots if r not in missing]
     if not d.parseCommandLine(" ".join(_quote(a) for a in args)) or not d.processOptions():
-        return _failed("slang did not accept the elaboration options")
+        return None
     sm = d.sourceManager
     assigned = set()
     for path, text in overrides.items():
@@ -281,21 +282,83 @@ def _elaborate(req: dict) -> dict:
         comp = ast.Compilation(d.createOptionBag())
         for tree in trees:
             comp.addSyntaxTree(tree)
+    return d, comp, loc, missing
+
+
+def _diagnostics(d, comp) -> list:
+    """Elaboration's diagnostics, then those of slang's analysis pass: driver and assertion checks
+    (multiple drivers, mixed assignments, ...), run on the frozen compilation as slang's driver does."""
     diags = list(comp.getAllDiagnostics())
-    # Driver and assertion checks (multiple drivers, mixed assignments, ...) come from slang's
-    # analysis pass, which its driver runs on the frozen compilation after elaboration.
     comp.freeze()
     am = analysis.AnalysisManager(d.analysisOptions)
     am.analyze(comp)
     comp.unfreeze()
-    diags += am.getDiagnostics()
+    return diags + list(am.getDiagnostics())
+
+
+def _specialization(diag) -> str | None:
+    """Where a diagnostic is, when that is inside a specialization of a parameterized class."""
+    path = diag.symbol.hierarchicalPath if diag.symbol is not None else ""
+    return path if "#(" in path else None
+
+
+def _library_errors(req: dict, loc: _Locator) -> set[tuple[str, int, str]]:
+    """(file, line, code) of each error the UVM library reports compiled on its own, with the
+    same include directories, defines and unsaved text."""
+    compiled = _compile(dict(req, roots=[r for r in req["roots"] if loc.is_library(r)], tops=[]))
+    if compiled is None:
+        return set()
+    d, comp, own, _ = compiled
+    out = set()
+    for diag in _diagnostics(d, comp):
+        span = own.span(diag)
+        if span is not None and SEVERITY.get(d.diagEngine.getSeverity(diag.code, diag.location)) == "error":
+            out.add((os.path.realpath(span[0]), span[1], _code(diag.code)))
+    return out
+
+
+def _given_types(diag, loc: _Locator) -> list[dict]:
+    """Related information for the design's types a specialization was given: "T = my_driver"."""
+    scope = diag.symbol.parentScope
+    this = scope.lookupName("this")  # inside a method: its class is the specialization
+    out = []
+    for m in this.type if this is not None and this.type.isClass else scope:
+        if m.kind != ast.SymbolKind.TypeParameter:
+            continue
+        t = m.targetType.type.canonicalType
+        if t.location == ps.SourceLocation.NoLocation:
+            continue  # a built-in type
+        at, _ = loc.file_loc(t.location)
+        path = loc.path(at.buffer)
+        if path and not loc.is_library(path):
+            out.append({"file": path, "line": loc.sm.getLineNumber(at) - 1,
+                        "col": loc.sm.getColumnNumber(at) - 1, "message": f"{m.name} = {t}"})
+    return out
+
+
+def _elaborate(req: dict) -> dict:
+    compiled = _compile(req)
+    if compiled is None:
+        return _failed("slang did not accept the elaboration options")
+    d, comp, loc, missing = compiled
     eng = d.diagEngine
     notes = _Notes(eng, loc)
-    found = [(_diag(r, "error", "io", "cannot read file"), None, None) for r in missing]
-    found += [(_diag(None, "error", "io", str(e)), None, None) for e in d.sourceLoader.errors]
+    found = [(_diag(r, "error", "io", "cannot read file"), None, None, []) for r in missing]
+    found += [(_diag(None, "error", "io", str(e)), None, None, []) for e in d.sourceLoader.errors]
     seen = set()
+
+    def add(diag, sev, severity: str, code: str, span, message: str, related: list[dict]):
+        if (span, code, message) in seen:
+            return  # e.g. a macro that expands its argument twice
+        seen.add((span, code, message))
+        item = _diag(None, severity, code, message)
+        if span is not None:
+            item.update(zip(("file", "line", "col", "endLine", "endCol"), span))
+        found.append((item, diag, sev, related))
+
     library = {"error": 0, "warning": 0}
-    for diag in diags:
+    caused = []  # errors inside the library's parameterized classes: the design's types may cause them
+    for diag in _diagnostics(d, comp):
         sev = eng.getSeverity(diag.code, diag.location)
         code = _code(diag.code)
         if sev == ps.DiagnosticSeverity.Ignored or code == "NoTopModules":
@@ -303,27 +366,30 @@ def _elaborate(req: dict) -> dict:
         severity = SEVERITY.get(sev, "info")
         span = loc.span(diag)
         if span is not None and loc.is_library(span[0]):
-            if severity in library:
+            where = _specialization(diag) if severity == "error" else None
+            if where:
+                caused.append((diag, sev, code, span, where))
+            elif severity in library:
                 library[severity] += 1
             continue
-        message = slang_text(eng.formatMessage, diag)
-        if (span, code, message) in seen:
-            continue  # e.g. a macro that expands its argument twice
-        seen.add((span, code, message))
-        item = _diag(None, severity, code, message)
-        if span is not None:
-            item.update(zip(("file", "line", "col", "endLine", "endCol"), span))
-        found.append((item, diag, sev))
+        add(diag, sev, severity, code, span, slang_text(eng.formatMessage, diag), [])
+    own = _library_errors(req, loc) if caused else set()
+    for diag, sev, code, span, where in caused:
+        if (os.path.realpath(span[0]), span[1], code) in own:
+            library["error"] += 1
+        else:  # e.g. a component constructor without a parent, reported in the factory's registry
+            add(diag, sev, "error", code, span, f"{slang_text(eng.formatMessage, diag)} (in {where})",
+                _given_types(diag, loc))
     found.sort(key=lambda x: (x[0]["file"] or "", x[0]["line"], x[0]["col"], x[0]["code"], x[0]["message"]))
     out, per_file = [], Counter()
-    for item, diag, sev in found:  # the first ones of each file, up to the limits
+    for item, diag, sev, related in found:  # the first ones of each file, up to the limits
         if len(out) < MAX_LISTED and per_file[item["file"]] < MAX_PER_FILE:
             per_file[item["file"]] += 1
             if diag is not None:
-                item["related"] = notes.of(diag, sev)
+                item["related"] = notes.of(diag, sev) + related
             out.append(item)
     return {"diagnostics": out, "tops": [i.name for i in comp.getRoot().topInstances],
-            "counts": _counts([item for item, _, _ in found], library, len(found) - len(out)), "error": None}
+            "counts": _counts([item for item, *_ in found], library, len(found) - len(out)), "error": None}
 
 
 def elaborate(request: dict) -> dict:

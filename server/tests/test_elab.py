@@ -18,6 +18,8 @@ from conftest import EXAMPLE, FILELIST, position
 SERVER_DIR = os.path.dirname(os.path.dirname(__file__))
 DRIVER = os.path.join(EXAMPLE, "agent", "alu_driver.svh")
 AGENT = os.path.join(EXAMPLE, "agent", "alu_agent.svh")
+SCOREBOARD = os.path.join(EXAMPLE, "env", "alu_scoreboard.svh")
+REGISTRY = os.path.join(BUNDLED_UVM, "base", "uvm_registry.svh")
 
 
 def read(path):
@@ -107,12 +109,12 @@ def test_diagnostics_inside_macro_expansions_land_in_the_user_file(bundled_ws):
     # generates a create() that calls new() without the parent argument.
     text = text.replace("`uvm_component_utils(alu_error_driver)", "`uvm_object_utils(alu_error_driver)")
     r = elaborate(request_for(bundled_ws, {DRIVER: text}))
-    assert {d["file"] for d in errors(r)} == {DRIVER}
+    assert {d["file"] for d in errors(r)} == {DRIVER, REGISTRY}  # the factory's create_object() too
     _, line, col, _ = position("agent/alu_driver.svh", '"NOCFG"')
     [arg] = [d for d in errors(r) if d["code"] == "UndeclaredIdentifier"]
     assert (arg["line"], arg["col"], arg["endCol"]) == (line, col, col + len("NOCFG_ID"))
     _, line, col, _ = position("agent/alu_driver.svh", "`uvm_component_utils(alu_error_driver)")
-    body = [d for d in errors(r) if d["code"] == "TooFewArguments"]
+    body = [d for d in errors(r) if d["code"] == "TooFewArguments" and d["file"] == DRIVER]
     assert body and all((d["line"], d["col"], d["endLine"]) == (line, col, line) for d in body)
     assert body[0]["endCol"] == col + len("`uvm_object_utils(alu_error_driver)")
     assert any("expanded from macro 'uvm_object_utils'" in n["message"] for n in body[0]["related"])
@@ -197,6 +199,42 @@ def test_listed_diagnostics_are_capped_and_counted(tmp_path):
     listed = [(os.path.basename(d["file"]), d["line"]) for d in r["diagnostics"]]
     assert listed == [("big.sv", i + 2) for i in range(MAX_PER_FILE)] + [("top.sv", 0)]  # the first of each file
     assert r["counts"]["errors"] == MAX_LISTED + 501 and r["counts"]["omitted"] == MAX_LISTED + 500 - MAX_PER_FILE
+
+
+def without_parent(text):
+    """alu_error_driver (nothing derives from it) with a constructor that takes no parent."""
+    old = "  function new(string name, uvm_component parent);\n    super.new(name, parent);\n  endfunction"
+    i = text.rindex(old)
+    return text[:i] + "  function new(string name);\n    super.new(name, null);\n  endfunction" + text[i + len(old):]
+
+
+def test_errors_the_design_causes_inside_the_library_are_reported(bundled_ws):
+    # The factory's registry calls new(name, parent): the error is in uvm_registry.svh, but the
+    # design's class causes it. Errors the library reports on its own stay hidden.
+    r = elaborate(request_for(bundled_ws, {DRIVER: without_parent(read(DRIVER))}))
+    [d] = r["diagnostics"]
+    assert (d["file"], d["code"]) == (REGISTRY, "TooManyArguments")
+    assert d["message"] == ("too many arguments for 'new'; expected 1 but 2 were provided (in uvm_pkg::"
+                            'uvm_component_registry#(alu_error_driver,"alu_error_driver")::create_component)')
+    _, line, col, _ = position("agent/alu_driver.svh", "alu_error_driver extends")
+    assert d["related"] == [{"file": DRIVER, "line": line, "col": col, "message": "T = alu_error_driver"}]
+    assert (r["counts"]["errors"], r["counts"]["libraryErrors"]) == (1, 0)
+    # An analysis imp whose owner has no write(): slang's "did you mean" points at the design.
+    text = edited(SCOREBOARD, "function void write(", "function void wrte(")
+    [d] = elaborate(request_for(bundled_ws, {SCOREBOARD: text}))["diagnostics"]
+    assert (d["file"], d["code"]) == (os.path.join(BUNDLED_UVM, "tlm1", "uvm_analysis_port.svh"), "UnknownMember")
+    _, line, _, _ = position("env/alu_scoreboard.svh", "function void write(")
+    assert [(os.path.basename(n["file"]), n["line"], n["message"]) for n in d["related"]] == [
+        ("alu_scoreboard.svh", line, "did you mean 'wrte'?"), ("alu_seq_item.svh", 1, "T = alu_seq_item"),
+        ("alu_scoreboard.svh", 1, "IMP = alu_scoreboard")]
+
+
+def test_errors_the_library_reports_on_its_own_stay_hidden(tmp_path):
+    # UVM 1.2 does not compile cleanly under slang with QUESTA defined; none of that is the design's.
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST], defines={"QUESTA": ""}))
+    r = elaborate(request_for(w))
+    assert r["diagnostics"] == [] and r["counts"]["errors"] == 0 and r["counts"]["libraryErrors"] > 0
 
 
 def test_library_diagnostics_are_never_reported(bundled_ws):
@@ -407,6 +445,10 @@ def test_cli_exit_codes(capsys, monkeypatch, broken_example):
                             "'alu_agent_config' [UnknownMember]\n")
     code, out = elab(str(broken_example), "-f", str(broken_example / "alu_tb.f"), "--json")
     assert code == 1 and json.loads(out.out)["counts"]["errors"] == 1
+    drv = broken_example / "agent" / "alu_driver.svh"
+    drv.write_text(without_parent(read(DRIVER)))
+    code, out = elab(str(broken_example), "-f", str(broken_example / "alu_tb.f"))
+    assert code == 1 and "uvm_registry.svh:" in out.out and "1 error(s)" in out.err
     code, out = elab(EXAMPLE, "-f", FILELIST, "--no-bundled-uvm")
     assert code == 2 and "elaboration skipped: the built-in UVM model" in out.err
     assert "drop --no-bundled-uvm or pass --uvm-home" in out.err

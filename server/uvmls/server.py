@@ -256,7 +256,7 @@ class UvmLanguageServer(LanguageServer):
                 listed = len(result.get("diagnostics", []))
                 notes.append(f"Problems lists the first {listed} of {listed + counts['omitted']}")
             if counts.get("libraryErrors"):
-                notes.append(f"{counts['libraryErrors']} error(s) inside the UVM library are not shown")
+                notes.append(f"{counts['libraryErrors']} error(s) the UVM library reports on its own are not shown")
         self.elab_diags = per_file
         self.publish_diagnostics()
         self.notify_elaboration({"state": "failed" if result.get("error") else "done",
