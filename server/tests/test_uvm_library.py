@@ -81,6 +81,21 @@ def test_uvm_macros_are_predefined_when_a_file_does_not_include_them(tmp_path):
     assert w.user_diagnostics() == []
 
 
+def test_parse_warnings_follow_slangs_default_set(tmp_path):
+    # UVM 1.2's `uvm_pack_sarrayN has `foreach (VAR `` [index])`: an IgnoredMacroPaste that
+    # slang's driver, and so elaboration, ignores, at every call of the macros built on it.
+    (tmp_path / "t.sv").write_text(
+        '`include "uvm_macros.svh"\nimport uvm_pkg::*;\nclass c extends uvm_object;\n'
+        "  string s;\n  bit [7:0] a[4];\n"
+        "  function void do_pack(uvm_packer packer);\n"
+        "    `uvm_pack_string(s)\n    `uvm_pack_sarray(a)\n  endfunction\n"
+        "  function void do_unpack(uvm_packer packer);\n    `uvm_unpack_sarray(a)\n  endfunction\n"
+        "endclass\n")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    assert w.user_diagnostics() == []
+
+
 def test_diagnostics_inside_library_files_are_not_reported():
     def diag(path):
         return Diag(Range(path, 0, 0, 0, 1), "header guard", "warning", "HeaderGuardMismatch")

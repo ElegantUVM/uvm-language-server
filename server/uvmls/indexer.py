@@ -942,7 +942,11 @@ class Extractor:
 
     def collect_diagnostics(self):
         eng = ps.DiagnosticEngine(self.sm)
+        eng.setWarningOptions(["default"])  # slang's default warning set, as its driver (and elab) use
         for d in self.tree.diagnostics:
+            sev = eng.getSeverity(d.code, d.location)
+            if sev == ps.DiagnosticSeverity.Ignored:
+                continue
             loc, _ = self.file_loc(d.location)
             path = self.path_of(loc.buffer)
             if path is None:
@@ -957,7 +961,6 @@ class Extractor:
                     end_line, end_col = sm.getLineNumber(e) - 1, sm.getColumnNumber(e) - 1
                     break
             code = str(d.code).replace("DiagCode(", "").rstrip(")")
-            sev = eng.getSeverity(d.code, d.location)
             severity = {ps.DiagnosticSeverity.Error: "error", ps.DiagnosticSeverity.Fatal: "error",
                         ps.DiagnosticSeverity.Warning: "warning"}.get(sev, "info")
             msg = slang_text(eng.formatMessage, d)
