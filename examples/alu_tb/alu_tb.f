@@ -1,6 +1,6 @@
 // Filelist in the same form a simulator takes (VCS / Xcelium / Questa).
-// Add +incdir+$UVM_HOME/src and $UVM_HOME/src/uvm_pkg.sv here to index the real UVM
-// library; without them the language server falls back to its built-in UVM model.
+// UVM is not listed, so the language server indexes the Accellera UVM 1.2 it ships with.
+// To use another UVM, add +incdir+$UVM_HOME/src and $UVM_HOME/src/uvm_pkg.sv here.
 +incdir+agent
 +incdir+env
 +incdir+seq

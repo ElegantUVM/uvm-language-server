@@ -12,8 +12,8 @@ The goal is a DVT-class experience for UVM testbenches that is open, fast, and v
 | **config_db** | Every `set`/`get` grouped by field. Flags a get with no set, and a set/get type mismatch (an exact-type miss that fails silently at runtime). |
 | **Navigation** | Definition, type definition, hover, references, completion, document/workspace symbols, type hierarchy, `` `include `` links and code lenses. Resolution follows class type parameters (`req` in `extends uvm_driver #(my_item)` is a `my_item`), virtual interfaces, clocking blocks, `extern` methods and package scopes. |
 | **Diagnostics** | slang parse errors, plus UVM lint: unregistered class created through the factory, `uvm_object_utils` on a component (or the reverse), `create()` on a virtual class, a config_db get without a set, config_db type mismatch, and a component created without a parent. |
-| **Projects** | Reads simulator filelists (`-f`/`-F`, `+incdir+`, `+define+`, `-D`, `$VAR`, and unknown VCS/Xcelium/Questa options are ignored), or works with zero configuration by indexing every `.sv/.svh` file and inferring include paths. Uses the real UVM library when `uvm.uvmHome`/`$UVM_HOME` is set; otherwise a built-in UVM macro shim and class model. |
-| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on findings), `graph`, `topology`, `configdb`, `stats`, all with `--json`. |
+| **Projects** | Reads simulator filelists (`-f`/`-F`, `+incdir+`, `+define+`, `-D`, `$VAR`, and unknown VCS/Xcelium/Questa options are ignored), or works with zero configuration by indexing every `.sv/.svh` file and inferring include paths. The UVM library is `uvm.uvmHome`/`$UVM_HOME` when set, else the project's own `uvm_pkg.sv` (in a filelist, the workspace or an include directory), else the Accellera UVM 1.2 that ships with the extension. Turning off `uvm.useBundledUvm` falls back to a built-in UVM macro shim and class model. |
+| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on findings), `graph`, `topology`, `configdb`, `stats`, all with `--json`. `--uvm-home DIR` or `--no-bundled-uvm` picks the UVM library. |
 
 ## Try it
 
@@ -39,7 +39,7 @@ PYTHONPATH=../../server ../../.venv/bin/python -m uvmls topology -f alu_tb.f --t
 PYTHONPATH=../../server ../../.venv/bin/python -m uvmls lint -f alu_tb.f
 ```
 
-Tests: `cd server && ../.venv/bin/python -m pytest -q`. Set `UVM_HOME` to also run against the real UVM library.
+Tests: `cd server && ../.venv/bin/python -m pytest -q`. The example tests run on the built-in model, the bundled UVM 1.2, or both. With `UVM_HOME` set, the real-library navigation test uses that UVM instead of the bundled one.
 
 ## Layout
 
@@ -47,7 +47,9 @@ Tests: `cd server && ../.venv/bin/python -m pytest -q`. Set `UVM_HOME` to also r
 server/uvmls/
   project.py     which files to parse: filelists or workspace discovery, include dirs, defines
   indexer.py     slang syntax tree -> plain data (classes, members, creates, config_db, overrides, connects, ...)
-  shim/          UVM macro stand-ins, used when the real UVM library is not configured
+  third_party/uvm-1.2/  Accellera UVM 1.2: src/, LICENSE.txt and NOTICE.txt, unmodified (Apache-2.0);
+                 indexed when no other UVM library is configured or part of the project
+  shim/          UVM macro stand-ins for the built-in model (uvm.useBundledUvm off)
   workspace.py   cross-file semantic layer: name resolution, typedefs, inheritance chains with
                  type-parameter binding, UVM roles, incremental re-indexing
   views.py       class graph, topology and config_db report (JSON for the webview and CLI)
@@ -65,7 +67,8 @@ examples/alu_tb/               a complete small UVM testbench (it elaborates cle
 
 The indexer works on slang's syntax trees, not on an elaborated design. That makes it fast, tolerant of code that does not compile yet, and incremental: an edit re-parses only the root file that includes the edited file.
 UVM macros matter here. Without definitions, slang drops `` `uvm_fatal(...) `` and the statement after `if (...) `uvm_fatal(...)` silently becomes the `if` body.
-The shim in `server/uvmls/shim/` keeps every UVM macro's name and arity with a minimal body. Factory registration is visible through the same `type_id` typedef the real macros produce, so the rest of the code does not care which one is in use.
+By default the real macros come from the bundled UVM 1.2. A file that uses them without `` `include "uvm_macros.svh" `` gets them predefined, because simulators usually have them in scope already.
+With the bundled copy turned off, the shim in `server/uvmls/shim/` keeps every UVM macro's name and arity with a minimal body. Factory registration is visible through the same `type_id` typedef the real macros produce, so the rest of the code does not care which one is in use.
 
 ## Measured performance
 
@@ -73,12 +76,13 @@ On this machine (WSL2, Python 3.14, pyslang 12):
 
 | Workload | Time |
 |---|---|
-| Full Accellera UVM library (86k lines, 353 classes): parse + index | 0.46 s |
-| ALU example (19 classes) | 0.03 s |
-| Synthetic project: 2,400 files, 2,002 classes, plus real UVM | 3.7 s full index |
-| Same project, re-index after editing one file | 0.07 s |
-| Same project, class graph / topology (800 instances) | 0.11 s / 0.03 s |
-| Webview first render, same project (package overview) | 1.4 s; drill-down 0.5 s; all 2,000 classes in one diagram 14 s |
+| Bundled Accellera UVM 1.2 (142 files, 75k lines, 323 classes): parse + index | 0.24 s |
+| ALU example (19 classes), full index: bundled UVM 1.2 / built-in model | 0.30 s / 0.013 s |
+| ALU example, re-index after editing one file: bundled UVM 1.2 / built-in model | 0.019 s / 0.004 s |
+| Synthetic project: 2,400 files, 2,002 classes, plus the bundled UVM 1.2 | 3.4 s full index |
+| Same project, re-index after editing one file | 0.05 s |
+| Same project, class graph / topology (800 instances) | 0.07 s / 0.02 s |
+| Webview first render, same project (package overview) | 1.1 s; drill-down 0.2 s; all 2,000 classes in one diagram 11 s |
 
 The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench.
 
@@ -106,4 +110,7 @@ Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this pr
 - Topology and config_db matching are static approximations. Runtime-computed instance names, `for` loops creating arrays, and knobs set in derived tests are shown as conditional or by expression, not evaluated.
 - References are name-based (all identifier occurrences), not type-resolved.
 - Code inside inactive `` `ifdef `` branches is not indexed. Defines come from the filelist and `uvm.defines`.
-- No license has been chosen yet (`UNLICENSED` in the manifests); pick one before publishing.
+- The bundled library is UVM 1.2. A project on UVM 1.1d or IEEE 1800.2 should set `uvm.uvmHome` (or `$UVM_HOME`) or list its own `uvm_pkg.sv` in the filelist; otherwise navigation and the class graph show the 1.2 declarations.
+- Every full re-index (startup, a settings change, a file created or deleted) parses the UVM library again: about 0.25 s.
+- With `uvm.useBundledUvm` off, the built-in model knows only the common UVM base classes and a few of their members, has no UVM sources to navigate into, and cannot be elaborated.
+- No license has been chosen yet (`UNLICENSED` in the manifests); pick one before publishing. The bundled UVM 1.2 is Apache-2.0; its `LICENSE.txt` and `NOTICE.txt` ship next to it and must stay there.
