@@ -235,3 +235,35 @@ def test_topology_is_the_same_when_a_package_includes_uvm_pkg(tmp_path):
         return node(t["root"]), sorted((c["source"], c["sourcePort"], c["target"], c["targetPort"])
                                        for c in t["connections"])
     assert shape(topology(w)) == shape(topology(workspace()))
+
+
+def test_uvm_macros_go_to_the_definition_in_effect(bundled_ws):
+    # uvm_object_defines.svh first defines empty stubs under `ifdef UVM_EMPTY_MACROS.
+    nav = Navigator(bundled_ws)
+    objdefs = os.path.join(BUNDLED_UVM, "macros", "uvm_object_defines.svh")
+    path, ln, col, text = position("agent/alu_driver.svh", "`uvm_component_utils", 1)
+    assert [(r.path, r.line + 1) for r in nav.definition(path, ln, col, text)] == [(objdefs, 330)]
+    assert nav.hover(path, ln, col, text).startswith("```systemverilog\n`define uvm_component_utils(T) \\")
+    # The stub of uvm_field_array_enum takes two arguments; the real macro takes three.
+    items = {c["label"]: c for c in nav.completions(path, ln, col + len("uvm_"), text)}
+    assert items["uvm_field_array_enum"]["snippet"] == "uvm_field_array_enum(${1:T}, ${2:ARG}, ${3:FLAG})"
+    w = workspace(defines={"UVM_EMPTY_MACROS": ""})
+    assert [(r.path, r.line + 1) for r in Navigator(w).definition(path, ln, col, text)] == [(objdefs, 36)]
+
+
+def test_macro_definitions_know_their_ifdef_branches(tmp_path):
+    (tmp_path / "defs.svh").write_text(
+        "`define USE_FAST\n"
+        "`ifdef USE_FAST\n`define DELAY 1\n`else\n`define DELAY 10\n`endif\n"
+        "`ifdef NOWHERE\n`define MODE 0\n`elsif ALSO_NOWHERE\n`define MODE 1\n`else\n"
+        "`define MODE 2 \\\n  `ifdef X \\\n  1\n`endif\n")
+    (tmp_path / "top.sv").write_text('`include "defs.svh"\nmodule top; endmodule\n')
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
+    mode = [m for idx in w.indices.values() for m in idx.macros if m.name == "MODE"]
+    assert [m.requires for m in mode] == [
+        (("ifdef", "NOWHERE"),), (("ifndef", "NOWHERE"), ("ifdef", "ALSO_NOWHERE")),
+        (("ifndef", "NOWHERE"), ("ifndef", "ALSO_NOWHERE"))]  # the `ifdef in its body is not a branch
+    assert [m.range.line for m in w.macros_by_name["MODE"]] == [11]
+    # USE_FAST is defined, so either DELAY may be in effect: both stay.
+    assert [m.range.line for m in w.macros_by_name["DELAY"]] == [2, 4]

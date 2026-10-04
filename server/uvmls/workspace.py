@@ -97,6 +97,15 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
     return out
 
 
+def _never(cond: tuple[str, str], given: set[str], known: set[str]) -> bool:
+    """Whether an `ifdef branch condition is false whatever order files are read in: `ifndef of a
+    macro the configuration defines, or `ifdef of one nothing defines."""
+    kind, name = cond
+    if not name:
+        return False  # an expression
+    return name in given if kind == "ifndef" else name not in known
+
+
 def _same_text(path: str, a: str | None, b: str | None) -> bool:
     """Whether two versions of a file are equal; None stands for the file on disk."""
     if a is None and b is None:
@@ -237,6 +246,17 @@ class Workspace:
                 lst = self.macros_by_name.setdefault(m.name, [])
                 if not any(x.range == m.range for x in lst):
                     lst.append(m)
+        # A definition in an `ifdef branch that cannot be in effect (UVM's empty stubs under
+        # `ifdef UVM_EMPTY_MACROS) is left out, unless nothing else defines the macro. A macro
+        # defined only in such branches (QUESTA under `ifdef MODEL_TECH) is not defined either.
+        given = set(self.sources.defines) if self.sources else set()
+        live, known = self.macros_by_name, None
+        while known != set(live) | given:
+            known = set(live) | given
+            live = {name: kept for name, defs in self.macros_by_name.items()
+                    if (kept := [m for m in defs if not any(_never(c, given, known) for c in m.requires)])}
+        for name, defs in self.macros_by_name.items():
+            self.macros_by_name[name] = live.get(name) or defs
         for cls in self.classes:
             for td in cls.typedefs:
                 self.typedefs_by_name.setdefault(td.name, []).append(td)

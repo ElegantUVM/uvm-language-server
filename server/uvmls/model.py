@@ -250,6 +250,7 @@ class MacroDef:
     params: str | None
     range: Range
     text: str
+    requires: tuple[tuple[str, str], ...] = ()  # the `ifdef/`ifndef NAME branches it is inside
 
 
 @dataclass

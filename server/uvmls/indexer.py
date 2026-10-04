@@ -45,7 +45,10 @@ BUILTIN_TYPE_KINDS = {
     K.SequenceType, K.Untyped, K.TypeReference,
 }
 WORDISH = re.compile(r"[A-Za-z0-9_$]")
-DEFINE_RE = re.compile(r"^[ \t]*`define[ \t]+([A-Za-z_]\w*)(\([^)]*\))?(.*)$", re.MULTILINE)
+MACRO_DIRECTIVE_RE = re.compile(  # a `define, or a conditional around one
+    r"^[ \t]*`(?:define[ \t]+(?P<name>[A-Za-z_]\w*)(?P<params>\([^)]*\))?.*"
+    r"|(?P<cond>ifdef|ifndef|elsif|else|endif)\b[ \t]*(?P<arg>\w*).*)$", re.MULTILINE)
+NEGATED = {"ifdef": "ifndef", "ifndef": "ifdef"}
 QUALIFIER_TOKENS = {
     TK.RandKeyword: "rand", TK.RandCKeyword: "randc", TK.StaticKeyword: "static",
     TK.LocalKeyword: "local", TK.ProtectedKeyword: "protected", TK.ConstKeyword: "const",
@@ -63,6 +66,14 @@ def slang_text(get, *args) -> str:
         return get(*args)
     except UnicodeDecodeError as e:
         return e.object.decode("utf-8", "replace")
+
+
+def _continued(text: str, start: int) -> bool:
+    """Whether the line starting at `start` goes on from the one before it (a `define body)."""
+    end = start - 1  # the newline before it
+    if end > 0 and text[end - 1] == "\r":
+        end -= 1
+    return end > 0 and text[end - 1] == "\\"
 
 
 def _shim_text() -> str:
@@ -1011,14 +1022,28 @@ class Extractor:
                 except OSError:
                     continue
             line, pos = 0, 0
-            for m in DEFINE_RE.finditer(text):
+            branches: list[tuple[list, list]] = []  # per open `ifdef: (tested, what this branch needs)
+            for m in MACRO_DIRECTIVE_RE.finditer(text):
                 line += text.count("\n", pos, m.start())
                 pos = m.start()
-                col = m.start(1) - (text.rfind("\n", 0, m.start(1)) + 1)
-                self.out.macros.append(MacroDef(
-                    m.group(1), m.group(2)[1:-1] if m.group(2) else None,
-                    Range(path, line, col, line, col + len(m.group(1))),
-                    m.group(0).strip()))
+                if _continued(text, pos):
+                    continue  # inside a multi-line `define
+                cond, arg = m.group("cond"), (m.group("cond"), m.group("arg"))
+                if cond is None:
+                    name, params = m.group("name"), m.group("params")
+                    col = m.start("name") - pos
+                    self.out.macros.append(MacroDef(
+                        name, params[1:-1] if params else None, Range(path, line, col, line, col + len(name)),
+                        m.group(0).strip(), tuple(c for _, needs in branches for c in needs)))
+                elif cond in NEGATED:
+                    branches.append(([arg], [arg]))
+                elif branches and cond == "elsif":
+                    tested = branches[-1][0] + [("ifdef", arg[1])]
+                    branches[-1] = (tested, [(NEGATED[k], n) for k, n in tested[:-1]] + tested[-1:])
+                elif branches and cond == "else":
+                    branches[-1] = (branches[-1][0], [(NEGATED[k], n) for k, n in branches[-1][0]])
+                elif branches and cond == "endif":
+                    branches.pop()
 
     def collect_identifiers(self):
         ids = self.out.identifiers
