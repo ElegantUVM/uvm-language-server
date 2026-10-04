@@ -7,9 +7,9 @@ Two modes:
     workspace is found, every directory holding one becomes an include directory,
     and the roots are the files that no other file includes.
 
-The UVM library is, in order of preference: uvm.uvmHome or $UVM_HOME, the UVM
-the project already compiles, the Accellera UVM 1.2 bundled with this package,
-or (with the bundled copy turned off) the built-in model in uvm.py.
+The UVM library is, in order of preference: uvm.uvmHome, $UVM_HOME, the UVM the
+project already compiles, the Accellera UVM 1.2 bundled with this package, or
+(with the bundled copy turned off) the built-in model in uvm.py.
 """
 
 from __future__ import annotations
@@ -41,7 +41,8 @@ class ProjectConfig:
     filelists: list[str] = field(default_factory=list)
     include_dirs: list[str] = field(default_factory=list)
     defines: dict[str, str] = field(default_factory=dict)
-    uvm_home: str | None = None
+    uvm_home: str | None = None  # uvm.uvmHome
+    env_uvm_home: str | None = None  # $UVM_HOME, tried when uvm_home is unset or holds no UVM
     bundled_uvm: bool = True
     exclude: list[str] = field(default_factory=list)
 
@@ -65,13 +66,14 @@ class ProjectConfig:
                 defines[name] = value
         else:
             defines = {str(k): str(v) for k, v in raw_defines.items()}
-        uvm_home = s.get("uvmHome") or os.environ.get("UVM_HOME") or None
+        uvm_home, env_uvm_home = s.get("uvmHome"), os.environ.get("UVM_HOME")
         return cls(
             workspace_roots=workspace_roots,
             filelists=[expand(f) for f in s.get("filelists") or []],
             include_dirs=[expand(d) for d in s.get("includeDirs") or []],
             defines=defines,
             uvm_home=expand(uvm_home) if uvm_home else None,
+            env_uvm_home=expand(env_uvm_home) if env_uvm_home else None,
             bundled_uvm=s.get("useBundledUvm") is not False,
             exclude=list(s.get("exclude") or []),
         )
@@ -294,9 +296,12 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
     roots: list[str] = []
     timescale = None
 
-    uvm_src = _uvm_src_dir(config.uvm_home)
-    if config.uvm_home and not uvm_src:
-        warnings.append(f"uvmHome {config.uvm_home} does not contain uvm_pkg.sv")
+    uvm_src = None
+    for name, home in (("uvmHome", config.uvm_home), ("$UVM_HOME", config.env_uvm_home)):
+        if home and not uvm_src:
+            uvm_src = _uvm_src_dir(home)
+            if not uvm_src:
+                warnings.append(f"{name} {home} does not contain uvm_pkg.sv")
     if uvm_src:
         include_dirs.append(uvm_src)
         roots.append(os.path.join(uvm_src, "uvm_pkg.sv"))

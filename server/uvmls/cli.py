@@ -32,7 +32,7 @@ def _workspace(args, index: bool = True) -> Workspace:
                         filelists=[os.path.abspath(f) for f in args.filelist],
                         include_dirs=[os.path.abspath(d) for d in args.incdir],
                         defines=dict(d.partition("=")[::2] for d in args.define),
-                        uvm_home=args.uvm_home or os.environ.get("UVM_HOME"),
+                        uvm_home=args.uvm_home, env_uvm_home=os.environ.get("UVM_HOME"),
                         bundled_uvm=not args.no_bundled_uvm)
     ws = Workspace()
     if index:
@@ -86,7 +86,7 @@ def main(argv=None):
     ap.add_argument("-f", dest="filelist", action="append", default=[], help="filelist (.f)")
     ap.add_argument("-I", "--incdir", action="append", default=[], help="include directory")
     ap.add_argument("-D", "--define", action="append", default=[], help="macro define NAME[=VALUE]")
-    ap.add_argument("--uvm-home", help="UVM installation (defaults to $UVM_HOME)")
+    ap.add_argument("--uvm-home", help="UVM installation (falls back to $UVM_HOME)")
     ap.add_argument("--no-bundled-uvm", action="store_true",
                     help="use the built-in UVM model instead of the bundled UVM 1.2")
     ap.add_argument("--test", help="test class for topology")

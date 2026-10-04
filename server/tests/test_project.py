@@ -90,6 +90,9 @@ def test_uvm_library_precedence(tmp_path, monkeypatch):
     assert choice(proj, {"uvmHome": str(tmp_path / "setting"), "filelists": ["tb.f"]}) == \
         ("configured", setting, "1.1d")
     assert choice(proj, {"filelists": ["tb.f"]}) == ("configured", env, "1.1c")
+    typo = {"uvmHome": str(tmp_path / "typo")}  # holds no UVM: $UVM_HOME is next
+    assert choice(proj, dict(typo, filelists=["tb.f"])) == ("configured", env, "1.1c")
+    assert choice(other, typo) == ("configured", env, "1.1c")
     monkeypatch.delenv("UVM_HOME")
     assert choice(proj, {"filelists": ["tb.f"]}) == ("project", own, "1.2")
     assert choice(other, {}) == ("bundled", BUNDLED_UVM, "1.2")
@@ -138,11 +141,15 @@ def test_a_listed_uvm_pkg_that_does_not_exist_is_not_the_uvm_library(tmp_path, m
     assert (ss.uvm_source, ss.uvm_dir) == ("project", kit)
 
 
-def test_bad_uvm_home_warns_and_falls_back(tmp_path):
+def test_bad_uvm_home_warns_and_falls_back(tmp_path, monkeypatch):
     (tmp_path / "tb.sv").write_text("module tb; endmodule\n")
     ss = build_source_set(ProjectConfig(workspace_roots=[str(tmp_path)], uvm_home=str(tmp_path / "nope")))
     assert ss.uvm_source == "bundled"
-    assert any("does not contain uvm_pkg.sv" in w for w in ss.warnings)
+    assert ss.warnings == [f"uvmHome {tmp_path / 'nope'} does not contain uvm_pkg.sv"]
+    monkeypatch.setenv("UVM_HOME", str(tmp_path / "nada"))
+    ss = build_source_set(ProjectConfig.from_settings([str(tmp_path)], {}))
+    assert ss.uvm_source == "bundled"
+    assert ss.warnings == [f"$UVM_HOME {tmp_path / 'nada'} does not contain uvm_pkg.sv"]
 
 
 def test_uvm_version(tmp_path):

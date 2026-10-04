@@ -162,7 +162,7 @@
         "uvm.uvmHome": {
           "type": "string",
           "default": "",
-          "markdownDescription": "UVM installation to index (the directory containing `src/uvm_pkg.sv`). Defaults to `$UVM_HOME`. When neither is set, the project's own `uvm_pkg.sv` is used if it has one, otherwise the Accellera UVM 1.2 bundled with the extension (see `#uvm.useBundledUvm#`)."
+          "markdownDescription": "UVM installation to index (the directory containing `src/uvm_pkg.sv`). Falls back to `$UVM_HOME` when unset or when it holds no `uvm_pkg.sv`. When neither applies, the project's own `uvm_pkg.sv` is used if it has one, otherwise the Accellera UVM 1.2 bundled with the extension (see `#uvm.useBundledUvm#`)."
         },
         "uvm.useBundledUvm": {
           "type": "boolean",

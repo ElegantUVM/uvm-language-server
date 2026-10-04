@@ -37,6 +37,12 @@ def test_cli_picks_the_library(capsys, monkeypatch):
     for flags, source in (([], "bundled"), (["--no-bundled-uvm"], "builtin")):
         cli(["stats", EXAMPLE, "-f", FILELIST, *flags])
         assert json.loads(capsys.readouterr().out)["uvm"]["source"] == source
+    # A --uvm-home without a UVM in it falls back to $UVM_HOME.
+    monkeypatch.setenv("UVM_HOME", os.path.dirname(BUNDLED_UVM))
+    cli(["stats", EXAMPLE, "-f", FILELIST, "--uvm-home", "/no/such/uvm"])
+    out = capsys.readouterr()
+    assert json.loads(out.out)["uvm"] == {"source": "configured", "version": "1.2", "dir": BUNDLED_UVM}
+    assert "warning: uvmHome /no/such/uvm does not contain uvm_pkg.sv" in out.err
 
 
 def test_class_graph_inheritance_reaches_uvm_classes(bundled_ws):
