@@ -217,6 +217,32 @@ def test_skip_reasons(ws, bundled_ws, tmp_path):
     assert len(w.units_by_name["tb_top"]) == 2 and skip_reason(w) is None
 
 
+def test_discovery_leaves_out_headers_nothing_includes(tmp_path, monkeypatch, capsys):
+    # An old copy nothing includes, and a header reached only through a macro-built `include
+    # path, compile only inside their package: as roots of their own they would fail at $unit.
+    root = tmp_path / "alu_tb"
+    shutil.copytree(EXAMPLE, root)
+    (root / "agent" / "alu_driver_old.svh").write_text(
+        read(DRIVER).replace("alu_error_driver", "alu_error_driver_old").replace("alu_driver", "alu_driver_old"))
+    pkg = root / "agent" / "alu_pkg.sv"
+    pkg.write_text(read(pkg).replace('`include "alu_driver.svh"',
+                                     '`define DRIVER_SVH "alu_driver.svh"\n  `include `DRIVER_SVH'))
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(root)]))
+    assert w.sources.mode == "discovery" and "alu_driver_old" in w.classes_by_name  # still indexed
+    r = elaborate(request_for(w))
+    assert r["diagnostics"] == [] and r["tops"] == ["tb_top"]
+    monkeypatch.delenv("UVM_HOME", raising=False)
+    with pytest.raises(SystemExit) as e:
+        cli(["elab", str(root)])
+    assert e.value.code == 0 and "0 error(s)" in capsys.readouterr().err
+    # A package in a .svh file that nothing includes is still compiled.
+    pkg.rename(root / "agent" / "alu_pkg.svh")
+    w.configure(ProjectConfig(workspace_roots=[str(root)]))
+    r = elaborate(request_for(w))
+    assert r["diagnostics"] == [] and r["tops"] == ["tb_top"]
+
+
 def test_a_package_and_a_module_may_share_a_name(tmp_path):
     (tmp_path / "uart_pkg.sv").write_text("package uart; typedef logic [7:0] byte_t; endpackage\n")
     (tmp_path / "uart.sv").write_text("module uart(input logic clk); uart::byte_t data; endmodule\n"

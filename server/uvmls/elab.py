@@ -31,9 +31,21 @@ SOURCE = "slang-elab"
 SEVERITY = {ps.DiagnosticSeverity.Error: "error", ps.DiagnosticSeverity.Fatal: "error",
             ps.DiagnosticSeverity.Warning: "warning"}
 NOTE_RE = re.compile(r"^(.+?):(\d+):(\d+): note: (.*)$")
+HEADER_EXTENSIONS = (".svh", ".vh", ".svi")
 
 
 # -- requests ------------------------------------------------------------------
+
+
+def compiled_roots(ws) -> list[str]:
+    """The roots slang compiles. Discovery mode leaves out headers that nothing includes and that
+    hold no module, interface, program or package (an old copy, a template, a header reached only
+    through a macro-built `include path): they only compile inside their package."""
+    s = ws.sources
+    if s.mode != "discovery":
+        return list(s.roots)
+    return [r for r in s.roots if r in s.library_roots or not r.endswith(HEADER_EXTENSIONS)
+            or (r in ws.indices and ws.indices[r].units)]
 
 
 def request_for(ws, overrides: dict[str, str] | None = None, tops=(), args=()) -> dict:
@@ -41,7 +53,7 @@ def request_for(ws, overrides: dict[str, str] | None = None, tops=(), args=()) -
     s = ws.sources
     library = [d for d in (s.uvm_dir, os.path.dirname(BUNDLED_UVM), SHIM_DIR) if d]
     args = (["--timescale", s.timescale] if s.timescale else []) + list(args or ())
-    return {"roots": list(s.roots), "includeDirs": list(s.include_dirs), "defines": dict(s.defines),
+    return {"roots": compiled_roots(ws), "includeDirs": list(s.include_dirs), "defines": dict(s.defines),
             "overrides": dict(overrides or {}), "tops": list(tops or ()), "library": library,
             "args": args}
 
@@ -49,13 +61,13 @@ def request_for(ws, overrides: dict[str, str] | None = None, tops=(), args=()) -
 def skip_reason(ws) -> str | None:
     """Why the workspace cannot be elaborated as configured, or None."""
     s = ws.sources
-    if s is None or all(r in s.library_roots for r in s.roots):
+    if s is None or all(r in s.library_roots for r in compiled_roots(ws)):
         return "there are no SystemVerilog sources to elaborate"
     if s.uvm_source == "builtin":
         return ("the built-in UVM model cannot be elaborated; turn uvm.useBundledUvm back on "
                 "or set uvm.uvmHome (CLI: drop --no-bundled-uvm or pass --uvm-home)")
     if s.mode == "discovery":
-        roots = set(s.roots)  # not files merely open in the editor
+        roots = set(compiled_roots(ws))  # not files merely open in the editor
         # How many roots compile each file: one that two tops include is compiled twice.
         compiled = Counter(f for r, idx in ws.indices.items() if r in roots for f in idx.files)
 
