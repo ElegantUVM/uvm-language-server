@@ -173,6 +173,23 @@ def test_custom_requests(client):
     assert {r["field"] for r in c["fields"]} >= {"vif", "checks_enable"}
 
 
+def test_class_at_answers_with_a_graph_node(client):
+    """Show Class in Graph on a UVM type the graph leaves out focuses the class around the cursor."""
+    ids = {n["id"] for n in client.request("uvm/classGraph", {})["nodes"]}
+    drv = uri("agent/alu_driver.svh")
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+        lines = f.read().split("\n")
+
+    def at(needle, offset=0):
+        line = next(i for i, ln in enumerate(lines) if needle in ln)
+        position = {"line": line, "character": lines[line].index(needle) + offset}
+        return client.request("uvm/classAt", {"uri": drv, "position": position})
+
+    for needle in ("uvm_phase phase", "uvm_config_db", "seq_item_port"):
+        assert at(needle, 2) == "alu_pkg::alu_driver"
+    assert at("uvm_driver #(", 2) == "uvm_pkg::uvm_driver" and "uvm_pkg::uvm_driver" in ids  # in the graph
+
+
 def test_live_edit_updates_index_and_diagnostics(client):
     path = os.path.join(EXAMPLE, "env/alu_env.svh")
     with open(path) as f:

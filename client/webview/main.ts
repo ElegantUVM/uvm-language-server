@@ -1048,11 +1048,17 @@ new MutationObserver(() => {
   renderLegend();
 }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
+/** Whether the class graph has a node with this id (a focus must name one). */
+function isNode(id: string): boolean {
+  return !!classData?.nodes.some((n) => n.id === id);
+}
+
 window.addEventListener("message", (ev) => {
   const m = ev.data;
   switch (m.type) {
     case "classGraph":
       classData = m.data;
+      if (focusId && !isNode(focusId)) { focusId = null; pendingFocus = null; } // renamed or not in the graph
       delete errors.classes;
       if (state.tab === "classes") { renderToolbar(); void renderClassGraph(); renderDetails(); }
       break;
@@ -1067,7 +1073,7 @@ window.addEventListener("message", (ev) => {
       if (state.tab === "configdb") { renderToolbar(); renderConfigDb(); }
       break;
     case "tab":
-      if (m.focus) { pendingFocus = m.focus; focusId = m.focus; }
+      if (m.focus && (!classData || isNode(m.focus))) { pendingFocus = m.focus; focusId = m.focus; }
       setTab(m.tab);
       if (m.focus && classData) void renderClassGraph(true);
       break;

@@ -745,8 +745,12 @@ def uvm_class_at(ls: UvmLanguageServer, params):
     pos = p.get("position") or {}
     if not uri:
         return None
+    path, line, col = uri_to_path(uri), pos.get("line", 0), pos.get("character", 0)
     with ls.ws.lock:
-        cls = ls.nav.class_at(uri_to_path(uri), pos.get("line", 0), pos.get("character", 0), _text(ls, uri))
+        cls = ls.nav.class_at(path, line, col, _text(ls, uri))
+        # The graph holds only the UVM classes user code uses; for any other, the class around the cursor.
+        if cls is not None and cls.library and cls.qualname not in {n["id"] for n in class_graph(ls.ws)["nodes"]}:
+            cls = ls.ws.enclosing(path, line, col)[0]
         return cls.qualname if cls else None
 
 
