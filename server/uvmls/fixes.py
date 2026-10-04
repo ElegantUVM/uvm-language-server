@@ -19,8 +19,9 @@ from .lints import (
     UTILS_RE, body_of, ctor_call_problem, ctor_problem, misregistered, near_misses, new_target,
     param_problem, skipped_super, swapped_macro,
 )
+from .elab import SOURCE as ELAB_SOURCE
 from .model import Range
-from .project import is_bundled
+from .project import discover_files, is_bundled, parse_filelist
 from .views import canonical_type, config_db_report, mismatched
 
 log = logging.getLogger("uvmls")
@@ -675,7 +676,99 @@ def _paren_span(masked: str, open_at: int) -> tuple[int, int] | None:
     return None
 
 
+# -- slang's diagnostics -----------------------------------------------------------
+
+
+def _typo(ctx: Context, d) -> list[Fix]:
+    """A misspelt keyword, name or member that slang suggests another name for: use that name."""
+    data = d.data or {}
+    wrong, right = data.get("from"), data.get("to")
+    ft = ctx.files.get(d.range.path)
+    span = ft and ft.span(d.range)
+    if not wrong or not right or span is None or ft.text[span[0]:span[1]] != wrong:
+        return []  # the text changed, or the name comes from a macro
+    return [Fix(f"Change '{wrong}' to '{right}'", [TextChange(ft.path, span[0], span[1], right)], preferred=True)]
+
+
+def include_dirs_for(ws, name: str, near: str) -> list[str]:
+    """The directories below the workspace folders that `include "name" would find a file in, and
+    that are not on the include path already; those nearest the including file first."""
+    name = name.replace("\\", "/")
+    if not name or os.path.isabs(name) or ".." in name.split("/"):
+        return []
+    tail = os.sep + os.path.normpath(name)
+    base = os.path.basename(tail)
+    files = discover_files(ws.config.workspace_roots, ws.config.exclude, match=lambda fn: fn == base)
+    have = set(ws.sources.include_dirs) if ws.sources else set()
+    dirs = [d for d in dict.fromkeys(f[:-len(tail)] for f in files if f.endswith(tail)) if d not in have]
+    return sorted(dirs, key=lambda d: (-len(os.path.commonpath([d, near])), d))
+
+
+def setting_value(ws, path: str) -> str:
+    """How uvm.includeDirs says a directory: relative to the first workspace folder (which relative
+    paths in it are read against) when inside it, else absolute."""
+    roots = ws.config.workspace_roots
+    if roots and (path == roots[0] or path.startswith(os.path.join(roots[0], ""))):
+        return os.path.relpath(path, roots[0]).replace(os.sep, "/")
+    return path
+
+
+def add_incdir(ft: FileText, path: str) -> tuple[TextChange, str] | None:
+    """An edit that adds +incdir+ for a directory to a filelist: after its last +incdir+ (or
+    -incdir) line, else before its first line of anything but comments; and the option written."""
+    rel = os.path.relpath(path, os.path.dirname(ft.path)).replace(os.sep, "/")
+    if re.search(r"\s|[\"'$]", rel):
+        return None  # the filelist would need quoting, which simulators read differently
+    option = f"+incdir+{rel}"
+    masked = mask(ft.text)  # its // and /* */ comments; # ones are left to the line test
+    last = first = None
+    for n in range(len(ft.starts)):
+        line = masked[ft.starts[n]:ft.ends[n]].strip()
+        if re.match(r"(\+incdir\+|-incdir\b)", line, re.IGNORECASE):
+            last = n
+        elif first is None and line and not line.startswith("#"):
+            first = n
+    if last is not None:
+        at, indent = ft.ends[last], indent_of(ft.line(last))
+        return TextChange(ft.path, at, at, ft.eol(last) + indent + option), option
+    at = ft.starts[first] if first is not None else len(ft.text)
+    eol = ft.eol(first)
+    if first is None and ft.text and not ft.text.endswith(("\n", "\r")):
+        return TextChange(ft.path, at, at, eol + option + eol), option
+    return TextChange(ft.path, at, at, option + eol), option
+
+
+def _filelist_for(ws, path: str) -> str | None:
+    """The configured filelist an include directory for a file goes in: the first that lists the
+    file, else the first."""
+    lists = ws.config.filelists if ws.sources and ws.sources.mode == "filelist" else []
+    return next((fl for fl in lists if path in parse_filelist(fl).files), lists[0] if lists else None)
+
+
+def _missing_include(ctx: Context, d) -> list[Fix]:
+    """An `include slang cannot open, of a file that is in the workspace: add the directory that
+    holds it, as the include names it, to uvm.includeDirs (through the editor), or to the filelist."""
+    dirs = include_dirs_for(ctx.ws, (d.data or {}).get("include") or "", d.range.path)[:3]
+    filelist = _filelist_for(ctx.ws, d.range.path)
+    command = "uvm.addIncludeDir"
+    fixes = []
+    for path in dirs:
+        if command in ctx.client.commands:
+            value = setting_value(ctx.ws, path)
+            fixes.append(Fix(f"Add '{value}' to uvm.includeDirs", command=(command, [{"value": value}])))
+        ft = filelist and ctx.files.get(filelist)
+        added = ft and add_incdir(ft, path)
+        if added:
+            fixes.append(Fix(f"Add {added[1]} to {os.path.basename(filelist)}", [added[0]]))
+    if len(fixes) == 1 and fixes[0].command:
+        fixes[0].preferred = True  # a setting of this editor's; a filelist is the build's, not ours to change unasked
+    return fixes
+
+
 FIXERS = {
+    **{(source, code): _typo for source in ("slang", ELAB_SOURCE)
+       for code in ("TypoKeyword", "TypoIdentifier", "UnknownMember")},
+    **{(source, "CouldNotOpenIncludeFile"): _missing_include for source in ("slang", ELAB_SOURCE)},
     ("uvm", "config-db-no-set"): _config_db_no_set,
     ("uvm", "config-db-type-mismatch"): _config_db_type_mismatch,
     ("uvm", "phase-no-super"): _phase_no_super,

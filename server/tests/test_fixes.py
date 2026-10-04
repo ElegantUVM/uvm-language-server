@@ -932,6 +932,123 @@ def test_config_db_type_mismatch_fix(tmp_path):
     assert offered(w, d) == []
 
 
+# -- slang's diagnostics -----------------------------------------------------------------
+
+
+def slang_findings(w: Workspace, code: str) -> list:
+    return [d for d in w.user_diagnostics() if d.code == code]
+
+
+def elab_findings(w: Workspace, code: str) -> list:
+    """Elaboration's diagnostics of a code, as the server turns them into findings."""
+    from uvmls.elab import SOURCE, elaborate, request_for
+    from uvmls.model import Diag, Range
+    return [Diag(Range(d["file"], d["line"], d["col"], d["endLine"], d["endCol"]), d["message"], d["severity"],
+                 d["code"], SOURCE, [], d.get("data"))
+            for d in elaborate(request_for(w))["diagnostics"] if d["code"] == code]
+
+
+def apply_fix(w: Workspace, fix):
+    for path in {c.path for c in fix.changes}:
+        ft = FileText.from_disk(path)
+        with open(path, "w", newline="") as f:
+            f.write(apply(ft.text, [c for c in fix.changes if c.path == path]))
+    w.reindex_all()
+
+
+def test_typo_keyword(tmp_path):
+    text = "module m;\n  logic a;\n  always @(a) a = 0;\nendmodule\n"
+    w = index(tmp_path, {"m.sv": text.replace("always @", "alwasy @")})
+    [d] = slang_findings(w, "TypoKeyword")
+    [fix] = offered(w, d)
+    assert (fix.title, fix.preferred, fix.safe) == ("Change 'alwasy' to 'always'", True, False)
+    apply_fix(w, fix)
+    assert (tmp_path / "m.sv").read_text() == text and not slang_findings(w, "TypoKeyword")
+
+
+def test_typo_not_offered_for_other_text(tmp_path):
+    # The editor's text no longer has the name there.
+    text = "module m;\n  logic a;\n  alwasy @(a) a = 0;\nendmodule\n"
+    w = index(tmp_path, {"m.sv": text})
+    [d] = slang_findings(w, "TypoKeyword")
+    path = str(tmp_path / "m.sv")
+    edited = FileTexts({path: (text.replace("alwasy", "alway_"), 2)})
+    assert fixes_for(Context(w, edited, Client(roots=[str(tmp_path)]), path), d) == []
+
+
+def test_missing_include_discovery(tmp_path):
+    files = {"inc/sub/hdr.svh": "int q;\n", "t.sv": '`include "sub/hdr.svh"\nmodule t; endmodule\n'}
+    w = index(tmp_path, files)
+    [d] = slang_findings(w, "CouldNotOpenIncludeFile")
+    assert offered(w, d) == []  # no filelist, and no editor command to change the setting
+    [fix] = offered(w, d, commands=frozenset({"uvm.addIncludeDir"}))
+    assert (fix.title, fix.preferred, fix.changes, fix.command) == (
+        "Add 'inc' to uvm.includeDirs", True, [], ("uvm.addIncludeDir", [{"value": "inc"}]))
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], include_dirs=[str(tmp_path / "inc")],
+                              bundled_uvm=False))
+    assert not slang_findings(w, "CouldNotOpenIncludeFile")
+
+
+def test_missing_include_candidates(tmp_path):
+    files = {"a/tb/t.sv": '`include "sub/hdr.svh"\nmodule t; endmodule\n', "a/inc/sub/hdr.svh": "int q;\n",
+             "b/inc/sub/hdr.svh": "int q;\n", "c/sub_hdr.svh": "int q;\n", "d/xsub/hdr.svh": "int q;\n"}
+    w = index(tmp_path, files)
+    [d] = slang_findings(w, "CouldNotOpenIncludeFile")
+    fixes = offered(w, d, commands=frozenset({"uvm.addIncludeDir"}))
+    # Nearest the including file first; neither is the one fix to apply.
+    assert [(f.title, f.preferred) for f in fixes] == [
+        ("Add 'a/inc' to uvm.includeDirs", False), ("Add 'b/inc' to uvm.includeDirs", False)]
+    # Outside the first workspace folder, which relative paths in the setting are read against.
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path / "a" / "tb"), str(tmp_path / "b")], bundled_uvm=False))
+    [d] = slang_findings(w, "CouldNotOpenIncludeFile")
+    assert [f.title for f in offered(w, d, commands=frozenset({"uvm.addIncludeDir"}))] == \
+        [f"Add '{tmp_path / 'b' / 'inc'}' to uvm.includeDirs"]
+
+
+@pytest.mark.parametrize("name", ["../inc/sub/hdr.svh", "/abs/sub/hdr.svh", "nowhere.svh"])
+def test_missing_include_not_offered(tmp_path, name):
+    w = index(tmp_path, {"inc/sub/hdr.svh": "int q;\n", "t.sv": f'`include "{name}"\nmodule t; endmodule\n'})
+    [d] = slang_findings(w, "CouldNotOpenIncludeFile")
+    assert offered(w, d, commands=frozenset({"uvm.addIncludeDir"})) == []
+
+
+@pytest.mark.parametrize("before, after", [
+    ("// the tb\n+incdir+rtl\n-incdir  ip\nt.sv\n", "// the tb\n+incdir+rtl\n-incdir  ip\n+incdir+inc\nt.sv\n"),
+    ("// the tb\n\n+define+X\nt.sv\n", "// the tb\n\n+incdir+inc\n+define+X\nt.sv\n"),
+    ("  +INCDIR+rtl\r\nt.sv", "  +INCDIR+rtl\r\n  +incdir+inc\r\nt.sv"),
+    ("t.sv\n+incdir+rtl", "t.sv\n+incdir+rtl\n+incdir+inc"),
+    ("/* the tb\n   +incdir+old\n*/ # and\n# more\nt.sv\n", "/* the tb\n   +incdir+old\n*/ # and\n# more\n+incdir+inc\nt.sv\n"),
+])
+def test_missing_include_filelist(tmp_path, before, after):
+    files = {"inc/sub/hdr.svh": "int q;\n", "rtl/r.sv": "", "ip/i.sv": "",
+             "t.sv": '`include "sub/hdr.svh"\nmodule t; endmodule\n', "tb.f": before}
+    w = index(tmp_path, files, filelists=[str(tmp_path / "tb.f")])
+    [d] = slang_findings(w, "CouldNotOpenIncludeFile")
+    [fix] = offered(w, d)
+    assert (fix.title, fix.preferred) == ("Add +incdir+inc to tb.f", False)
+    # With the setting too: two ways, neither preferred.
+    assert [(f.title, f.preferred) for f in offered(w, d, commands=frozenset({"uvm.addIncludeDir"}))] == [
+        ("Add 'inc' to uvm.includeDirs", False), ("Add +incdir+inc to tb.f", False)]
+    apply_fix(w, fix)
+    with open(tmp_path / "tb.f", newline="") as f:
+        assert f.read() == after
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb.f")], bundled_uvm=False))
+    assert not slang_findings(w, "CouldNotOpenIncludeFile")
+
+
+def test_missing_include_filelist_outside_the_workspace(tmp_path):
+    (tmp_path / "flows").mkdir()
+    (tmp_path / "flows" / "tb.f").write_text("../ws/t.sv\n")
+    files = {"inc/sub/hdr.svh": "int q;\n", "t.sv": '`include "sub/hdr.svh"\nmodule t; endmodule\n'}
+    w = index(tmp_path / "ws", files, filelists=[str(tmp_path / "flows" / "tb.f")])
+    [d] = slang_findings(w, "CouldNotOpenIncludeFile")
+    assert offered(w, d) == []
+    [fix] = offered(w, d, disabled_support=True)
+    assert (fix.title, fix.changes, fix.disabled) == (
+        "Add +incdir+../ws/inc to tb.f", [], f"{tmp_path / 'flows' / 'tb.f'} is outside the workspace")
+
+
 # -- fix-all -------------------------------------------------------------------------------
 
 
@@ -1058,6 +1175,19 @@ def test_factory_ctor_fix_compiles(tmp_path):
     [d] = findings(w, "factory-ctor")
     assert d.message == "alu_seq_item has no constructor, but the factory constructs it with new(name)"
     fix_once(w, "factory-ctor")
+    assert unchanged(tmp_path) and user_errors(w) == []
+
+
+def test_typo_fixes_compile(tmp_path):
+    w = example(tmp_path, {"agent/alu_agent.svh": ("if (m_cfg.is_active == UVM_ACTIVE) begin",
+                                                   "if (m_cfg.is_actve == UVM_ACTIVE) begin"),
+                           "agent/alu_driver.svh": ("seq_item_port.get_next_item(req)",
+                                                    "seq_item_prt.get_next_item(req)")})
+    for code in ("UnknownMember", "TypoIdentifier"):
+        [d] = elab_findings(w, code)
+        [fix] = offered(w, d)
+        assert fix.preferred
+        apply_fix(w, fix)
     assert unchanged(tmp_path) and user_errors(w) == []
 
 

@@ -88,6 +88,23 @@ async function findPython(ctx: vscode.ExtensionContext): Promise<string | undefi
   return undefined;
 }
 
+/** From a quick fix: add a directory to uvm.includeDirs, in the workspace's settings. */
+async function addIncludeDir(arg?: { value?: string }) {
+  const value = typeof arg?.value === "string" ? arg.value : undefined;
+  if (!value) {
+    return;
+  }
+  const cfg = vscode.workspace.getConfiguration("uvm");
+  const inWorkspace = !!vscode.workspace.workspaceFolders?.length;
+  const seen = cfg.inspect<string[]>("includeDirs");
+  // A workspace value replaces the user's list, so it starts as the list in effect now.
+  const current = (inWorkspace ? seen?.workspaceValue ?? cfg.get<string[]>("includeDirs") : seen?.globalValue) ?? [];
+  if (!current.includes(value)) {
+    await cfg.update("includeDirs", [...current, value],
+      inWorkspace ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
+  }
+}
+
 function settings(): Record<string, unknown> {
   const cfg = vscode.workspace.getConfiguration("uvm");
   return {
@@ -217,7 +234,7 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
       { scheme: "file", language: "verilog" },
     ],
     // Client-side commands its code actions may use; a client without them gets no such action.
-    initializationOptions: { settings: settings(), clientCommands: ["uvm.showConfigDb"] },
+    initializationOptions: { settings: settings(), clientCommands: ["uvm.showConfigDb", "uvm.addIncludeDir"] },
     synchronize: { fileEvents: watcher },
     outputChannelName: "UVM Language Server",
   };
@@ -403,6 +420,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
       open(ctx, "topology", { test: arg?.test })),
     vscode.commands.registerCommand("uvm.showConfigDb", (arg?: { field?: string }) =>
       open(ctx, "configdb", { field: typeof arg?.field === "string" ? arg.field : undefined })),
+    vscode.commands.registerCommand("uvm.addIncludeDir", addIncludeDir),
     vscode.commands.registerCommand("uvm.reindex", async () => {
       status.text = "$(sync~spin) UVM: indexing";
       const s = await client?.sendRequest<Stats>("uvm/reindex", {});

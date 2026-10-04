@@ -311,6 +311,32 @@ def test_commands_only_for_a_client_that_has_them(client, tb):
         c.close()
 
 
+def test_missing_include(tb):
+    # slang's diagnostic: the setting, through the editor's command, or the filelist, a file not open.
+    inc = os.path.join(tb, "inc")
+    os.makedirs(os.path.join(inc, "sub"))
+    with open(os.path.join(inc, "sub", "hdr.svh"), "w") as f:
+        f.write("// nothing\n")
+    c = start(tb, clientCommands=["uvm.addIncludeDir"])
+    try:
+        doc = Doc(c, agent(tb))
+        doc.change('`include "sub/hdr.svh"\n' + doc.text)
+        [d] = doc.diagnostics(lambda ds: ds)
+        assert (d["source"], d["code"], d["data"]) == ("slang", "CouldNotOpenIncludeFile", {"include": "sub/hdr.svh"})
+        setting, filelist = doc.actions([d])
+        assert (setting["title"], setting["command"]["command"], setting["command"]["arguments"]) == (
+            "Add 'inc' to uvm.includeDirs", "uvm.addIncludeDir", [{"value": "inc"}])
+        assert filelist["title"] == "Add +incdir+inc to alu_tb.f" and "isPreferred" not in filelist
+        path = os.path.join(tb, "alu_tb.f")
+        with open(path) as f:
+            text = f.read()
+        assert applied(text, edits_for(filelist, f"file://{path}")) == \
+            text.replace("+incdir+tests\n", "+incdir+tests\n+incdir+inc\n")
+    finally:
+        c.close()
+        shutil.rmtree(inc)
+
+
 def test_a_stale_diagnostic_maps_to_the_finding_that_moved():
     # Two findings that read the same: the one the client's (older) diagnostic was about is the
     # one at the line its line moved to, not merely the nearest.

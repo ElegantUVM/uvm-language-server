@@ -197,9 +197,9 @@ def _exclusion(patterns: list[str]):
     return excluded
 
 
-def discover_files(roots: list[str], exclude: list[str]) -> list[str]:
-    """The SystemVerilog files below the roots that neither DEFAULT_EXCLUDES nor `exclude` (VS
-    Code globs, as in files.exclude) leave out."""
+def discover_files(roots: list[str], exclude: list[str], match=is_sv_file) -> list[str]:
+    """The SystemVerilog files (or the files whose name `match`es) below the roots that neither
+    DEFAULT_EXCLUDES nor `exclude` (VS Code globs, as in files.exclude) leave out."""
     excluded = _exclusion(DEFAULT_EXCLUDES + exclude)
     out = []
     for root in map(norm, roots):
@@ -209,7 +209,7 @@ def discover_files(roots: list[str], exclude: list[str]) -> list[str]:
             dirnames[:] = sorted(d for d in dirnames if not excluded(prefix + d, os.path.join(dirpath, d)))
             for fn in sorted(filenames):
                 full = os.path.join(dirpath, fn)
-                if is_sv_file(fn) and not excluded(prefix + fn, full):
+                if match(fn) and not excluded(prefix + fn, full):
                     out.append(norm(full))
     return out
 
