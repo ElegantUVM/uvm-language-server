@@ -206,8 +206,8 @@ export class Diagram {
     this.fitted = true;
     const vw = this.svg.clientWidth || this.container.clientWidth;
     const vh = this.svg.clientHeight || this.container.clientHeight;
-    if (!this.width || !vw) return;
-    const pad = 28;
+    if (!this.width || !vw || !vh) return;
+    const pad = Math.min(28, vw / 8, vh / 8); // less padding in a tiny view keeps the scale positive
     const aw = vw - 2 * pad, ah = vh - 2 * pad;
     this.k = Math.min(aw / this.width, ah / this.height, 1);
     this.tx = pad + (aw - this.width * this.k) / 2;
