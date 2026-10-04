@@ -16,6 +16,7 @@ import pyslang as ps
 from pyslang import parsing as P
 from pyslang import syntax as S
 
+from . import naturaldocs
 from .model import (
     ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex,
     Instance, MacroDef, Method, OutOfBlockMethod, OverrideCall, Param, Range,
@@ -54,6 +55,10 @@ QUALIFIER_TOKENS = {
     TK.LocalKeyword: "local", TK.ProtectedKeyword: "protected", TK.ConstKeyword: "const",
     TK.VirtualKeyword: "virtual", TK.PureKeyword: "pure", TK.ExternKeyword: "extern",
 }
+LINE_COMMENT, BLOCK_COMMENT = P.TriviaKind.LineComment, P.TriviaKind.BlockComment
+END_OF_LINE, WHITESPACE = P.TriviaKind.EndOfLine, P.TriviaKind.Whitespace
+RULE_CHARS = "-=*#~_+/\\"  # what a separator line in a comment is made of
+TYPEDEF_KINDS = (K.TypedefDeclaration, K.ForwardTypedefDeclaration)
 CONFIG_DB_OPS = {"set", "get", "exists", "wait_modified"}
 RESOURCE_DB_OPS = {"set": "set", "read_by_name": "get", "read_by_type": "get",
                    "set_default": "set", "set_override": "set"}
@@ -225,21 +230,33 @@ def get_type_class(expr) -> str | None:
 
 
 def clean_doc(comments: list[str]) -> str:
-    lines = []
+    """Comment text without the comment marks, separator lines (`//-----`) and extra blank lines."""
+    lines: list[str] = []
     for c in comments:
         c = c.strip()
         if c.startswith("//"):
-            lines.append(c[2:].lstrip("/").strip())
+            parts = [c.lstrip("/").strip()]
         elif c.startswith("/*"):
-            body = c[2:-2] if c.endswith("*/") else c[2:]
-            body = body.lstrip("*")
-            for ln in body.splitlines():
-                lines.append(ln.strip().lstrip("*").strip())
-    while lines and not lines[0]:
-        lines.pop(0)
+            body = (c[2:-2] if c.endswith("*/") else c[2:]).lstrip("*")
+            parts = [ln.strip().lstrip("*").strip() for ln in body.splitlines()]
+        else:
+            continue
+        for ln in parts:
+            if len(ln) >= 3 and not ln.strip(RULE_CHARS):
+                continue  # a separator line
+            if ln or (lines and lines[-1]):
+                lines.append(ln)
     while lines and not lines[-1]:
         lines.pop()
     return "\n".join(lines)
+
+
+def _raw_length(trivia) -> int:
+    """Length in bytes of a piece of trivia as it is in the file."""
+    try:
+        return len(trivia.getRawText().encode())
+    except UnicodeDecodeError as e:
+        return len(e.object)
 
 
 @dataclass
@@ -399,28 +416,51 @@ class Extractor:
             return Range(path, line, col, sm.getLineNumber(end) - 1, sm.getColumnNumber(end) - 1)
         return Range(path, line, col, line, col)
 
-    def doc_of(self, node) -> str:
-        first = node.getFirstToken()
-        if first is None:
-            return ""
-        comments: list[str] = []
-        newlines = 0
-        for tr in reversed(list(first.trivia)):
-            k = tr.kind
-            if k in (P.TriviaKind.LineComment, P.TriviaKind.BlockComment):
-                if newlines > 1 and comments:
-                    break
-                if newlines > 1 and not comments:
-                    break
-                comments.insert(0, slang_text(tr.getRawText))
+    def comment_blocks(self, token):
+        """The comment blocks in a token's leading trivia, nearest first, each with whether it is
+        right above what follows it. A blank line ends a block; a comment that ends the line
+        before (`x = 1; // note`) belongs to that line."""
+        trivia = list(token.trivia)
+        cur: list[str] = []
+        adjacent, newlines, complete = False, 0, True
+        for tr in reversed(trivia):
+            k = tr.kind  # enum members: `is` is the fast comparison
+            if k is LINE_COMMENT or k is BLOCK_COMMENT:
+                if cur and newlines > 1:
+                    yield cur, adjacent
+                    cur = []
+                if not cur:
+                    adjacent = newlines <= 1
+                cur.insert(0, slang_text(tr.getRawText))
                 newlines = 0
-            elif k == P.TriviaKind.EndOfLine:
+            elif k is END_OF_LINE:
                 newlines += 1
-            elif k == P.TriviaKind.Whitespace:
-                continue
-            else:
+            elif k is not WHITESPACE:
+                complete = False
                 break
-        return clean_doc(comments)
+        if cur and newlines == 0 and not (complete and self.sm.getFullyExpandedLoc(
+                token.location).offset == sum(_raw_length(t) for t in trivia)):
+            cur.pop(0)  # not at the start of the file: it follows code on its line
+        if cur:
+            yield cur, adjacent
+
+    def doc_of(self, node, name: str, before=()) -> str:
+        """The comment documenting a declaration: the block right above it, or else a NaturalDocs
+        topic naming it (`// Function: name`) further up, past blank lines and the typedefs
+        `before` it (nearest first)."""
+        for i, n in enumerate((node, *before)):
+            first = n.getFirstToken()
+            if first is None:
+                break
+            for comments, adjacent in self.comment_blocks(first):
+                text = clean_doc(comments)
+                if not text:
+                    continue  # a separator line
+                about = naturaldocs.topic(text, name) if name in text else None
+                if about is not None:
+                    return about
+                return naturaldocs.untitled(text) if adjacent and i == 0 else ""
+        return ""
 
     # -- type references -----------------------------------------------------
 
@@ -452,8 +492,10 @@ class Extractor:
     def run(self) -> FileIndex:
         self.out.files.add(self.root)
         imports: list[str] = []
+        before: list = []  # the typedefs right before a member, nearest first
         for m in nodes(self.tree.root.members):
-            self.unit_member(m, None, imports, None)
+            self.unit_member(m, None, imports, None, before)
+            before = [m, *before] if m.kind in TYPEDEF_KINDS else []
         self.collect_diagnostics()
         self.collect_includes()
         self.collect_macros()
@@ -461,7 +503,8 @@ class Extractor:
             self.collect_identifiers()
         return self.out
 
-    def unit_member(self, m, package: str | None, imports: list[str], unit: DesignUnit | None):
+    def unit_member(self, m, package: str | None, imports: list[str], unit: DesignUnit | None,
+                    before=()):
         k = m.kind
         if k == K.PackageDeclaration:
             self.design_unit(m, "package")
@@ -470,7 +513,7 @@ class Extractor:
                     K.ProgramDeclaration: "program"}[k]
             self.design_unit(m, kind)
         elif k == K.ClassDeclaration:
-            self.class_decl(m, package, list(imports), None)
+            self.class_decl(m, package, list(imports), None, before)
         elif k == K.TypedefDeclaration:
             td = self.typedef(m, package, None)
             if td:
@@ -498,7 +541,7 @@ class Extractor:
             return
         unit = DesignUnit(name=hdr.name.valueText, kind=kind, range=rng,
                           decl_range=self.node_range(m) or rng, library=self.library,
-                          doc=self.doc_of(m))
+                          doc=self.doc_of(m, hdr.name.valueText))
         unit.params = self.params(hdr.parameters)
         for imp in nodes(hdr.imports):
             for item in nodes(imp.items):
@@ -513,6 +556,7 @@ class Extractor:
                         unit.ports.append(v)
         package = unit.name if kind == "package" else None
         imports = list(unit.imports)
+        before: list = []
         for item in nodes(m.members):
             ik = item.kind
             if ik in (K.DataDeclaration, K.NetDeclaration):
@@ -548,7 +592,8 @@ class Extractor:
                 for p in self.params_from_decl(item.parameter):
                     unit.params.append(p)
             else:
-                self.unit_member(item, package, imports, unit)
+                self.unit_member(item, package, imports, unit, before)
+            before = [item, *before] if ik in TYPEDEF_KINDS else []
         self.out.units.append(unit)
 
     def enum_members(self, td_node, unit: DesignUnit):
@@ -585,7 +630,8 @@ class Extractor:
 
     # -- classes -------------------------------------------------------------
 
-    def class_decl(self, n, package: str | None, imports: list[str], outer: str | None):
+    def class_decl(self, n, package: str | None, imports: list[str], outer: str | None,
+                   before=()):
         rng, generated = self.tok_range(n.name)
         if rng is None:
             return
@@ -596,7 +642,7 @@ class Extractor:
             decl_range=self.node_range(n) or rng,
             is_virtual=voi is not None and voi.kind == TK.VirtualKeyword,
             params=self.params(n.parameters), imports=imports, outer_class=outer,
-            library=self.library, doc=self.doc_of(n),
+            library=self.library, doc=self.doc_of(n, n.name.valueText, before),
         )
         if n.extendsClause is not None:
             cls.base = self.type_ref_from_name(n.extendsClause.baseName)
@@ -630,6 +676,7 @@ class Extractor:
                 for d in nodes(decl.declarators):
                     v = self.variable(d, "property", decl.type, text, quals)
                     if v:
+                        v.doc = self.doc_of(item, v.name)
                         cls.properties.append(v)
             elif dk == K.TypedefDeclaration:
                 self.class_typedef(cls, decl, package)
@@ -640,7 +687,9 @@ class Extractor:
         elif k == K.ParameterDeclarationStatement:
             self.class_localparams(cls, item)
         elif k == K.ClassMethodDeclaration:
-            meth, sink = self.method_with_body(item.declaration, self.qualifiers(item.qualifiers), cls.name)
+            # The item starts with the qualifiers (`virtual task ...`): the doc comment is on it.
+            meth, sink = self.method_with_body(item.declaration, self.qualifiers(item.qualifiers),
+                                               cls.name, item)
             if meth:
                 cls.methods.append(meth)
                 self.merge_sink(cls, sink)
@@ -707,7 +756,7 @@ class Extractor:
 
     # -- methods -------------------------------------------------------------
 
-    def prototype(self, proto, quals: list[str], decl_node) -> Method | None:
+    def prototype(self, proto, quals: list[str], decl_node, doc_node=None) -> Method | None:
         tok = name_token(proto.name)
         if tok is None:
             return None
@@ -725,17 +774,18 @@ class Extractor:
                         args.append(v)
         return Method(name=tok.valueText, kind=kind, return_type=ret, signature=pretty(proto),
                       range=r, decl_range=self.node_range(decl_node) or r, args=args,
-                      qualifiers=quals, is_prototype=True, generated=gen, doc=self.doc_of(decl_node))
+                      qualifiers=quals, is_prototype=True, generated=gen,
+                      doc=self.doc_of(decl_node if doc_node is None else doc_node, tok.valueText))
 
     def method(self, decl, quals, owner) -> Method | None:
         meth, _ = self.method_with_body(decl, quals, owner)
         return meth
 
-    def method_with_body(self, decl, quals, owner) -> tuple[Method | None, Sink]:
+    def method_with_body(self, decl, quals, owner, doc_node=None) -> tuple[Method | None, Sink]:
         sink = Sink()
         if decl.kind not in FUNC_DECLS:
             return None, sink
-        meth = self.prototype(decl.prototype, quals, decl)
+        meth = self.prototype(decl.prototype, quals, decl, doc_node)
         if meth is None:
             return None, sink
         meth.is_prototype = False

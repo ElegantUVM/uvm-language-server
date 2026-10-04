@@ -57,6 +57,10 @@ def test_class_graph_inheritance_reaches_uvm_classes(bundled_ws):
     drv = next(n for n in g["nodes"] if n["id"] == "uvm_pkg::uvm_driver")
     assert drv["library"] and not drv["external"] and drv["package"] == "uvm_pkg"
     assert drv["libDistance"] == 1 and drv["file"] == UVM_DRIVER
+    # Its doc as plain text: a paragraph to a line, example code indented, no NaturalDocs marks.
+    assert drv["doc"].startswith("The base class for drivers that initiate requests for new "
+                                 "transactions via a uvm_seq_item_pull_port. The ports")
+    assert "\n    driver.rsp_port.connect(sequencer.rsp_export);\n" in drv["doc"] and "~" not in drv["doc"]
 
 
 def test_user_classes_look_the_same_on_either_model(ws, bundled_ws):
@@ -71,6 +75,31 @@ def test_definition_goes_into_the_bundled_sources(bundled_ws):
     for needle, offset, line in (("uvm_driver #(", 1, 44), ("get_next_item(req)", 14, 65)):
         path, ln, col, text = position("agent/alu_driver.svh", needle, offset)
         assert [(r.path, r.line + 1) for r in nav.definition(path, ln, col, text)] == [(UVM_DRIVER, line)]
+
+
+def test_hover_shows_the_uvm_documentation(bundled_ws):
+    nav = Navigator(bundled_ws)
+
+    def hover(needle, offset):
+        path, ln, col, text = position("agent/alu_driver.svh", needle, offset)
+        return nav.hover(path, ln, col, text)
+    # NaturalDocs markup becomes Markdown: links and ~names~ as code, `|` lines as a code block.
+    h = hover("uvm_config_db #", 2)
+    assert "The `set` and `get` methods provide the same API" in h and "`uvm_component`." in h
+    assert "```systemverilog\nuvm_config_db#(int)::set(this, \"*\", \"A\");\n```" in h
+    assert "----" not in h and "class: uvm_config_db" not in h and "<" not in h
+    assert "pull sequencer as follows:" in hover("uvm_driver #", 2)  # a blank line above the class
+    # A macro-made TLM method has the doc of the interface method it implements.
+    h = hover("get_next_item(req)", 3)
+    assert "doc from `uvm_sqr_if_base::get_next_item`" in h and "Retrieves the next available item" in h
+    # An extern method: its prototype and the doc above it; an override without one inherits it.
+    h = hover("super.build_phase", 8)
+    assert h.startswith("```systemverilog\nvirtual function void build_phase(uvm_phase phase)\n```")
+    assert "The `uvm_build_phase` phase implementation method." in h and "doc from" not in h
+    h = hover("build_phase(uvm_phase", 2)
+    assert "function of `alu_driver` · doc from `uvm_component::build_phase`" in h
+    assert "doc from" not in hover("new(string name", 2)  # constructors do not inherit docs
+    assert "Derived driver classes should use this port" in hover("seq_item_port.get", 2)
 
 
 def test_uvm_macros_are_predefined_when_a_file_does_not_include_them(tmp_path):

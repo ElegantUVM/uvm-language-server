@@ -7,6 +7,7 @@ import os
 import re
 from dataclasses import dataclass
 
+from . import naturaldocs
 from .indexer import SHIM_FILE
 from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable
 from .workspace import Spec, Workspace
@@ -338,6 +339,22 @@ class Navigator:
             parts.append(label)
         return " → ".join(parts)
 
+    def method_doc(self, m: Method, owner) -> tuple[str, ClassInfo | None]:
+        """A method's doc, on its prototype or its body; else that of the method it overrides,
+        with the class that has it. A constructor does not take its base's."""
+        if not isinstance(owner, ClassInfo):
+            return m.doc, None
+        for entry in self.ws.chain(owner):
+            c = entry.spec.cls
+            if c is None:
+                continue
+            for x in [*c.methods, self.ws.impls.get((c.qualname, m.name))]:
+                if x is not None and x.name == m.name and x.doc:
+                    return x.doc, (None if c is owner else c)
+            if m.name == "new":
+                break
+        return m.doc, None
+
     def describe(self, t: Target) -> str:
         ws = self.ws
         o = t.obj
@@ -360,7 +377,7 @@ class Navigator:
             lines.append(" · ".join(facts))
             lines.append(f"`{self.chain_text(o)}`")
             if o.doc:
-                lines.append(o.doc)
+                lines.append(naturaldocs.markdown(o.doc))
             return "\n\n".join(lines)
         if isinstance(o, Variable):
             lines = [f"```systemverilog\n{o.decl_text}\n```"]
@@ -382,17 +399,23 @@ class Navigator:
                 facts.append("declared by a macro")
             lines.append(" · ".join(facts))
             if o.doc:
-                lines.append(o.doc)
+                lines.append(naturaldocs.markdown(o.doc))
             return "\n\n".join(lines)
         if isinstance(o, Method):
+            if isinstance(t.owner, ClassInfo):  # an extern method's body: show its prototype
+                o = next((m for m in t.owner.methods if m.name == o.name), o)
             quals = " ".join(q for q in o.qualifiers if q != "extern")
             sig = (quals + " " if quals else "") + o.signature
             lines = [f"```systemverilog\n{sig}\n```"]
             owner = t.owner.name if isinstance(t.owner, (ClassInfo, DesignUnit)) else t.owner
-            if owner:
-                lines.append(f"{o.kind} of `{owner}`")
-            if o.doc:
-                lines.append(o.doc)
+            facts = [f"{o.kind} of `{owner}`"] if owner else []
+            doc, source = self.method_doc(o, t.owner)
+            if source is not None:
+                facts.append(f"doc from `{source.name}::{o.name}`")
+            if facts:
+                lines.append(" · ".join(facts))
+            if doc:
+                lines.append(naturaldocs.markdown(doc))
             return "\n\n".join(lines)
         if isinstance(o, Typedef):
             lines = [f"```systemverilog\n{o.decl_text}\n```"]
@@ -407,7 +430,7 @@ class Navigator:
                 head += " (" + ", ".join(p.name for p in o.ports) + ")"
             lines = [f"```systemverilog\n{head}\n```"]
             if o.doc:
-                lines.append(o.doc)
+                lines.append(naturaldocs.markdown(o.doc))
             return "\n\n".join(lines)
         if isinstance(o, MacroDef):
             return f"```systemverilog\n{o.text}\n```"

@@ -6,6 +6,7 @@ import fnmatch
 import re
 from collections import deque
 
+from . import naturaldocs
 from .model import ClassInfo, ConfigDbCall, Typedef, Variable
 from .uvm import COMPONENT_ROLES, ROLE_ORDER, builtin_params, is_tlm_port
 from .workspace import Spec, Workspace
@@ -64,7 +65,7 @@ def class_graph(ws: Workspace) -> dict:
             "role": ws.role(cls), "package": cls.package, "library": cls.library,
             "external": False, "abstract": cls.is_virtual, "registered": cls.registration,
             "params": _params_text(cls), "base": cls.base.text if cls.base else None,
-            "doc": cls.doc, "members": members[:300], **_loc(cls.range),
+            "doc": naturaldocs.plain(cls.doc), "members": members[:300], **_loc(cls.range),
         }
         return nid
 

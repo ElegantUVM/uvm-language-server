@@ -101,3 +101,32 @@ def test_latin1_source_text_is_indexed(tmp_path):
     assert drv.doc == "Pilote g\ufffdn\ufffdral" and drv.params[0].default == '"r\ufffdel"'
     assert [c.field_name for c in w.calls_of(drv).config_db] == ["d\ufffdlai"]
     assert "CouldNotOpenIncludeFile" in {d.code for d in w.user_diagnostics()}
+
+
+def test_doc_comments(tmp_path):
+    f = tmp_path / "p.sv"
+    f.write_text(
+        "// Copyright and licence\n\n"
+        "package p;\n"
+        "//------\n// CLASS: drv #(T)\n//\n// Drives <item>s.\n//------\n\n"
+        "typedef class item;\n\n"
+        "class drv #(type T = int);\n"
+        "  // Port: seq_item_port\n  //\n  // Where items come from.\n\n"
+        "  int seq_item_port;\n"
+        "  int x; // ends its own line\n"
+        "  int y;\n\n"
+        "  // a note about something else\n\n"
+        "  int z;\n"
+        "  // Function: run\n  //\n  // Runs.\n\n"
+        "  virtual task run(); endtask\n"
+        "  // Function: other\n  // Not about stop.\n\n"
+        "  extern function void stop();\n"
+        "endclass\n"
+        "endpackage\n")
+    (idx_cls,) = Indexer([], {}, use_shim=True).parse(str(f)).classes
+    props = {v.name: v.doc for v in idx_cls.properties}
+    meths = {m.name: m.doc for m in idx_cls.methods}
+    # A NaturalDocs topic naming the declaration counts across blank lines and forward typedefs.
+    assert idx_cls.doc == "Drives <item>s."
+    assert props == {"seq_item_port": "Where items come from.", "x": "", "y": "", "z": ""}
+    assert meths == {"run": "Runs.", "stop": ""}
