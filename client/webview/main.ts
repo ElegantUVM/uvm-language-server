@@ -845,6 +845,13 @@ function uvmNote(s: any): string {
   return "UVM library: built-in model. Turn on uvm.useBundledUvm or set uvm.uvmHome to index a real one.";
 }
 
+/** A class's doc comment; its example code (the indented lines) in the code font. */
+function docText(doc: string): HTMLElement {
+  const p = h("p", { class: "doc" });
+  for (const line of doc.split("\n")) p.append(line.startsWith("    ") ? h("code", {}, line.slice(4)) : line + "\n");
+  return p;
+}
+
 function renderClassDetails(d: any) {
   const fam = FAMILY[d.role] ?? "neutral";
   detailsBody.append(
@@ -861,7 +868,7 @@ function renderClassDetails(d: any) {
     ),
   );
   if (d.file) detailsBody.append(h("p", { class: "muted small mono" }, `${basename(d.file)}:${d.line + 1}`));
-  if (d.doc) detailsBody.append(h("p", { class: "doc" }, d.doc));
+  if (d.doc) detailsBody.append(docText(d.doc));
   // Inheritance chain via the full data set (independent of visible edges).
   const chain: string[] = [];
   let cur: string | undefined = d.id;
