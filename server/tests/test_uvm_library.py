@@ -4,6 +4,7 @@ import json
 import os
 
 from uvmls.cli import main as cli
+from uvmls.lints import lint
 from uvmls.model import Diag, FileIndex, Range
 from uvmls.navigation import Navigator
 from uvmls.project import BUNDLED_UVM, ProjectConfig
@@ -134,3 +135,32 @@ def test_open_uvm_source_under_another_name_is_not_taken_for_user_code(tmp_path)
         assert w.stats()["classes"] == 19 and not w.ephemeral
         w.configure(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST], bundled_uvm=False))
         assert w.stats()["classes"] == 19 and not w.ephemeral  # still open after switching
+
+
+def test_type_parameter_bases_are_followed(tmp_path, monkeypatch):
+    # uvm_reg_sequence #(type BASE=...) extends BASE; uvm_port_base #(type IF=...) extends IF
+    monkeypatch.delenv("UVM_HOME", raising=False)
+    src = ("package p;\n  import uvm_pkg::*;\n  `include \"uvm_macros.svh\"\n"
+           "  class item extends uvm_sequence_item;\n  endclass\n"
+           "  class rs extends uvm_reg_sequence;\n    task body();\n      req = null;\n    endtask\n  endclass\n"
+           "  class rs2 extends uvm_reg_sequence #(uvm_sequence #(item));\n  endclass\nendpackage\n")
+    (tmp_path / "t.sv").write_text(src)
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+
+    def names(c):
+        return [e.spec.name for e in w.chain(w.find_class(c))]
+    assert names("rs") == ["rs", "uvm_reg_sequence", "uvm_sequence", "uvm_sequence_base",
+                           "uvm_sequence_item", "uvm_transaction", "uvm_object", "uvm_void"]
+    assert names("uvm_reg_frontdoor")[2] == "uvm_sequence"
+    assert names("uvm_seq_item_pull_port")[-1] == "uvm_sqr_if_base"
+    assert not {"BASE", "IF"} & {n["id"] for n in class_graph(w)["nodes"]}
+    owner, member, bindings = w.find_member(w.find_class("rs2"), "req")
+    assert owner.name == "uvm_sequence" and w.member_type_spec(owner, member, bindings).cls.name == "item"
+    assert w.find_member(w.find_class("rs"), "m_sequencer")[0].name == "uvm_sequence_item"
+    line = src.split("\n").index("      req = null;")
+    assert "property of `uvm_sequence`" in Navigator(w).hover(str(tmp_path / "t.sv"), line, 7, src)
+    # The built-in model follows the default too, and nothing calls the base unknown.
+    (tmp_path / "t.sv").write_text("class m #(type B = uvm_sequence_item) extends B;\nendclass\n")
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
+    assert w.role(w.find_class("m")) == "item" and not lint(w)

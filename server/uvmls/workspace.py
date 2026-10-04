@@ -343,10 +343,18 @@ class Workspace:
         scope, name, args = parsed
         return self.resolve_spec(name, scope, args, ctx)
 
-    def base_spec(self, cls: ClassInfo) -> Spec | None:
-        if cls.base is None:
+    def base_spec(self, cls: ClassInfo, bindings: dict[str, str] | None = None) -> Spec | None:
+        """The base class; `extends BASE` follows what the type parameter BASE is bound to
+        (uvm_reg_sequence, uvm_port_base), else its default."""
+        ref = cls.base
+        if ref is None:
             return None
-        return self.resolve_spec(cls.base.name, cls.base.scope, cls.base.args, cls)
+        if ref.scope is None and not ref.args and any(p.is_type and p.name == ref.name for p in cls.params):
+            bound = (bindings or {}).get(ref.name)
+            if bound is None:
+                bound = next(p.default for p in cls.params if p.name == ref.name)
+            return self.resolve_type_text(bound, cls)
+        return self.resolve_spec(ref.name, ref.scope, ref.args, cls)
 
     def chain(self, cls: ClassInfo) -> list[ChainEntry]:
         """The class followed by all its ancestors, with type parameter bindings."""
@@ -354,7 +362,7 @@ class Workspace:
         seen = {cls.qualname}
         cur, bindings = cls, entries[0].bindings
         while cur is not None and cur.base is not None:
-            base = self.resolve_spec(cur.base.name, cur.base.scope, cur.base.args, cur)
+            base = self.base_spec(cur, bindings)
             if base is None:
                 entries.append(ChainEntry(Spec(cur.base.name), {}))
                 break
