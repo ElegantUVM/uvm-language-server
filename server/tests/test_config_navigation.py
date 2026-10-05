@@ -303,7 +303,7 @@ def test_config_navigation_follows_unsaved_set_location(tb):
         c.close()
 
 
-@pytest.mark.parametrize("method", ["codeLens", "hover"])
+@pytest.mark.parametrize("method", ["codeLens", "hover", "definition"])
 @pytest.mark.parametrize("edited", ["env/alu_env.svh", "agent/alu_driver.svh"])
 def test_config_navigation_flushes_pending_edits(tb, method, edited):
     c = start(tb, capabilities=CAPABILITIES, clientCommands=COMMANDS)
@@ -324,6 +324,11 @@ def test_config_navigation_flushes_pending_edits(tb, method, edited):
             if path == driver:
                 for pos in expected["range"].values():
                     pos["line"] += 1
+        elif method == "definition":
+            if path != driver:
+                for loc in expected:
+                    for pos in loc["range"].values():
+                        pos["line"] += 1
         else:
             for lens in expected:
                 if path == driver:
@@ -449,3 +454,11 @@ def test_config_hover_on_macro_method_argument(macro_tb):
         assert result["contents"]["value"] == hover(c, path, '"method_field"', 2, occurrence)
         assert result["range"] == {"start": params["position"],
                                    "end": at(path, ', "method_field"', occurrence=occurrence)["position"]}
+
+
+@pytest.mark.parametrize("occurrence", range(5))
+def test_config_definition_through_macro_arguments(macro_tb, occurrence):
+    c, path = macro_tb
+    counterparts = (2, 3, 4) if occurrence < 2 else (0, 1)
+    assert definitions(c, path, '"café😀"', occurrence=occurrence) == [
+        literal_location(path, "café😀", i) for i in counterparts]
