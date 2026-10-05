@@ -611,6 +611,34 @@ class c extends uvm_object; `uvm_object_utils(c) endclass
 """
 
 
+@pytest.mark.parametrize("reg", ["`uvm_object_utils(itm)",
+                                  "`uvm_object_utils_begin(itm)\n  `uvm_object_utils_end"])
+@pytest.mark.parametrize("after", [
+    " function void f();\n    int k;\n  endfunction",
+    " task t();\n    int k;\n  endtask",
+    "; constraint c {\n    x > 0;\n  }",
+    " /* why\n     not */ int y;",
+])
+def test_factory_ctor_withholds_insertion_inside_trailing_member_or_comment(tmp_path, reg, after):
+    from uvmls.fixes import fix_all
+    text = f"import uvm_pkg::*;\nclass itm extends uvm_object;\n  rand int x;\n  {reg}{after}\nendclass\n"
+    w = index(tmp_path, {"t.sv": text})
+    [d] = findings(w, "factory-ctor")
+    assert offered(w, d) == []
+    ctx = Context(w, FileTexts(), Client(), d.range.path)
+    assert fix_all(ctx, [d]) == ([], [])
+
+
+@pytest.mark.parametrize("after", [";", " // the item", " /* the item */", "; // the item"])
+def test_factory_ctor_after_closed_trailing_comment(tmp_path, after):
+    text = f"import uvm_pkg::*;\nclass itm extends uvm_object;\n  `uvm_object_utils(itm){after}\nendclass\n"
+    w = index(tmp_path, {"t.sv": text})
+    fix_once(w, "factory-ctor")
+    assert not findings(w, "factory-ctor")
+    assert (tmp_path / "t.sv").read_text() == text.replace(
+        "\nendclass", '\n\n  function new(string name = "itm");\n    super.new(name);\n  endfunction\nendclass')
+
+
 def test_factory_ctor_name_default(tmp_path):
     planted = CTORS.replace('function new(string name = "item");', "function new(string name);")
     w = index(tmp_path, {"t.sv": planted})

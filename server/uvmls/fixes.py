@@ -453,7 +453,9 @@ def _add_constructor(ctx: Context, ft: FileText, cls) -> list[Fix]:
             return []
         end = body[0] + m.end()
     line = ft.line_at(end)
-    if re.search(r"\bendclass\b", mask(ft.text[end:ft.ends[line]])) or line + 1 >= len(ft.starts):
+    rest = ft.text[end:ft.ends[line]]
+    # The next line is a member boundary only if no member or open comment starts here.
+    if mask(rest).replace(";", " ").strip() or opens_comment(rest) or line + 1 >= len(ft.starts):
         return []
     indent, unit = member_indent(ft, (body[0], body[0] + len(body[1])), cls.header_end.line)
     if component:
