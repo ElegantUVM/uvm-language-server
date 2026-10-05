@@ -11,10 +11,54 @@ The goal is a DVT-class experience for UVM testbenches that is open, fast, and v
 | **Topology** | The `uvm_test_top` tree for any test, built from `type_id::create()` calls (inherited ones included). The test's factory overrides are applied, components created under an `if` are marked conditional, and `connect()` calls plus port aliases are drawn between instances. |
 | **config_db** | Every `set`/`get` grouped by field. Flags a get with no set, and a set/get type mismatch (an exact-type miss that fails silently at runtime). |
 | **Navigation** | Definition, type definition, hover, references, completion, document/workspace symbols, type hierarchy, `` `include `` links and code lenses. Resolution follows class type parameters (`req` in `extends uvm_driver #(my_item)` is a `my_item`), virtual interfaces, clocking blocks, `extern` methods and package scopes. Hover shows the comment above a declaration, and the UVM library's NaturalDocs comments as formatted text; a method without one shows the doc of the method it overrides (a TLM port's `get_next_item` shows `uvm_sqr_if_base`'s). |
-| **Diagnostics** | slang parse errors, plus UVM lint: unregistered class created through the factory, `uvm_object_utils` on a component (or the reverse), `create()` on a virtual class, a config_db get without a set, config_db type mismatch, and a component created without a parent. A finding you have checked is waived by `// uvm-lint: ignore <code>` at the end of its line, `<code>` being the code Problems and `lint` show (separate several with commas). On a line of its own, the comment applies to the next line that is not blank or a comment. The waiver lives in the source, so it shows in review, and the `lint` command honours it too. Every UVM finding offers it as a quick fix; slang's errors cannot be waived. |
+| **Diagnostics** | slang parse errors and eleven UVM lints, with quick fixes for factory registration, constructors, component creation, phase calls and config_db mistakes. See the lint codes, fix-all and source waivers below. |
 | **Elaboration** | slang compiles and elaborates the whole design in a separate process and reports what a simulator's elaboration would: type errors, unknown members, wrong argument counts, missing modules or packages, bad overrides, and (from slang's analysis pass) multiple or mixed drivers and assertions without a clock (source `slang-elab`). `uvm.elaboration` runs it on save (the default), also as you type (`onChange`, about a second after the last edit, unsaved text included) or never (`off`); **UVM: Elaborate Now** runs it on demand. An error inside a macro expansion points at the macro argument you wrote, or else at the whole macro call in your file. Errors the UVM library reports on its own (with the same defines) are left out; errors your code causes inside it (a component constructor without a parent, an analysis imp whose owner has no `write()`, a wrong type parameter) are reported at the library line, naming the specialization, with your type as related information. slang's notes ("did you mean", "declared here") are related information. Between runs its diagnostics move with your edits, and those on lines you change go away until the next run. There is no error limit: up to 100 diagnostics per file and 1,000 in all are listed, and the counts include the rest. The status bar shows a spinner, then the error and warning counts; its tooltip names the UVM library, the top modules and the time taken. |
 | **Projects** | Reads simulator filelists (`-f`/`-F`, `+incdir+`, `+define+`, `-D`, `$VAR`, `-timescale` for elaboration, and unknown VCS/Xcelium/Questa options are ignored), or works with zero configuration by indexing every `.sv/.svh` file and inferring include paths (simulator output such as `work/` or `csrc/` inside the workspace is skipped, as are `uvm.exclude` globs). The UVM library is `uvm.uvmHome`, else `$UVM_HOME` (a directory without `uvm_pkg.sv` is skipped with a warning), else the project's own `uvm_pkg.sv` (in a filelist, the workspace or an include directory), else the Accellera UVM 1.2 that ships with the extension, whose files open read-only (a default for `files.readonlyInclude`). Turning off `uvm.useBundledUvm` falls back to a built-in UVM macro shim and class model. |
-| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on findings), `elab -f tb.f [--top T]` (full elaboration; exit code 1 on errors, 2 if it could not run), `graph`, `topology`, `configdb`, `stats`, all with `--json`. `--uvm-home DIR` or `--no-bundled-uvm` picks the UVM library. |
+| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on warnings or errors; info findings are listed but do not fail), `elab -f tb.f [--top T]` (full elaboration; exit code 1 on errors, 2 if it could not run), `graph`, `topology`, `configdb`, `stats`, all with `--json`. `--uvm-home DIR` or `--no-bundled-uvm` picks the UVM library. |
+
+## UVM lint and quick fixes
+
+The Problems panel and `uvmls lint` use these codes:
+
+| Code | Finding |
+|---|---|
+| `create-unregistered` | A factory create targets a UVM class without registration. |
+| `utils-mismatch` | Object/component registration disagrees with the class's UVM role. |
+| `create-no-parent` | A component factory create omits its parent; an error when the indexed registry requires it, otherwise a warning. |
+| `create-virtual` | A factory create targets a virtual class. |
+| `unknown-base` | A non-UVM base class was not found in the indexed sources (info). |
+| `config-db-no-set` | No matching field is set in the indexed sources; optional or conditional gets are info, required gets are warnings. Dynamic field names in sets suppress this check. |
+| `config-db-type-mismatch` | A get uses a different type from the field's sets. Matching is static, so runtime scopes and values can remain uncertain. |
+| `factory-ctor` | A registered class's constructor cannot accept the calls its UVM factory makes (error). The check follows the selected UVM library and defines. |
+| `create-new` | Direct `new(name, parent)` of a registered project component bypasses factory overrides (warning). |
+| `utils-param` | Name registration collides across used specializations, or a non-parameterized test uses a param-utils macro that does not register its name (warning). |
+| `phase-no-super` | A nonempty `build_phase` or `connect_phase` override skips work in a project base class (warning). |
+
+**Quick fixes:** use the lightbulb or **Quick Fix…** (`Ctrl+.`). Depending on the finding, it can register the created class, swap object/component or param-utils macros, pass a missing parent, add a compatible constructor or an object's name default, replace `new` with a factory create, or insert a missing `super` phase call. For config_db it can correct a literal field typo, change the get's type when compatible, or show the field in the cross-reference. Virtual-class and unknown-base findings currently offer only Ignore.
+
+Missing-include fixes add a directory to `uvm.includeDirs` and confirm the change in the status bar; they do not edit simulator filelists. One candidate is preferred, two or three offer a choice, and more than three offer none. slang's supported “did you mean” diagnostics offer a replacement when the source and suggestion can be checked. Fixes are revalidated against current text and withheld when the edit or phase-call ordering is ambiguous; macro-generated code and library files are not edited.
+
+A registration fix may edit another workspace file, named in the action title. The server returns edits; the editor applies and saves them. Check VS Code's `files.refactoring.autoSave` policy for background edits and save any affected buffers left dirty.
+
+**Fix all:** the lightbulb offers **Fix all N 'code' problems in this file** when at least two findings of that code have safe fixes. **Source Action…** offers **Fix all auto-fixable UVM problems** (`source.fixAll.uvm`). Both stay in the current file and use only safe registration, missing-parent, constructor and utils-mismatch fixes. In particular, changing object registration to component registration needs individual review. Factory rewrites, param-utils changes, phase calls, config_db/typo fixes, include settings and Ignore never run through fix-all. A later pass may expose another fix after the first problem is resolved.
+
+To run safe fixes on an explicit save, add this to VS Code settings:
+
+```json
+{
+  "editor.codeActionsOnSave": {
+    "source.fixAll.uvm": "explicit"
+  }
+}
+```
+
+**Ignore a reviewed finding:** every UVM finding can offer **Ignore 'code' on this line**, which writes a source directive such as:
+
+```systemverilog
+m = mon::type_id::create("m"); // uvm-lint: ignore create-no-parent
+```
+
+Use the code shown in Problems or `uvmls lint`; separate several codes with commas. A directive after code applies to that line. On its own line it applies to the next line containing code, skipping blank lines and comments. It is not a block-wide waiver, and preprocessor directives count as code. The CLI honours it too. slang parse and elaboration errors cannot be waived this way.
 
 ## Try it
 
@@ -67,6 +111,7 @@ server/uvmls/
                  type-parameter binding, UVM roles, incremental re-indexing
   views.py       class graph, topology and config_db report (JSON for the webview and CLI)
   lints.py       UVM checks
+  fixes.py       quick fixes, source waivers and safe fix-all edits
   elab.py        full slang compile and elaboration; the server runs it as `python -m uvmls elab-worker`
   navigation.py  definition / hover / references / completion / symbols
   naturaldocs.py UVM's NaturalDocs comments as Markdown (hover) or plain text (class graph)
