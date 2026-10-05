@@ -839,10 +839,12 @@ def config_db_lenses(ls: UvmLanguageServer, path: str) -> list[T.CodeLens]:
                     target = row["sets"][0]
                     title += f"set in {os.path.basename(target['file'])}:{target['line'] + 1}"
                     if "uvm.revealLocation" in ls.client_commands:
-                        command, arguments = "uvm.revealLocation", [_entry_range(target).to_json()]
+                        rng = _config_range(ls, _entry_range(target))
+                        command, arguments = "uvm.revealLocation", [{
+                            **_entry_range(target).to_json(), "col": rng.start.character, "endCol": rng.end.character}]
                 else:
                     title += f"{count} sets" if count else "no set"
-        lenses.append(T.CodeLens(range=lsp_range(_entry_range(entry)), command=T.Command(
+        lenses.append(T.CodeLens(range=_config_range(ls, _entry_range(entry)), command=T.Command(
             title=title, command=command, arguments=arguments)))
     return lenses
 

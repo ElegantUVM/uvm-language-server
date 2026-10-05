@@ -25,7 +25,8 @@
     "onLanguage:systemverilog",
     "onLanguage:verilog",
     "workspaceContains:**/*.{sv,svh,v,vh}",
-    "onWebviewPanel:uvmGraph"
+    "onWebviewPanel:uvmGraph",
+    "onCommand:uvm.revealLocation"
   ],
   "contributes": {
     "languages": [

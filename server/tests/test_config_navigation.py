@@ -224,6 +224,13 @@ endclass''')
         assert "**config_db" not in hover(c, path, '"café😀"', 1)
         assert "**config_db 'café😀'**" in hover(c, path, '"café😀"', 2, occurrence=2)
         assert definitions(c, path, '"café😀"', occurrence=2) == [literal_location(path, "café😀", 1)]
+        set_lens, get_lens = [l for l in config_lenses(c, path) if "café😀" in l["command"]["title"]]
+        start_pos = at(path, "uvm_config_db #(int)::set")["position"]
+        end_pos = at(path, '"café😀", 1)', len('"café😀", 1)'))["position"]
+        assert set_lens["range"] == {"start": start_pos, "end": end_pos}
+        assert get_lens["command"]["arguments"] == [{
+            "file": str(path), "line": start_pos["line"], "col": start_pos["character"],
+            "endLine": end_pos["line"], "endCol": end_pos["character"]}]
     finally:
         c.close()
 

@@ -1,6 +1,7 @@
 import * as os from "os";
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
+import { revealLocation } from "./navigation";
 
 export type PanelTab = "classes" | "topology" | "configdb";
 
@@ -177,17 +178,7 @@ export class GraphPanel {
         break;
       }
       case "open": {
-        try {
-          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(m.file));
-          const pos = new vscode.Position(m.line, m.col ?? 0);
-          await vscode.window.showTextDocument(doc, {
-            viewColumn: vscode.ViewColumn.One,
-            selection: new vscode.Range(pos, pos),
-            preserveFocus: false,
-          });
-        } catch (e) {
-          vscode.window.showErrorMessage(`UVM: cannot open ${m.file}: ${e instanceof Error ? e.message : e}`);
-        }
+        await revealLocation(m);
         break;
       }
       case "topology":

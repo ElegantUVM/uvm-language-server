@@ -10,6 +10,7 @@ import {
 } from "vscode-languageclient/node";
 import { GraphPanel, PanelTab } from "./panel";
 import { addIncludeDir, expandPath } from "./settings";
+import { revealLocation } from "./navigation";
 
 let client: LanguageClient | undefined;
 let starting: Promise<boolean> | undefined;
@@ -212,8 +213,10 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
       { scheme: "file", language: "systemverilog" },
       { scheme: "file", language: "verilog" },
     ],
-    // Client-side commands its code actions may use; a client without them gets no such action.
-    initializationOptions: { settings: settings(), clientCommands: ["uvm.showConfigDb", "uvm.addIncludeDir"] },
+    // The server only offers command links and reveal actions the client can run.
+    initializationOptions: {
+      settings: settings(), clientCommands: ["uvm.showConfigDb", "uvm.addIncludeDir", "uvm.revealLocation"],
+    },
     markdown: { isTrusted: { enabledCommands: ["uvm.showConfigDb"] } },
     synchronize: { fileEvents: watcher },
     outputChannelName: "UVM Language Server",
@@ -401,6 +404,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand("uvm.showConfigDb", (arg?: { field?: string }) =>
       open(ctx, "configdb", { field: typeof arg?.field === "string" ? arg.field : undefined })),
     vscode.commands.registerCommand("uvm.addIncludeDir", addIncludeDir),
+    vscode.commands.registerCommand("uvm.revealLocation", revealLocation),
     vscode.commands.registerCommand("uvm.reindex", async () => {
       status.text = "$(sync~spin) UVM: indexing";
       const s = await client?.sendRequest<Stats>("uvm/reindex", {});
