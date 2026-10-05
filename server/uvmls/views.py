@@ -506,12 +506,19 @@ def canonical_type(ws: Workspace, text: str, ctx: ClassInfo | DesignUnit | None 
                          [scope] if scope else imports)
     if td is not None and scope and scope not in (td.package, td.owner_class):
         td = None
+    cls = ws.find_class(name, scope or package, [scope] if scope else imports)
+    if td is not None and cls is not None and not scope:
+        # Both lookups can fall back to unrelated declarations. A nearer class wins over a typedef.
+        scopes = ([(package, ctx.name)] if isinstance(ctx, ClassInfo) else []) + \
+            [(package, None)] + [(p, None) for p in imports] + [(None, None)]
+        td_scope, cls_scope = (td.package, td.owner_class), (cls.package, cls.outer_class)
+        if cls_scope in scopes and (td_scope not in scopes or scopes.index(cls_scope) < scopes.index(td_scope)):
+            td = None
     if td is not None:
         if td.target_text in ("enum", "struct", "union"):
             return "::".join(x for x in (td.package, td.owner_class, td.name) if x)
         owner = ws.find_class(td.owner_class, td.package) if td.owner_class else ws.find_unit(td.package, "package")
         return canonical_type(ws, td.target_text, owner, depth + 1)
-    cls = ws.find_class(name, scope or package, [scope] if scope else imports)
     if cls is not None and scope and scope not in (cls.package, cls.outer_class):
         return None
     spec = Spec(name=name, cls=cls, args=args) if cls else ws.resolve_spec(name, scope, args)

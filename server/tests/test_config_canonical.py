@@ -89,6 +89,56 @@ localparam int W = 8;
     assert row["status"] == ("type-mismatch" if mismatch else "ok")
 
 
+@pytest.mark.parametrize("set_type,mismatch", [("box #(p::item)", False), ("box #(int)", True)])
+@pytest.mark.parametrize("visible", ["class", "typedef"])
+def test_config_specialization_uses_the_visible_type(tmp_path, set_type, mismatch, visible):
+    declarations = '''package p; class item; endclass endpackage
+package q; typedef int item; endpackage
+import p::*;
+class box #(type T = int); endclass
+'''
+    if visible == "typedef":
+        declarations = declarations.replace("import p::*;", "import q::*;")
+        mismatch = not mismatch
+    get_type = "box #(item)"
+    check_specialization_identity(set_type, get_type, declarations, same=not mismatch)
+    w, row = config_pair(tmp_path, set_type, get_type, declarations)
+    expected = "p::item" if visible == "class" else "bit signed[31:0]"
+    assert row["gets"][0]["canon"] == f"box #(T={expected})"
+    assert len(findings(w, "config-db-type-mismatch")) == int(mismatch)
+    assert row["status"] == ("type-mismatch" if mismatch else "ok")
+
+
+def test_config_specialization_prefers_a_nearer_class(tmp_path):
+    declarations = '''package q; typedef int item; endpackage
+package p;
+  import q::*;
+  class item; endclass
+  class box #(type T = item); endclass
+endpackage
+'''
+    check_specialization_identity("p::box", "p::box #(p::item)", declarations)
+    w, row = config_pair(tmp_path, "p::box", "p::box #(p::item)", declarations)
+    assert row["sets"][0]["canon"] == row["gets"][0]["canon"] == "p::box #(T=p::item)"
+    assert findings(w, "config-db-type-mismatch") == []
+    assert row["status"] == "ok"
+
+
+def test_config_specialization_keeps_a_nearer_alias(tmp_path):
+    declarations = '''package q; class item; endclass endpackage
+package p;
+  import q::*;
+  typedef int item;
+  class box #(type T = item); endclass
+endpackage
+'''
+    check_specialization_identity("p::box", "p::box #(int)", declarations)
+    w, row = config_pair(tmp_path, "p::box", "p::box #(int)", declarations)
+    assert row["sets"][0]["canon"] == row["gets"][0]["canon"] == "p::box #(T=bit signed[31:0])"
+    assert findings(w, "config-db-type-mismatch") == []
+    assert row["status"] == "ok"
+
+
 @pytest.mark.parametrize("get_type,mismatch", [
     ("p::pair #(p::item)", False),
     ("p::pair #(item)", True),
