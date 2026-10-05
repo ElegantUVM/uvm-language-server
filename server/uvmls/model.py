@@ -80,6 +80,7 @@ class Method:
     body_items: list[Range] = field(default_factory=list)  # top-level statements, declarations left out
     end_kw: Range | None = None  # endfunction / endtask
     super_calls: list[str] = field(default_factory=list)  # super.X(...) -> 'X', C::X(...) -> 'C::X'
+    forwarded_phase: str | None = None  # a body that only forwards its phase argument: 'super' or a base name
 
     @property
     def first_stmt(self) -> Range | None:

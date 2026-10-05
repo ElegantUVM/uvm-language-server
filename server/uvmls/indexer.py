@@ -244,6 +244,23 @@ def string_literal(expr) -> str | None:
     return None
 
 
+def forwarded_phase(decl, meth) -> str | None:
+    """The receiver of a phase body consisting solely of M(phase), with no work in its argument."""
+    if meth.name not in ("build_phase", "connect_phase") or len(meth.args) != 1 or len(decl.items) != 1:
+        return None
+    st = decl.items[0]
+    call = unwrap(st.expr) if st.kind == K.ExpressionStatement else None
+    if call is None or call.kind != K.InvocationExpression or call.arguments is None:
+        return None
+    args = nodes(call.arguments.parameters)
+    segs = flatten_name(call.left)
+    if len(args) != 1 or compact(unwrap(args[0])) != meth.args[0].name or len(segs) != 2:
+        return None
+    if segs[1].name == meth.name and (segs[0].name == "super" and segs[1].sep == "." or segs[1].sep == "::"):
+        return segs[0].name
+    return None
+
+
 def name_token(node):
     """The identifying token of a name-like node."""
     if node is None:
@@ -925,6 +942,7 @@ class Extractor:
                 self.walk(st, ctx, sink)
             meth.locals = sink.locals
             meth.super_calls = sink.super_calls
+            meth.forwarded_phase = forwarded_phase(decl, meth)
             if not meth.generated:
                 meth.header_end, meth.end_kw = self.plain_range(decl.semi), self.plain_range(decl.end)
                 meth.body_items = [r for r in (self.span(st) for st in decl.items

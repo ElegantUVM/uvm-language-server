@@ -253,12 +253,21 @@ def skipped_super(ws: Workspace, cls, name: str):
     called = {c for c in meth.super_calls if c == name or c.endswith("::" + name)}
     if name in called or any(f"{e.spec.name}::{name}" in called for e in chain[1:]):
         return None
-    for entry in chain[1:]:
-        base = entry.spec.cls
+    i = 1
+    while i < len(chain):
+        base = chain[i].spec.cls
+        i += 1
         if base is None or base.library:
             return None  # a UVM base: skipping its build_phase is common and harmless
         found = body_of(ws, base, name)
         if found is not None:
+            if found.forwarded_phase == "super":
+                continue
+            target = next((j for j in range(i, len(chain))
+                           if chain[j].spec.name == found.forwarded_phase), None)
+            if target is not None:
+                i = target
+                continue
             return (base, found) if found.body_items else None
     return None
 
