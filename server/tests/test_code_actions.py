@@ -695,11 +695,11 @@ def test_large_project_code_action_budgets(tmp_path):
         for name, source, count in [('factory hints', path, 1), ('bound member hints', driver, 2)]:
             params = T.InlayHintParams(T.TextDocumentIdentifier(source.as_uri()),
                                       T.Range(T.Position(0, 0), T.Position(10000, 0)))
-            inlay_hint(ls, params)
+            await inlay_hint(ls, params)
             samples = []
             for _ in range(20):
                 start = time.perf_counter()
-                hints = inlay_hint(ls, params)
+                hints = await inlay_hint(ls, params)
                 samples.append((time.perf_counter() - start) * 1000)
                 assert len(hints) == count
             p95 = sorted(samples)[18]

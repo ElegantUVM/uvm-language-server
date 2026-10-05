@@ -887,8 +887,10 @@ async def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
     return lenses
 
 
-def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
+async def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
     if ls.settings.get("inlayHints", True) is False:
+        return []
+    if not await ls.fresh():
         return []
     path = uri_to_path(params.text_document.uri)
     hints = []

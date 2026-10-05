@@ -10,10 +10,10 @@ from pygls.workspace import Workspace as LspWorkspace
 
 from test_fixes import WAIVE, M, findings, fixes_ignore, index
 from uvmls import elab
-from uvmls.server import UvmLanguageServer, code_action, code_lens, definition, hover
+from uvmls.server import UvmLanguageServer, code_action, code_lens, definition, hover, inlay_hint
 
 
-@pytest.mark.parametrize("handler", [code_action, code_lens, hover, definition])
+@pytest.mark.parametrize("handler", [code_action, code_lens, hover, definition, inlay_hint])
 def test_full_index_wait_has_a_deadline(tmp_path, handler):
     async def run():
         ls = UvmLanguageServer()
@@ -46,6 +46,8 @@ def test_full_index_wait_has_a_deadline(tmp_path, handler):
             params = T.HoverParams(params.text_document, rng.start)
         elif handler is definition:
             params = T.DefinitionParams(params.text_document, rng.start)
+        elif handler is inlay_hint:
+            params = T.InlayHintParams(params.text_document, rng)
         start = time.monotonic()
         try:
             assert not await handler(ls, params)

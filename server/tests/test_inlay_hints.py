@@ -195,6 +195,32 @@ def test_factory_multiline_utf16_and_cache_invalidation(tb):
         c.close()
 
 
+@pytest.mark.parametrize("source", ["agent/alu_driver.svh", "agent/alu_agent.svh", "tests/alu_tests.svh"])
+def test_inlay_request_immediately_after_edit(tb, source):
+    c = start(tb, capabilities=CAPABILITIES)
+    try:
+        path = tb / ("agent/alu_agent.svh" if source.startswith("tests/") else source)
+        doc = Doc(c, str(tb / source))
+        c.wait_for("uvm/indexChanged")
+        before = hints(c, path)
+        assert before
+        doc.change("\n\n" + doc.text)
+        after = hints(c, path)
+        assert [label(h) for h in after] == [label(h) for h in before]
+        if source.startswith("tests/"):
+            assert [h["position"] for h in after] == [h["position"] for h in before]
+            old_range = before[0]["label"][0]["location"]["range"]
+            new_range = after[0]["label"][0]["location"]["range"]
+            assert new_range == {key: {**pos, "line": pos["line"] + 2} for key, pos in old_range.items()}
+        else:
+            assert [h["position"] for h in after] == [
+                {**h["position"], "line": h["position"]["line"] + 2} for h in before]
+            line = before[0]["position"]["line"]
+            assert hints(c, path, start=(line, 0), end=(line + 1, 0)) == []
+    finally:
+        c.close()
+
+
 @pytest.mark.parametrize("bundled", [True, False])
 def test_bound_driver_members(tb, bundled):
     c = start(tb, capabilities=CAPABILITIES, settings=settings(tb, useBundledUvm=bundled))
