@@ -609,6 +609,41 @@ def test_factory_ctor_objects_without_a_constructor_need_the_define(tmp_path):
     assert ctor_findings(tmp_path, text, defines={"UVM_OBJECT_DO_NOT_NEED_CONSTRUCTOR": ""})[1] == []
 
 
+@pytest.mark.parametrize("version,defines,needs_name", [
+    ("1.1d", {}, False),
+    ("1.1c", {"UVM_OBJECT_DO_NOT_NEED_CONSTRUCTOR": ""}, False),
+    ("1.1d", {"UVM_OBJECT_MUST_HAVE_CONSTRUCTOR": ""}, True),
+    ("1.1d", {"UVM_NO_DEPRECATED": ""}, True),
+    ("1.2", {}, True),
+    (None, {}, True),
+    ("1800.2-2020", {"UVM_OBJECT_DO_NOT_NEED_CONSTRUCTOR": ""}, False),
+])
+@pytest.mark.parametrize("ctor", ["", '  function new(); super.new("item"); endfunction\n'])
+def test_factory_ctor_uses_the_uvm_version(tmp_path, version, defines, needs_name, ctor):
+    text = CTORS.replace('  function new(string name = "item");\n    super.new(name);\n  endfunction\n', ctor)
+    w = index(tmp_path, {"t.sv": text}, defines=defines)
+    w.sources.uvm_version = version
+    ds = findings(w, "factory-ctor")
+    assert len(ds) == int(needs_name)
+    if ds:
+        assert "new(name)" in ds[0].message
+    else:
+        assert all_fixed(w, str(tmp_path / "t.sv")) == ([], [])
+
+
+def test_factory_ctor_uvm11_still_requires_component_arguments_and_object_defaults(tmp_path):
+    text = CTORS.replace('new(string name = "item")', 'new(string name)') \
+        .replace("  function new(string name, uvm_component parent);\n    super.new(name, parent);\n"
+                 "  endfunction\n", "")
+    w = index(tmp_path, {"t.sv": text})
+    w.sources.uvm_version = "1.1d"
+    ds = findings(w, "factory-ctor")
+    assert [d.message for d in ds] == [
+        "drv has no constructor, but the factory constructs it with new(name, parent)",
+        "the factory constructs item with new(); give 'name' a default value",
+    ]
+
+
 @pytest.mark.parametrize("deleted,title", [
     ("  function new(string name, uvm_component parent);\n    super.new(name, parent);\n  endfunction\n\n",
      "Add a constructor: new(string name, uvm_component parent)"),

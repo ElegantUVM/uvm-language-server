@@ -79,6 +79,14 @@ def ctor_call_problem(ws: Workspace, cls, args: list, k: int) -> str | None:
     return None
 
 
+def object_ctor_calls(ws: Workspace) -> list[int]:
+    """The object constructor calls made by this UVM's registry and utils macros."""
+    defines = ws.sources.defines
+    if re.match(r"1\.[01](?!\d)", ws.sources.uvm_version or ""):
+        return [1, 0] if {"UVM_OBJECT_MUST_HAVE_CONSTRUCTOR", "UVM_NO_DEPRECATED"} & defines.keys() else [0]
+    return [0] if "UVM_OBJECT_DO_NOT_NEED_CONSTRUCTOR" in defines else [1, 0]
+
+
 def ctor_problem(ws: Workspace, cls) -> tuple[str, str] | None:
     """Why the factory cannot construct a registered class: (what, message), what being 'missing'
     (no constructor), 'name-default' (an object whose name has no default) or 'other'."""
@@ -87,7 +95,7 @@ def ctor_problem(ws: Workspace, cls) -> tuple[str, str] | None:
     if cls.is_virtual or reg not in ("uvm_component_registry", "uvm_object_registry") or misregistered(ws, cls):
         return None
     component = reg == "uvm_component_registry"
-    calls = [2] if component else [0] if "UVM_OBJECT_DO_NOT_NEED_CONSTRUCTOR" in ws.sources.defines else [1, 0]
+    calls = [2] if component else object_ctor_calls(ws)
     call = {2: "new(name, parent)", 1: "new(name)", 0: "new()"}
     ctor = next((m for m in cls.methods if m.name == "new"), None)
     if ctor is None:
