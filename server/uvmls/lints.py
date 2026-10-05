@@ -229,7 +229,7 @@ def new_target(ws: Workspace, cls, cr):
         return None
     if inherited:
         written = None  # the base's imports and type spellings need not be visible here
-    elif any(not p.is_local for p in t.params) and spec.via_typedef is None and "#" not in written:
+    elif t.params and spec.via_typedef is None and "#" not in written:
         written = written + "#()" if cr.type is None else None
     role = ws.role(t)
     return (t, written) if role in COMPONENT_ROLES and role != "tlm" else None

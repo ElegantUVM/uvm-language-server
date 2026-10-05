@@ -6,9 +6,13 @@ from test_fixes import NEWS, findings, fix_once, index, offered, user_errors
 
 
 @pytest.mark.parametrize("local", [False, True])
-def test_create_new_default_specialization(tmp_path, local):
+@pytest.mark.parametrize("ports", ["type T = int", "localparam int W = 8", "localparam type T = int"])
+def test_create_new_default_specialization(tmp_path, local, ports):
     text = NEWS.replace("pdrv #(item) d;", "pdrv d;").replace(
         'd = pdrv#(item)::type_id::create("d", this)', 'd = new("d", this)')
+    text = text.replace("class pdrv #(type T = int)", f"class pdrv #({ports})")
+    if ports.startswith("localparam"):
+        text = text.replace("`uvm_component_param_utils(pdrv #(T))", "`uvm_component_utils(pdrv)")
     if local:
         text = text.replace("  pdrv d;\n", "").replace("    mon local_m;", "    mon local_m;\n    pdrv d;")
     w = index(tmp_path, {"t.sv": '`include "uvm_macros.svh"\n' + text}, bundled=True)
