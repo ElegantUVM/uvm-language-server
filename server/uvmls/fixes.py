@@ -602,8 +602,9 @@ def _phase_no_super(ctx: Context, d) -> list[Fix]:
         at, text = ft.starts[first], indent + call + ft.eol(first)
     else:
         at, text = span[0], call + " "
-    # Preferred, not safe: the base's phase runs from now on, which changes what is built.
-    return [Fix(title, [TextChange(ft.path, at, at, text)], preferred=True)]
+    # Neither preferred nor safe: helper calls can hide ordering dependencies from the index.
+    # Even when the checks above pass, the insertion point needs manual review.
+    return [Fix(title, [TextChange(ft.path, at, at, text)])]
 
 
 INTEGRAL_RE = re.compile(r"^(bit|logic|reg|int|integer|byte|shortint|longint|time)"

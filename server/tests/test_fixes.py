@@ -1043,7 +1043,7 @@ def test_phase_no_super(tmp_path, old, new, title):
     assert d.message == "build_phase overrides base_test::build_phase without calling super.build_phase(phase); " \
                         "the base class's build_phase, which creates m_env, never runs"
     _, fix = round_trip(tmp_path, {"t.sv": PHASES}, {"t.sv": PHASES.replace(old, new)}, "phase-no-super")
-    assert (fix.title, fix.preferred, fix.safe) == (title, True, False)
+    assert (fix.title, fix.preferred, fix.safe) == (title, False, False)
 
 
 @pytest.mark.parametrize("old,new", [
@@ -1074,7 +1074,7 @@ def test_phase_no_super_through_an_intermediate_class(tmp_path):
     [d] = findings(w, "phase-no-super")
     assert d.message.endswith("the base class's build_phase, which gets 'cfg' from uvm_config_db, never runs")
     [fix] = offered(w, d)
-    assert fix.title == 'Call super.build_phase(phase) first' and fix.preferred
+    assert fix.title == 'Call super.build_phase(phase) first' and not fix.preferred
 
 
 @pytest.mark.parametrize("override", [
@@ -1113,12 +1113,13 @@ endclass
     w, fix = round_trip(tmp_path, {'t.sv': text}, {'t.sv': planted}, 'phase-no-super')
     where = 'after the factory overrides' if overrides else 'first'
     assert fix.title == f'Call super.build_phase(phase) {where}'
-    assert fix.preferred and not fix.safe
+    assert not fix.preferred and not fix.safe
 
 
 @pytest.mark.parametrize('phase', ['build_phase', 'connect_phase'])
 @pytest.mark.parametrize('forwarding', [None, '', '    depth += 1;\n'])
-def test_phase_no_super_withholds_when_base_reads_config(tmp_path, phase, forwarding):
+@pytest.mark.parametrize('helpers', ['none', 'read', 'set', 'both'])
+def test_phase_no_super_requires_config_order_review(tmp_path, phase, forwarding, helpers):
     text = """`include "uvm_macros.svh"
 import uvm_pkg::*;
 class base_test extends uvm_test;
@@ -1146,6 +1147,14 @@ module top;
   end
 endmodule
 """
+    if helpers in ('read', 'both'):
+        text = text.replace('    if (!uvm_config_db',
+                            '    read_depth();\n  endfunction\n  function void read_depth();\n'
+                            '    if (!uvm_config_db')
+    if helpers in ('set', 'both'):
+        text = text.replace('    uvm_config_db #(int)::set',
+                            '    set_depth();\n  endfunction\n  function void set_depth();\n'
+                            '    uvm_config_db #(int)::set')
     if forwarding is not None:
         text = text.replace('class derived_test extends base_test;', """class mid_test extends base_test;
   function new(string name="mid", uvm_component parent=null);
@@ -1162,7 +1171,10 @@ class derived_test extends mid_test;""")
     [d] = findings(w, 'phase-no-super')
     assert d.data['cls'] == 'derived_test'
     # Calling the base first makes its required get run before the sole setter.
-    assert offered(w, d) == []
+    fs = offered(w, d)
+    assert all(not f.preferred and not f.safe for f in fs)
+    if helpers == 'none':
+        assert fs == []
 
 
 @pytest.mark.parametrize('body', [
