@@ -493,6 +493,13 @@ def _create_new(ctx: Context, d) -> list[Fix]:
     news = list(re.finditer(r"\bnew\b", masked[eq.end():])) if eq else []
     if len(news) != 1:
         return []
+    parsed = call_args(masked)
+    if parsed is None or len(parsed[1]) != 2:
+        return []
+    for a, b in parsed[1]:
+        arg = masked[a:b].lstrip()
+        if arg.startswith(".") and not re.match(r"\.\s*(name|parent)\s*\(", arg):
+            return []  # constructor-specific names do not bind to the factory's formals
     start = span[0] + eq.end() + news[0].start()
     scoped = re.search(r"::\s*$", masked[:eq.end() + news[0].start()])
     text = "type_id::create" if scoped else f"{made[1]}::type_id::create"

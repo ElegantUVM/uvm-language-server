@@ -688,6 +688,32 @@ def test_create_new_quiet(tmp_path):
     assert findings(w, "create-new") == []
 
 
+@pytest.mark.parametrize("call", [
+    'new(.inst_name("m"), .p(this))',
+    'new(.p(this), .inst_name("m"))',
+    'mon::new(.inst_name("m"), .p(this))',
+    'new("m", .p(this))',
+])
+def test_create_new_with_constructor_specific_named_arguments(tmp_path, call):
+    text = NEWS.replace('m = mon::type_id::create("m", this)', f'm = {call}').replace(
+        "function new(string name, uvm_component parent); super.new(name, parent); endfunction",
+        "function new(string inst_name, uvm_component p); super.new(inst_name, p); endfunction", 1)
+    w = index(tmp_path, {"t.sv": '`include "uvm_macros.svh"\n' + text}, bundled=True)
+    assert user_errors(w) == []
+    [d] = findings(w, "create-new")
+    assert offered(w, d) == []
+
+
+@pytest.mark.parametrize("args", ['.name("m"), .parent(this)', '.parent(this), .name("m")', '"m", .parent(this)'])
+def test_create_new_with_factory_named_arguments(tmp_path, args):
+    text = NEWS.replace('m = mon::type_id::create("m", this)', f'm = new({args})')
+    w = index(tmp_path, {"t.sv": '`include "uvm_macros.svh"\n' + text}, bundled=True)
+    assert user_errors(w) == []
+    fix_once(w, "create-new")
+    assert f'm = mon::type_id::create({args})' in (tmp_path / "t.sv").read_text()
+    assert not findings(w, "create-new") and user_errors(w) == []
+
+
 def test_create_new_fix_compiles(tmp_path):
     w = example(tmp_path, {"agent/alu_agent.svh": ('m_monitor = alu_monitor::type_id::create("m_monitor", this)',
                                                    'm_monitor = new("m_monitor", this)')})
