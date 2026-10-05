@@ -16,6 +16,14 @@ UTILS_RE = re.compile(r"^uvm_(object|component)(_abstract)?(_param)?_utils(_begi
 REGISTRY_RE = re.compile(r"^uvm_(object|component)_registry$")
 
 
+def registration_for(ws: Workspace, cls) -> tuple[str, str]:
+    """The utils macro and its argument, assigning only overridable parameters."""
+    params = [p.name for p in cls.params if not p.is_local]
+    macro = ("uvm_component" if ws.is_component(cls) else "uvm_object") + ("_param_utils" if params else "_utils")
+    arg = cls.name + (" #(" + ", ".join(params) + ")" if params else "")
+    return macro, arg
+
+
 def misregistered(ws: Workspace, cls) -> str | None:
     """The registration a class needs when its own contradicts its role: 'component' for a
     component registered as an object, 'object' for the reverse."""
@@ -137,9 +145,10 @@ def specializations(ws: Workspace, classes: dict[str, object]) -> dict[str, dict
         spec = ws.resolve_spec(name, scope, args, ctx)
         if spec is None or spec.cls is not t:
             continue
-        bound = bind_params([(p.name, p.default) for p in t.params], args, {})
+        params = [p for p in t.params if not p.is_local]
+        bound = bind_params([(p.name, p.default) for p in params], args, {})
         key = []
-        for p in t.params:
+        for p in params:
             value = bound.get(p.name, "")
             if p.is_type:
                 vspec = ws.resolve_type_text(value, ctx)
@@ -161,7 +170,8 @@ def param_problem(ws: Workspace, cls, specs: dict[str, dict[tuple, str]] | None 
     if not m:
         return None
     macro = cls.registration_macro
-    if cls.params and not m.group(3):
+    parameterized = any(not p.is_local for p in cls.params)
+    if parameterized and not m.group(3):
         if specs is None:
             specs = specializations(ws, {cls.name: cls})
         named = list(specs.get(cls.qualname, {}).values())
@@ -172,7 +182,7 @@ def param_problem(ws: Workspace, cls, specs: dict[str, dict[tuple, str]] | None 
         return use, (f"{cls.name} is parameterized but registered with `{macro}, so {named[0]} and {named[1]}{more} "
                      f"{'all' if more else 'both'} register the name \"{cls.registration_arg}\": UVM warns TPRGED and "
                      f"a lookup by name gets one of them; use `{use}")
-    if not cls.params and m.group(3) and ws.role(cls) == "test":
+    if not parameterized and m.group(3) and ws.role(cls) == "test":
         return macro.replace("_param", "", 1), (
             f"{cls.name} is registered with `{macro}, which does not register its name: "
             f"run_test(\"{cls.name}\") and +UVM_TESTNAME={cls.name} cannot find it")
@@ -357,8 +367,8 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
                     continue  # the unknown macro may register it
                 # (A class not known to be a uvm_object, such as one whose `ifdef UVM branch is
                 # not taken, is not something a macro can register.)
-                macro = "`uvm_component_utils" if ws.is_component(target) else "`uvm_object_utils"
-                add(cr.range, f"{target.name} is not registered with the factory (add {macro}({target.name}))",
+                macro, arg = registration_for(ws, target)
+                add(cr.range, f"{target.name} is not registered with the factory (add `{macro}({arg}))",
                     "warning", "create-unregistered", target=target.qualname)
             elif ws.is_component(target) and not cr.parent_expr:
                 add(cr.range, f"component {target.name} is created without a parent", no_parent,

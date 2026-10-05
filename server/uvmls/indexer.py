@@ -719,26 +719,30 @@ class Extractor:
                 unit.variables.append(Variable(mem.name.valueText, "enum_member", td_node.name.valueText,
                                                None, r, f"{td_node.name.valueText}::{compact(mem)}"))
 
-    def params_from_decl(self, decl) -> list[Param]:
+    def params_from_decl(self, decl, local: bool = False) -> list[Param]:
         out = []
         if decl is None:
             return out
         if decl.kind == K.TypeParameterDeclaration:
             for d in nodes(decl.declarators):
                 default = compact(d.assignment.type) if d.assignment is not None else ""
-                out.append(Param(d.name.valueText, default, True))
+                out.append(Param(d.name.valueText, default, True, local))
         elif decl.kind == K.ParameterDeclaration:
             for d in nodes(decl.declarators):
                 default = compact(d.initializer.expr) if d.initializer is not None else ""
-                out.append(Param(d.name.valueText, default, False))
+                out.append(Param(d.name.valueText, default, False, local))
         return out
 
     def params(self, plist) -> list[Param]:
         out: list[Param] = []
         if plist is None:
             return out
+        local = False
         for decl in nodes(plist.declarations):
-            out += self.params_from_decl(decl)
+            keyword = getattr(decl, "keyword", None)
+            if keyword is not None and keyword.kind in (TK.LocalParamKeyword, TK.ParameterKeyword):
+                local = keyword.kind == TK.LocalParamKeyword
+            out += self.params_from_decl(decl, local)
         return out
 
     # -- classes -------------------------------------------------------------

@@ -174,6 +174,7 @@ class Param:
     name: str
     default: str
     is_type: bool
+    is_local: bool = False  # a localparam cannot be assigned in #(...)
 
 
 @dataclass

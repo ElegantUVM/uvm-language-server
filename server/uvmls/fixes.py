@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from .lints import (
     UTILS_RE, body_of, ctor_call_problem, ctor_problem, hides_macro, misregistered, near_misses, new_target,
-    param_problem, skipped_super, swapped_macro, unknown_macro_lines,
+    param_problem, registration_for, skipped_super, swapped_macro, unknown_macro_lines,
 )
 from .elab import SOURCE as ELAB_SOURCE
 from .indexer import EOL_RE, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
@@ -331,8 +331,7 @@ def _create_unregistered(ctx: Context, d) -> list[Fix]:
         return []
     if hides_macro(unknown_macro_lines(ws), t):
         return []
-    macro = ("uvm_component" if ws.is_component(t) else "uvm_object") + ("_param_utils" if t.params else "_utils")
-    arg = t.name + (" #(" + ", ".join(p.name for p in t.params) + ")" if t.params else "")
+    macro, arg = registration_for(ws, t)
     if not macro_defined(ws, macro) or not sees_uvm_pkg(ws, t):
         return []
     item = f"`{macro}({arg})"
@@ -532,8 +531,9 @@ def _utils_param(ctx: Context, d) -> list[Fix]:
     a, b = parsed[1][0]
     arg = ft.text[span[0] + a:span[0] + b].strip()
     changes = [TextChange(ft.path, span[0] + 1, span[0] + 1 + len(old), new)]
-    if cls.params and arg == cls.name:
-        arg = f"{cls.name} #(" + ", ".join(p.name for p in cls.params) + ")"
+    params = [p.name for p in cls.params if not p.is_local]
+    if params and arg == cls.name:
+        arg = f"{cls.name} #(" + ", ".join(params) + ")"
         lead = len(masked[a:b]) - len(masked[a:b].lstrip())
         changes.append(TextChange(ft.path, span[0] + a + lead, span[0] + a + lead + len(cls.name), arg))
     # Preferred, not safe: which name the class is registered under changes.
