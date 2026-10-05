@@ -303,8 +303,13 @@ def _create_no_parent(ctx: Context, d) -> list[Fix]:
     said = "'this'" if this else "null"
     start, args = parsed
     if len(args) == 1:
-        pos = span[0] + args[0][0] + len(masked[args[0][0]:args[0][1]].rstrip())
-        fix = Fix(f"Pass {said} as the parent", [TextChange(ft.path, pos, pos, f", {parent}")])
+        arg = masked[args[0][0]:args[0][1]]
+        named = re.match(r"\s*\.\s*([A-Za-z_][A-Za-z0-9_$]*)", arg)
+        if arg.lstrip().startswith(".") and (named is None or named.group(1) != "name"):
+            return []
+        pos = span[0] + args[0][0] + len(arg.rstrip())
+        text = f", .parent({parent})" if named else f", {parent}"
+        fix = Fix(f"Pass {said} as the parent", [TextChange(ft.path, pos, pos, text)])
     elif not args and cr.target and IDENT_RE.fullmatch(cr.target):
         pos = span[0] + start + 1
         fix = Fix(f'Pass "{cr.target}" as the name and {said} as the parent',

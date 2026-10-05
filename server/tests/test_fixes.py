@@ -197,6 +197,34 @@ def test_create_no_parent_after_a_comment(tmp_path):
     assert not findings(w, "create-no-parent")
 
 
+@pytest.mark.parametrize("arg", ['.name("m_drv")', '/* name */ .name ( "m_drv" )'])
+@pytest.mark.parametrize("component", [True, False])
+def test_create_no_parent_after_named_name(tmp_path, arg, component):
+    text = COMPONENT.replace('create("m_drv", this)', f'create({arg})')
+    if not component:
+        text = text.replace("function void build_phase", "static function void make_driver") \
+            .replace("drv m_drv, d2;", "static drv m_drv, d2;")
+    w = index(tmp_path, {"t.sv": 'import uvm_pkg::*;\n`include "uvm_macros.svh"\n' + text}, bundled=True)
+    parent = "this" if component else "null"
+    path = str(tmp_path / "t.sv")
+    changes, fixed = all_fixed(w, path, "create-no-parent")
+    assert bool(fixed) == component
+    if component:
+        assert f'create({arg}, .parent({parent}))' in apply(FileText.from_disk(path).text, changes)
+    fix = fix_once(w, "create-no-parent")
+    assert fix.preferred == fix.safe == component
+    assert f'create({arg}, .parent({parent}))' in (tmp_path / "t.sv").read_text()
+    assert not findings(w, "create-no-parent")
+    assert user_errors(w) == []
+
+
+@pytest.mark.parametrize("arg", [".parent(this)", '.contxt("top")', r'.\name ("m_drv")', r'.\parent (this)'])
+def test_create_no_parent_with_other_named_argument(tmp_path, arg):
+    w = index(tmp_path, {"t.sv": COMPONENT.replace('create("m_drv", this)', f'create({arg})')})
+    [d] = findings(w, "create-no-parent")
+    assert offered(w, d) == []
+
+
 def test_create_no_parent_without_a_name(tmp_path):
     planted = COMPONENT.replace('create("d2", this)', "create()")
     _, fix = round_trip(tmp_path, {"t.sv": COMPONENT}, {"t.sv": planted}, "create-no-parent")
