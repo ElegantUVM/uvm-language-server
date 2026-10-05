@@ -1169,6 +1169,39 @@ def test_config_db_type_mismatch_fix(tmp_path):
     assert offered(w, d) == []
 
 
+@pytest.mark.parametrize('call', [
+    'exists(this, "", "cfg")',
+    'wait_modified(this, "", "cfg")',
+    'get(`CTX, "cfg", value)',
+    'get(`KEY, value)',
+    'get(`ARGS)',
+    '`READ',
+])
+@pytest.mark.parametrize('code', ['config-db-type-mismatch', 'config-db-no-set'])
+def test_config_db_show_survives_uneditable_argument_lists(tmp_path, caplog, call, code):
+    import logging
+    read = f'uvm_config_db #(bit)::{call}' if call != '`READ' else call
+    setter = '    uvm_config_db #(int)::set(this, "", "cfg", 1);\n' if code.endswith('mismatch') else ''
+    text = """import uvm_pkg::*;
+`define CTX this, ""
+`define KEY this, "", "cfg"
+`define ARGS this, "", "cfg", value
+`define READ uvm_config_db #(bit)::get(this, "", "cfg", value)
+class env extends uvm_env;
+  bit value;
+  task run_phase(uvm_phase phase);
+""" + setter + f'    {read};\n' + """  endtask
+endclass
+"""
+    w = index(tmp_path, {'t.sv': text})
+    [d] = findings(w, code)
+    with caplog.at_level(logging.ERROR, logger='uvmls'):
+        fixes = offered(w, d, commands=frozenset({'uvm.showConfigDb'}))
+    assert [f.title for f in fixes] == ["Show 'cfg' in the config_db cross-reference"]
+    assert not any(f.changes for f in fixes)
+    assert not caplog.records
+
+
 # -- slang's diagnostics -----------------------------------------------------------------
 
 

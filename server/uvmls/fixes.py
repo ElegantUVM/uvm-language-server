@@ -610,7 +610,8 @@ def scope_independent_type(ws, text: str) -> bool:
 
 def _config_db_get(ctx: Context, d):
     """(report, field row, get entry, file text, call span, masked call, argument spans) for the get a
-    config_db finding is about, or None when the index or the text no longer has it."""
+    config_db finding is about, or None when the index no longer has it. Argument spans are empty
+    when macros or unavailable text prevent an edit; the field can still be shown."""
     data = d.data or {}
     report = config_db_report(ctx.ws)
     row = next((r for r in report["fields"] if r["field"] == data.get("field")), None)
@@ -622,9 +623,8 @@ def _config_db_get(ctx: Context, d):
     span = ft and ft.span(Range(g["file"], g["line"], g["col"], g["endLine"], g["endCol"]))
     masked = mask(ft.text[span[0]:span[1]]) if span else ""
     parsed = call_args(masked)
-    if parsed is None or len(parsed[1]) < 3:
-        return None
-    return report, row, g, ft, span, masked, parsed[1]
+    args = parsed[1] if parsed and "`" not in masked else []
+    return report, row, g, ft, span, masked, args
 
 
 def show_config_db(ctx: Context, field: str) -> list[Fix]:
@@ -640,7 +640,10 @@ def _config_db_no_set(ctx: Context, d) -> list[Fix]:
         return []
     report, row, g, ft, span, masked, args = found
     near = near_misses(report, g) if not row["sets"] else []
-    a, b = args[2 if g["db"] == "uvm_config_db" else 1]
+    field = 2 if g["db"] == "uvm_config_db" else 1
+    if len(args) <= field:
+        return show_config_db(ctx, row["field"])
+    a, b = args[field]
     literal = ft.text[span[0] + a:span[0] + b]
     lead = len(literal) - len(literal.lstrip())
     fixes = []
@@ -664,7 +667,10 @@ def _config_db_type_mismatch(ctx: Context, d) -> list[Fix]:
     if g not in mismatched(row):
         return []
     want = row["sets"][0]["canon"]
-    a, b = args[3 if g["db"] == "uvm_config_db" else 2]
+    value = 3 if g["db"] == "uvm_config_db" else 2
+    if g["op"] != "get" or len(args) <= value:
+        return fixes  # exists/wait_modified have no value argument; macros may write the list
+    a, b = args[value]
     var = ft.text[span[0] + a:span[0] + b].strip()
     nav = ctx.nav
     if nav is None:
