@@ -17,7 +17,7 @@ from pygls.capabilities import get_capability
 from pygls.lsp.server import LanguageServer
 from pygls.uris import from_fs_path
 
-from . import __version__, elab, fixes
+from . import __version__, elab, fixes, indexer
 from .documents import Workspace as LspWorkspace
 from .lints import lint
 from .model import Diag, Range
@@ -794,10 +794,7 @@ def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
 
 FIX_ALL_KIND = "source.fixAll.uvm"
 FIX_SOURCES = ("uvm", "slang", elab.SOURCE)
-FIX_DATA = {  # what another source's diagnostic must carry for a quick fix
-    "CouldNotOpenIncludeFile": ("include",), "TypoKeyword": ("from", "to"),
-    "TypoIdentifier": ("from", "to"), "UnknownMember": ("from", "to"),
-}
+FIX_DATA = indexer.FIX_DATA
 DIAGNOSTIC_ID = "_uvmls_id"
 POSITION_KEYS = ("at", DIAGNOSTIC_ID)  # metadata, not the lint's semantic identity
 

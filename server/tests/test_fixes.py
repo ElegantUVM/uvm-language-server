@@ -47,11 +47,7 @@ def fix_once(w: Workspace, code: str, title: str | None = None, nth: int = 0):
     d = findings(w, code)[nth]
     fixes = offered(w, d)
     fix = fixes[0] if title is None else next(f for f in fixes if f.title == title)
-    for path in {c.path for c in fix.changes}:
-        ft = FileText.from_disk(path)
-        with open(path, "w", newline="") as f:
-            f.write(apply(ft.text, [c for c in fix.changes if c.path == path]))
-    w.reindex_all()
+    apply_fix(w, fix)
     return fix
 
 
@@ -66,6 +62,16 @@ def round_trip(tmp_path, original: dict[str, str], planted: dict[str, str], code
             assert f.read() == text, name
     assert not findings(w, code)
     return w, fix
+
+
+def test_slang_fixer_data_is_shared_with_the_server():
+    from uvmls import indexer, server
+    from uvmls.elab import SOURCE
+    from uvmls.fixes import FIXERS
+
+    assert server.FIX_DATA is indexer.FIX_DATA
+    assert {(source, code) for source, code in FIXERS if source != "uvm"} == {
+        (source, code) for source in ("slang", SOURCE) for code in indexer.FIX_DATA}
 
 
 # -- helpers ---------------------------------------------------------------------

@@ -143,6 +143,10 @@ def _shim_text() -> str:
         return f.read()
 
 
+FIX_DATA = {  # what another source's diagnostic must carry for a quick fix
+    "CouldNotOpenIncludeFile": ("include",), "TypoKeyword": ("from", "to"),
+    "TypoIdentifier": ("from", "to"), "UnknownMember": ("from", "to"),
+}
 DID_YOU_MEAN_RE = re.compile(r"^did you mean '([A-Za-z_][A-Za-z0-9_$]*)'\?$")
 
 
@@ -150,7 +154,7 @@ def fix_data(code: str, diag, notes=()) -> dict | None:
     """What a quick fix needs from one of slang's diagnostics: the include it could not open, or
     the name it suggests instead of a misspelt one (TypoKeyword/TypoIdentifier say it in their
     arguments, UnknownMember in a "did you mean" note)."""
-    if code not in ("CouldNotOpenIncludeFile", "TypoKeyword", "TypoIdentifier", "UnknownMember"):
+    if code not in FIX_DATA:
         return None
     try:
         args = [str(a) for a in diag.args]

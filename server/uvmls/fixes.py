@@ -20,7 +20,7 @@ from .lints import (
     param_problem, registration_for, skipped_super, swapped_macro, unknown_macro_lines,
 )
 from .elab import SOURCE as ELAB_SOURCE
-from .indexer import EOL_RE, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
+from .indexer import EOL_RE, FIX_DATA, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
 from .model import ClassInfo, Range
 from .project import discover_files, is_bundled
 from .views import canonical_type, config_db_report, mismatched
@@ -867,9 +867,8 @@ def _ignore(ctx: Context, d) -> list[Fix]:
 
 
 FIXERS = {
-    **{(source, code): _typo for source in ("slang", ELAB_SOURCE)
-       for code in ("TypoKeyword", "TypoIdentifier", "UnknownMember")},
-    **{(source, "CouldNotOpenIncludeFile"): _missing_include for source in ("slang", ELAB_SOURCE)},
+    **{(source, code): _missing_include if code == "CouldNotOpenIncludeFile" else _typo
+       for source in ("slang", ELAB_SOURCE) for code in FIX_DATA},
     ("uvm", "config-db-no-set"): _config_db_no_set,
     ("uvm", "config-db-type-mismatch"): _config_db_type_mismatch,
     ("uvm", "phase-no-super"): _phase_no_super,

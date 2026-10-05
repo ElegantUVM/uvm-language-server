@@ -213,8 +213,7 @@ def new_target(ws: Workspace, cls, cr):
     if cr.type is not None:  # X::new(...)
         spec, written = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls), cr.type.text
     else:
-        body = ws.impls.get((cls.qualname, cr.method)) or \
-            next((x for x in cls.methods if x.name == cr.method and not x.is_prototype), None)
+        body = body_of(ws, cls, cr.method)
         var = next((v for v in body.args + body.locals if v.name == m.group(1)), None) if body else None
         if var is not None:
             spec = ws.resolve_spec(var.type.name, var.type.scope, var.type.args, cls) if var.type else None
