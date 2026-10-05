@@ -79,10 +79,9 @@ def _read(path: str) -> str | None:
         return None
 
 
-def shift_lines(old: str, new: str):
-    """Where each line of `old` is in `new`, taking the edit as one changed block of lines: lines
-    before it keep their number, lines after it move with it, lines inside it are gone (None)."""
-    a, b = old.split("\n"), new.split("\n")
+def changed_lines(old: str, new: str) -> tuple[int, int, int]:
+    """The common prefix length and the exclusive ends of the old and new changed blocks."""
+    a, b = fixes.EOL_RE.split(old), fixes.EOL_RE.split(new)
     n = min(len(a), len(b))
     head = 0
     while head < n and a[head] == b[head]:
@@ -90,8 +89,14 @@ def shift_lines(old: str, new: str):
     tail = 0
     while tail < n - head and a[-1 - tail] == b[-1 - tail]:
         tail += 1
-    delta = len(b) - len(a)
-    return lambda line: line if line < head else line + delta if line >= len(a) - tail else None
+    return head, len(a) - tail, len(b) - tail
+
+
+def shift_lines(old: str, new: str):
+    """Where each line of `old` is in `new`, taking the edit as one changed block of lines: lines
+    before it keep their number, lines after it move with it, lines inside it are gone (None)."""
+    head, end_old, end_new = changed_lines(old, new)
+    return lambda line: line if line < head else line + end_new - end_old if line >= end_old else None
 
 
 def lsp_diagnostic(d: Diag) -> T.Diagnostic:
@@ -777,18 +782,27 @@ def _identity(data) -> dict | None:
 
 def current_finding(d: T.Diagnostic, published: list[Diag], then: str | None, now: str | None) -> Diag | None:
     """The finding, as the index has it now, that a diagnostic from the client is about. The
-    client's copy can predate the latest edit: it is matched on what it says, nearest the line it
-    has moved to since the text `then` that it describes."""
+    client's copy can predate the latest edit: it must match on the mapped line, or inside the
+    block that replaced that line. A deleted finding must not select an unrelated neighbour."""
     data = _identity(d.data)
     same = [x for x in published if x.source == d.source and x.code == d.code and x.message == d.message
             and (data is None or _identity(x.data) == data)]
     if not same:
         return None
     line, col = d.range.start.line, d.range.start.character
+    lo, hi = line, line + 1
+    rewritten = False
     if then is not None and now is not None and then != now:
         moved = shift_lines(then, now)(line)
-        line = line if moved is None else moved
-    return min(same, key=lambda x: (abs(x.range.line - line), abs(x.range.col - col)))
+        if moved is None:
+            lo, _, hi = changed_lines(then, now)
+            rewritten = True
+        else:
+            line = lo = moved
+            hi = moved + 1
+    near = [x for x in same if lo <= x.range.line < hi and
+            (rewritten or (x.range.col == col and x.range.end_col == d.range.end.character))]
+    return min(near, key=lambda x: (abs(x.range.line - line), abs(x.range.col - col))) if near else None
 
 
 class _Actions:

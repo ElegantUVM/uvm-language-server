@@ -394,6 +394,46 @@ def test_a_stale_diagnostic_maps_to_the_finding_that_moved():
                         code="create-no-parent", source="uvm", data={"cls": "a", "at": [9, 4]})
     found = current_finding(sent, [diag(12), diag(15)], then, now)
     assert found.range.line == 15  # 9 + 6, although 12 is nearer to 9
-    assert current_finding(sent, [diag(12), diag(15)], None, None).range.line == 12  # no text: nearest
+    assert current_finding(sent, [diag(12), diag(15)], None, None) is None
+    assert current_finding(sent, [diag(9), diag(15)], None, None).range.line == 9
     other = T.Diagnostic(sent.range, sent.message, code="create-no-parent", source="uvm", data={"cls": "b", "at": [9, 4]})
     assert current_finding(other, [diag(12)], then, now) is None
+
+
+@pytest.mark.parametrize('delete', [False, True])
+@pytest.mark.parametrize('data', [False, True])
+def test_removed_finding_does_not_match_its_neighbour(client, tb, delete, data):
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    call = '    m_monitor = alu_monitor::type_id::create("m_monitor");\n'
+    planted = original.replace('    m_monitor = alu_monitor::type_id::create("m_monitor", this);\n',
+                               call + call.replace('m_monitor', 'm_monitor2'))
+    # Both calls create the same class, so their diagnostic identities match.
+    planted = planted.replace('alu_monitor2::', 'alu_monitor::')
+    try:
+        doc.change(planted)
+        ds = doc.diagnostics(lambda ds: len(ds) == 2)
+        old = dict(ds[0])
+        if not data:
+            old.pop('data', None)
+        doc.change(planted.replace(call, '' if delete else call.replace('");', '", this);'), 1))
+        assert doc.actions([old]) == []
+        doc.diagnostics(lambda ds: len(ds) == 1)
+        assert doc.actions([old]) == []
+    finally:
+        doc.change(original)
+        doc.close()
+
+
+def test_stale_finding_only_matches_the_replaced_lines():
+    from uvmls.model import Diag, Range
+    from uvmls.server import current_finding, lsp_diagnostic
+
+    def diag(line):
+        return Diag(Range('f', line, 0, line, 4), 'same', 'warning', 'create-no-parent', 'uvm')
+    then = 'head\nfirst\nsecond\ntail\n'
+    sent = lsp_diagnostic(diag(1))
+    assert current_finding(sent, [diag(2)], then, then.replace('first', 'fixed')) is None
+    assert current_finding(sent, [diag(1), diag(2)], then, then.replace('first', 'edited')).range.line == 1
+    assert current_finding(sent, [diag(1)], then, then.replace('first\n', '')) is None
+    assert current_finding(sent, [diag(2)], then, then) is None
