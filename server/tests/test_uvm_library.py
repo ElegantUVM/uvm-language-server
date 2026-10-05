@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 
+import pytest
+
 from uvmls.cli import main as cli
 from uvmls.lints import lint
 from uvmls.model import Diag, FileIndex, Range
@@ -287,12 +289,14 @@ def test_uvm_macros_go_to_the_definition_in_effect(bundled_ws):
     assert [(r.path, r.line + 1) for r in Navigator(w).definition(path, ln, col, text)] == [(objdefs, 36)]
 
 
-def test_macro_definitions_know_their_ifdef_branches(tmp_path):
-    (tmp_path / "defs.svh").write_text(
+@pytest.mark.parametrize('eol', ['\n', '\r\n', '\r'])
+def test_macro_definitions_know_their_ifdef_branches(tmp_path, eol):
+    text = (
         "`define USE_FAST\n"
         "`ifdef USE_FAST\n`define DELAY 1\n`else\n`define DELAY 10\n`endif\n"
         "`ifdef NOWHERE\n`define MODE 0\n`elsif ALSO_NOWHERE\n`define MODE 1\n`else\n"
         "`define MODE 2 \\\n  `ifdef X \\\n  1\n`endif\n")
+    (tmp_path / "defs.svh").write_bytes(text.replace('\n', eol).encode())
     (tmp_path / "top.sv").write_text('`include "defs.svh"\nmodule top; endmodule\n')
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
@@ -303,3 +307,24 @@ def test_macro_definitions_know_their_ifdef_branches(tmp_path):
     assert [m.range.line for m in w.macros_by_name["MODE"]] == [11]
     # USE_FAST is defined, so either DELAY may be in effect: both stay.
     assert [m.range.line for m in w.macros_by_name["DELAY"]] == [2, 4]
+
+
+@pytest.mark.parametrize('eol', ['\n', '\r\n', '\r'])
+@pytest.mark.parametrize('unsaved', [False, True])
+def test_header_macro_definition_preserves_line_endings(tmp_path, eol, unsaved):
+    header, source = tmp_path / 'defs.svh', tmp_path / 'top.sv'
+    text = '// header' + eol + '`define VALUE 42' + eol
+    header.write_bytes((text.replace('42', '41') if unsaved else text).encode())
+    source_text = '`include "defs.svh"\nmodule top;\n  localparam int V = `VALUE;\nendmodule\n'
+    source.write_text(source_text)
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
+    if unsaved:
+        ws.update_document(str(header), text)
+    assert ws.texts[str(header)] == text  # quick fixes still need the original line endings
+    [macro] = ws.macros_by_name.get('VALUE', [])
+    assert macro.range == Range(str(header), 1, 8, 1, 13)
+    col = source_text.split('\n')[2].index('VALUE')
+    nav = Navigator(ws)
+    assert nav.definition(str(source), 2, col, source_text) == [macro.range]
+    assert '`define VALUE 42' in nav.hover(str(source), 2, col, source_text)

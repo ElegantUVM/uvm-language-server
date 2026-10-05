@@ -1287,6 +1287,8 @@ class Extractor:
             if not self.library:
                 self.out.texts[path] = text
                 self.collect_ignores(path, text)
+            # Macro scanning uses LF lines; the snapshot keeps the source's line endings.
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
             line, pos = 0, 0
             branches: list[tuple[list, list]] = []  # per open `ifdef: (tested, what this branch needs)
             for m in MACRO_DIRECTIVE_RE.finditer(text):
