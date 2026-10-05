@@ -20,7 +20,9 @@ import sys
 
 from .elab import elaborate, request_for, skip_reason, uvm_label
 from .lints import lint
+from .model import Diag, Range
 from .project import ProjectConfig, build_source_set
+from .sarif import write_log
 from .views import class_graph, config_db_report, topology
 from .workspace import Workspace
 
@@ -60,15 +62,22 @@ def _elab(ws: Workspace, args) -> int:
     """Exit status: 0 clean, 1 errors, 2 not elaborated (skipped or failed)."""
     reason = skip_reason(ws)
     if reason:
+        if args.sarif:
+            write_log(args.sarif, args.dir, [])
         print(f"elaboration skipped: {reason}", file=sys.stderr)
         return 2
     result = elaborate(request_for(ws, tops=args.top))
-    if args.json:
+    if args.sarif:
+        write_log(args.sarif, args.dir, [Diag(
+            Range(d["file"] or "", d["line"], d["col"], d["endLine"], d["endCol"]),
+            d["message"], d["severity"], d["code"], "slang-elab") for d in result["diagnostics"]])
+    out = sys.stderr if args.sarif == "-" else sys.stdout
+    if args.json and args.sarif != "-":
         print(json.dumps(result, indent=1))
-    else:
+    elif not args.json:
         for d in result["diagnostics"]:
             where = f"{os.path.relpath(d['file'])}:{d['line'] + 1}:{d['col'] + 1}: " if d["file"] else ""
-            print(f"{where}{d['severity']}: {d['message']} [{d['code']}]")
+            print(f"{where}{d['severity']}: {d['message']} [{d['code']}]", file=out)
         c = result["counts"]
         notes = [f"top: {', '.join(result['tops']) or 'none'}", uvm_label(ws.sources)]
         if c.get("omitted"):
@@ -97,8 +106,11 @@ def main(argv=None):
     ap.add_argument("--test", help="test class for topology")
     ap.add_argument("--top", action="append", default=[], help="top module for elab (default: slang picks)")
     ap.add_argument("--json", action="store_true", help="print JSON instead of text")
+    ap.add_argument("--sarif", metavar="FILE", help="write lint or elab diagnostics as SARIF (use - for stdout)")
     ap.add_argument("-o", "--output", help="write JSON to this file")
     args = ap.parse_args(argv)
+    if args.sarif and args.command not in ("lint", "elab"):
+        ap.error("--sarif is only available for lint and elab")
     # Without a filelist, elab needs the index to spot several testbenches in one tree.
     ws = _workspace(args, index=not (args.command == "elab" and args.filelist))
 
@@ -123,14 +135,17 @@ def main(argv=None):
             if key not in seen:
                 seen.add(key)
                 uniq.append(d)
-        if args.json:
+        if args.sarif:
+            write_log(args.sarif, args.dir, uniq)
+        out = sys.stderr if args.sarif == "-" else sys.stdout
+        if args.json and args.sarif != "-":
             print(json.dumps([{"file": d.range.path, "line": d.range.line + 1, "col": d.range.col + 1,
                                "severity": d.severity, "code": d.code, "message": d.message}
                               for d in uniq], indent=2))
-        else:
+        elif not args.json:
             for d in uniq:
                 rel = os.path.relpath(d.range.path)
-                print(f"{rel}:{d.range.line + 1}:{d.range.col + 1}: {d.severity}: {d.message} [{d.code}]")
+                print(f"{rel}:{d.range.line + 1}:{d.range.col + 1}: {d.severity}: {d.message} [{d.code}]", file=out)
             print(f"{len(uniq)} problem(s)", file=sys.stderr)
         sys.exit(1 if any(d.severity in ("error", "warning") for d in uniq) else 0)
 

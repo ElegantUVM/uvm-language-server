@@ -14,7 +14,7 @@ The goal is a DVT-class experience for UVM testbenches that is open, fast, and v
 | **Diagnostics** | slang parse errors and eleven UVM lints, with quick fixes for factory registration, constructors, component creation, phase calls and config_db mistakes. See the lint codes, fix-all and source waivers below. |
 | **Elaboration** | slang compiles and elaborates the whole design in a separate process and reports what a simulator's elaboration would: type errors, unknown members, wrong argument counts, missing modules or packages, bad overrides, and (from slang's analysis pass) multiple or mixed drivers and assertions without a clock (source `slang-elab`). `uvm.elaboration` runs it on save (the default), also as you type (`onChange`, about a second after the last edit, unsaved text included) or never (`off`); **UVM: Elaborate Now** runs it on demand. An error inside a macro expansion points at the macro argument you wrote, or else at the whole macro call in your file. Errors the UVM library reports on its own (with the same defines) are left out; errors your code causes inside it (a component constructor without a parent, an analysis imp whose owner has no `write()`, a wrong type parameter) are reported at the library line, naming the specialization, with your type as related information. slang's notes ("did you mean", "declared here") are related information. Between runs its diagnostics move with your edits, and those on lines you change go away until the next run. There is no error limit: up to 100 diagnostics per file and 1,000 in all are listed, and the counts include the rest. The status bar shows a spinner, then the error and warning counts; its tooltip names the UVM library, the top modules and the time taken. |
 | **Projects** | Reads simulator filelists (`-f`/`-F`, `+incdir+`, `+define+`, `-D`, `$VAR`, `-timescale` for elaboration, and unknown VCS/Xcelium/Questa options are ignored), or works with zero configuration by indexing every `.sv/.svh` file and inferring include paths (simulator output such as `work/` or `csrc/` inside the workspace is skipped, as are `uvm.exclude` globs). The UVM library is `uvm.uvmHome`, else `$UVM_HOME` (a directory without `uvm_pkg.sv` is skipped with a warning), else the project's own `uvm_pkg.sv` (in a filelist, the workspace or an include directory), else the Accellera UVM 1.2 that ships with the extension, whose files open read-only (a default for `files.readonlyInclude`). Turning off `uvm.useBundledUvm` falls back to a built-in UVM macro shim and class model. |
-| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on warnings or errors; info findings are listed but do not fail), `elab -f tb.f [--top T]` (full elaboration; exit code 1 on errors, 2 if it could not run), `graph`, `topology`, `configdb`, `stats`, all with `--json`. `--uvm-home DIR` or `--no-bundled-uvm` picks the UVM library. |
+| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on warnings or errors; info findings are listed but do not fail), `elab -f tb.f [--top T]` (full elaboration; exit code 1 on errors, 2 if it could not run), `graph`, `topology`, `configdb`, `stats`, all with `--json`. `lint` and `elab` accept `--sarif FILE` for SARIF 2.1.0, including info findings as notes. `--uvm-home DIR` or `--no-bundled-uvm` picks the UVM library. |
 
 ## UVM lint and quick fixes
 
@@ -83,7 +83,10 @@ cd examples/alu_tb
 PYTHONPATH=../../server ../../.venv/bin/python -m uvmls topology -f alu_tb.f --test alu_error_test
 PYTHONPATH=../../server ../../.venv/bin/python -m uvmls lint -f alu_tb.f
 PYTHONPATH=../../server ../../.venv/bin/python -m uvmls elab -f alu_tb.f
+PYTHONPATH=../../server ../../.venv/bin/python -m uvmls lint -f alu_tb.f --sarif uvmls.sarif
 ```
+
+`--sarif FILE` leaves text output and exit codes unchanged and can accompany `--json`. With `--sarif -`, stdout contains only SARIF; text diagnostics go to stderr. Source URIs are relative to the workspace directory (the optional directory argument, default `.`), with absolute file URIs for diagnostics outside it. Fingerprints use the path, code and source line with whitespace collapsed, so unrelated edits do not change them.
 
 Tests: `cd server && ../.venv/bin/python -m pytest -q`. The example tests run on the built-in model, the bundled UVM 1.2, or both. With `UVM_HOME` set, the real-library navigation test uses that UVM instead of the bundled one.
 
@@ -117,6 +120,7 @@ server/uvmls/
   naturaldocs.py UVM's NaturalDocs comments as Markdown (hover) or plain text (class graph)
   server.py      LSP over stdio (pygls) plus custom requests uvm/classGraph, uvm/topology, uvm/configDb
   cli.py         command line
+  sarif.py       lint and elaboration diagnostics as SARIF 2.1.0
 server/tools/gen_uvm_shim.py   regenerates the macro shim from a UVM source tree
 server/tests/                  unit tests and an end-to-end LSP test over stdio
 client/                        VS Code extension (TypeScript); webview/diagram.ts renders ELK layouts as SVG
