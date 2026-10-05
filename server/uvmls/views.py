@@ -613,10 +613,12 @@ def config_db_calls(ws: Workspace) -> list[tuple[str, ConfigDbCall]]:
 class ConfigDbReport(dict):
     """The wire report plus private lookup state, shared until the workspace rebuilds."""
 
-    def __init__(self, fields: list, dynamic: list, version: int):
+    def __init__(self, fields: list, dynamic: list, version: int, calls: dict):
         super().__init__(fields=fields, dynamic=dynamic, version=version)
         self.by_field = {row["field"]: row for row in fields}
         self.dynamic_ids = {id(e) for e in dynamic}
+        self.calls = calls
+        self.lines: dict[str, list[str]] = {}
         self.by_file: dict[str, list[dict]] = {}
         for entry in dynamic + [e for row in fields for e in row["sets"] + row["gets"]]:
             self.by_file.setdefault(entry["file"], []).append(entry)
@@ -634,7 +636,9 @@ def config_db_report(ws: Workspace) -> ConfigDbReport:
 def _build_config_db_report(ws: Workspace) -> ConfigDbReport:
     groups: dict[str, dict] = {}
     dynamic = []
+    calls = {}
     for owner, c in config_db_calls(ws):
+        calls[c.range.path, c.range.line, c.range.col] = c
         entry = {"op": c.op, "db": c.db, "type": norm_type(c.type_text), "context": c.context,
                  "inst": c.inst, "instLiteral": c.inst_literal, "field": c.field_name,
                  "value": c.value, "owner": owner, "method": c.method,
@@ -659,4 +663,4 @@ def _build_config_db_report(ws: Workspace) -> ConfigDbReport:
         else:
             status = "ok"
         rows.append({**g, "types": sorted(set_types | get_types), "status": status})
-    return ConfigDbReport(rows, dynamic, ws.version)
+    return ConfigDbReport(rows, dynamic, ws.version, calls)

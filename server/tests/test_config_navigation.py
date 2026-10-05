@@ -107,3 +107,121 @@ def test_config_lenses_opt_out_keeps_class_lenses(tb, capabilities, setting):
         assert found and all(l["command"]["command"] == "uvm.showClassGraph" for l in found)
     finally:
         c.close()
+
+
+def at(path, needle, within=0, occurrence=0):
+    text = path.read_text()
+    offset = -1
+    for _ in range(occurrence + 1):
+        offset = text.index(needle, offset + 1)
+    offset += within
+    return {"textDocument": {"uri": path.as_uri()},
+            "position": {"line": text[:offset].count("\n"),
+                         "character": len(text[:offset].rsplit("\n", 1)[-1].encode("utf-16-le")) // 2}}
+
+
+def hover(client, path, needle, within=0, occurrence=0):
+    result = client.request("textDocument/hover", at(path, needle, within, occurrence))
+    return result["contents"]["value"] if result else ""
+
+
+def test_config_hover_on_literal_and_method(client, tb):
+    path = tb / "agent/alu_driver.svh"
+    md = hover(client, path, '"alu_agent_config"', 3)
+    assert md.startswith("**config_db 'alu_agent_config'**")
+    assert "type as set: alu_agent_config (alu_pkg::alu_agent_config)" in md
+    assert 'set in alu_env.svh:16 for "m_agent\\*"' in md
+    assert "read in alu_agent.svh:17, alu_driver.svh:14, alu_monitor.svh:17" in md
+    assert md == hover(client, path, "::get", 3)
+    assert "[show in the config_db cross-reference](command:uvm.showConfigDb?" in md
+    import json
+    from urllib.parse import unquote
+    assert json.loads(unquote(md.rsplit("?", 1)[1][:-1])) == [{"field": "alu_agent_config"}]
+    assert md == hover(client, tb / "env/alu_env.svh", '"alu_agent_config"', 2)
+    assert "**config_db" not in hover(client, path, "m_cfg))", 2)
+    assert "**config_db" not in hover(client, path, "#(alu_agent_config)", 5)
+    assert "**config_db" not in hover(client, path, '"", "alu_agent_config"', 0)
+    assert "**driver**" in hover(client, path, "class alu_driver", 8)
+
+
+def test_config_hover_status_and_other_operations(client, tb):
+    path = tb / "env/alu_env.svh"
+    md = hover(client, path, '"mismatch"', 2)
+    assert "set as int but read as int unsigned" in md
+    md = hover(client, path, '"several"', 2)
+    assert md.count("type as set: int") == 1
+    assert md.count("set in alu_env.svh:") == 2
+    assert "**config_db 'unread'**" in hover(client, path, "::exists", 3)
+    assert "**config_db 'unread'**" in hover(client, path, "::wait_modified", 3)
+    assert "**config_db 'resource'**" in hover(client, path, "::read_by_name", 3)
+    # A dynamic set suppresses the lint's no-set finding, even though lenses show no literal set.
+    assert "no set in the indexed sources" not in hover(client, tb / "agent/alu_monitor.svh", '"checks_enable"', 3)
+
+
+@pytest.mark.parametrize("capabilities,commands,link", [
+    ({}, COMMANDS, False),
+    ({"textDocument": {"hover": {"contentFormat": ["plaintext"]}}}, COMMANDS, False),
+    (CAPABILITIES, [], False),
+    (CAPABILITIES, COMMANDS, True),
+])
+def test_config_hover_links_require_client_support(tb, capabilities, commands, link):
+    c = start(tb, capabilities=capabilities, clientCommands=commands)
+    try:
+        md = hover(c, tb / "agent/alu_driver.svh", '"alu_agent_config"', 2)
+        assert "**config_db 'alu_agent_config'**" in md
+        assert ("command:uvm.showConfigDb?" in md) == link
+    finally:
+        c.close()
+
+
+def test_config_hover_multiple_types_dynamic_scope_and_no_set(tmp_path):
+    root = tmp_path / "alu_tb"
+    shutil.copytree(EXAMPLE, root)
+    path = root / "env/alu_env.svh"
+    path.write_text(path.read_text().replace("endclass", '''
+  typedef int integer_alias;
+  function void extra();
+    int value;
+    string scope;
+    uvm_config_db #(integer_alias)::set(this, scope, "typed", 1);
+    uvm_config_db #(bit)::set(this, "*", "typed", 1);
+    void'(uvm_config_db #(int)::get(this, "", "typed", value));
+  endfunction
+endclass'''))
+    c = start(root, capabilities=CAPABILITIES, clientCommands=COMMANDS)
+    try:
+        md = hover(c, path, '"typed"', 2)
+        assert "type as set: integer_alias (bit signed\\[31:0\\])" in md
+        assert "type as set: bit" in md
+        assert "for dynamic" in md
+        assert "but read as" not in md
+        md = hover(c, root / "agent/alu_monitor.svh", '"checks_enable"', 3)
+        assert "no set in the indexed sources" in md
+    finally:
+        c.close()
+
+
+def test_config_hover_literal_ranges_with_unicode_and_crlf(tmp_path):
+    root = tmp_path / "café"
+    shutil.copytree(EXAMPLE, root)
+    path = root / "env/alu_env.svh"
+    text = path.read_text().replace("endclass", '''
+  function void extra();
+    int value;
+    /* 😀 */ uvm_config_db #(int)::set(this, "café😀", "café😀", 1);
+    void'(uvm_config_db #(int)::get(this, "",
+      "café😀", value));
+  endfunction
+endclass''')
+    path.write_bytes(text.replace("\n", "\r\n").encode())
+    c = start(root, capabilities=CAPABILITIES, clientCommands=COMMANDS)
+    try:
+        params = at(path, '"café😀"', 0, occurrence=1)
+        result = c.request("textDocument/hover", params)
+        assert result["contents"]["value"].startswith("**config_db 'café😀'**")
+        assert result["range"] == {"start": params["position"],
+                                   "end": at(path, '"café😀"', len('"café😀"'), occurrence=1)["position"]}
+        assert "**config_db" not in hover(c, path, '"café😀"', 1)
+        assert "**config_db 'café😀'**" in hover(c, path, '"café😀"', 2, occurrence=2)
+    finally:
+        c.close()

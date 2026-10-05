@@ -94,3 +94,8 @@ test("config_db lenses are enabled by default and forwarded to the server", () =
   const extension = fs.readFileSync(path.join(__dirname, "../src/extension.ts"), "utf8");
   assert.match(extension, /codeLens: \{ configDb: cfg.get\("codeLens.configDb"\) \}/);
 });
+
+test("hover command links trust only the config_db view command", () => {
+  const extension = fs.readFileSync(path.join(__dirname, "../src/extension.ts"), "utf8");
+  assert.match(extension, /markdown: \{ isTrusted: \{ enabledCommands: \["uvm.showConfigDb"\] \} \}/);
+});

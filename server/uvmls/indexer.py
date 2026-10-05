@@ -1123,7 +1123,9 @@ class Extractor:
                     field_name=field_lit if field_lit is not None else (compact(field_arg) if field_arg is not None else ""),
                     field_literal=field_lit is not None, value=value, owner=ctx.owner,
                     method=ctx.method, conditional=ctx.conditional, range=r,
-                    optional=op == "get" and self.goes_on_without(node)))
+                    optional=op == "get" and self.goes_on_without(node),
+                    field_range=self.plain_range(unwrap(field_arg).literal) if field_lit is not None else None,
+                    method_range=self.plain_range(name_token(segs[-1].node))))
             return
 
         # Factory overrides

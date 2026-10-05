@@ -11,7 +11,7 @@ import time
 from collections import Counter
 from dataclasses import replace
 from difflib import SequenceMatcher
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from lsprotocol import types as T
 from pygls.capabilities import get_capability
@@ -636,6 +636,30 @@ async def did_change_watched(ls: UvmLanguageServer, params: T.DidChangeWatchedFi
 # -- navigation ----------------------------------------------------------------
 
 
+def _config_lines(ls: UvmLanguageServer, path: str) -> list[str]:
+    report = config_db_report(ls.ws)
+    if path not in report.lines:
+        report.lines[path] = fixes.EOL_RE.split(ls.ws.texts.get(path, ""))
+    return report.lines[path]
+
+
+def _config_column(ls: UvmLanguageServer, path: str, pos: T.Position) -> int:
+    lines = _config_lines(ls, path)
+    decoded = ls.workspace.position_codec.position_from_client_units(lines, pos)
+    return len(lines[pos.line][:decoded.character].encode("utf-8")) if pos.line < len(lines) else 0
+
+
+def _config_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
+    # slang columns are UTF-8 bytes; editor positions use the negotiated encoding.
+    lines = _config_lines(ls, rng.path)
+
+    def position(line, col):
+        prefix = lines[line].encode("utf-8")[:col].decode("utf-8", errors="replace") if line < len(lines) else ""
+        return T.Position(line, ls.workspace.position_codec.client_num_units(prefix))
+
+    return T.Range(position(rng.line, rng.col), position(rng.end_line, rng.end_col))
+
+
 @server.feature(T.TEXT_DOCUMENT_DEFINITION)
 def definition(ls: UvmLanguageServer, params: T.DefinitionParams):
     path = uri_to_path(params.text_document.uri)
@@ -658,6 +682,14 @@ def type_definition(ls: UvmLanguageServer, params: T.TypeDefinitionParams):
 def hover(ls: UvmLanguageServer, params: T.HoverParams):
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
+        config = ls.nav.config_db_hover(path, params.position.line, _config_column(ls, path, params.position))
+        if config:
+            md, field, rng = config
+            formats = get_capability(ls.client_capabilities, "text_document.hover.content_format", [])
+            if "uvm.showConfigDb" in ls.client_commands and T.MarkupKind.Markdown in (formats or []):
+                args = quote(json.dumps([{"field": field}]), safe="")
+                md += f"\n\n[show in the config_db cross-reference](command:uvm.showConfigDb?{args})"
+            return T.Hover(contents=T.MarkupContent(kind=T.MarkupKind.Markdown, value=md), range=_config_range(ls, rng))
         md = ls.nav.hover(path, params.position.line, params.position.character,
                           _text(ls, params.text_document.uri))
     if not md:

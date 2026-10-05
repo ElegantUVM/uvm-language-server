@@ -214,6 +214,7 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
     ],
     // Client-side commands its code actions may use; a client without them gets no such action.
     initializationOptions: { settings: settings(), clientCommands: ["uvm.showConfigDb", "uvm.addIncludeDir"] },
+    markdown: { isTrusted: { enabledCommands: ["uvm.showConfigDb"] } },
     synchronize: { fileEvents: watcher },
     outputChannelName: "UVM Language Server",
   };

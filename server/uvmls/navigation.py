@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from . import naturaldocs
 from .indexer import SHIM_FILE
 from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable
+from .views import config_db_report, mismatched
 from .workspace import Spec, Workspace
 
 WORD = re.compile(r"[A-Za-z0-9_$]")
@@ -325,6 +326,45 @@ class Navigator:
         return out
 
     # -- hover ---------------------------------------------------------------
+
+    def config_db_at(self, path, line, col, method=False):
+        report = config_db_report(self.ws)
+        for entry in report.by_file.get(path, ()):
+            call = report.calls[path, entry["line"], entry["col"]]
+            if not call.field_literal:
+                continue
+            for rng in (call.field_range, call.method_range if method else None):
+                if rng and (rng.line, rng.col) <= (line, col) < (rng.end_line, rng.end_col):
+                    return report.by_field[call.field_name], entry, rng
+        return None
+
+    def config_db_hover(self, path, line, col):
+        hit = self.config_db_at(path, line, col, method=True)
+        if hit is None:
+            return None
+        row, entry, rng = hit
+
+        def escaped(text):
+            return re.sub(r"([\\`*\[\]<>])", r"\\\1", text)
+
+        def where(e):
+            return f"{escaped(os.path.basename(e['file']))}:{e['line'] + 1}"
+
+        lines = [f"**config_db '{escaped(row['field'])}'**"]
+        types = dict.fromkeys((s["type"], s["canon"]) for s in row["sets"])
+        for typ, canon in types:
+            lines.append(f"type as set: {escaped(typ)}" + (f" ({escaped(canon)})" if canon and canon != typ else ""))
+        for s in row["sets"]:
+            inst = f'"{escaped(s["inst"])}"' if s["instLiteral"] else "dynamic"
+            lines.append(f"set in {where(s)} for {inst}")
+        if row["gets"]:
+            lines.append("read in " + ", ".join(where(g) for g in sorted(
+                row["gets"], key=lambda g: (g["file"], g["line"], g["col"]))))
+        if not row["sets"] and not any(e["op"] == "set" for e in config_db_report(self.ws)["dynamic"]):
+            lines.append("no set in the indexed sources")
+        for typ in dict.fromkeys(g["type"] for g in mismatched(row)):
+            lines.append(f"set as {escaped(row['sets'][0]['type'])} but read as {escaped(typ)}")
+        return "\n\n".join(lines), row["field"], rng
 
     def hover(self, path, line, col, text) -> str | None:
         targets = self.resolve(path, line, col, text)
