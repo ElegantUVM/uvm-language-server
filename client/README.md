@@ -18,7 +18,7 @@ Four more checks help repair common UVM mistakes:
 - `factory-ctor`: a registered class cannot accept its factory's constructor calls (error); add a compatible constructor or an object's missing name default when possible. The selected UVM library and defines determine the required calls.
 - `create-new`: direct `new(name, parent)` bypasses the factory for a registered project component (warning); change it to `type_id::create`.
 - `utils-param`: used specializations collide under name registration, or a non-parameterized test uses param-utils without registering its name (warning); change the registration macro.
-- `phase-no-super`: a nonempty `build_phase` or `connect_phase` skips work in a project base class (warning); insert a `super` call when its ordering is unambiguous.
+- `phase-no-super`: a nonempty `build_phase` or `connect_phase` skips work in a project base class (warning). A `super` fix is offered only when the base phase and every method it calls are fully visible and read no configuration. Configuration reads or calls with unknown bodies withhold the fix entirely; the warning remains. These fixes are never preferred by Auto Fix.
 
 Other fixes register a class, swap object/component utils, supply a missing parent, correct a config_db field typo or compatible type, and show the field in the cross-reference. Virtual-class and unknown-base findings currently offer only Ignore. Supported slang “did you mean” diagnostics can replace a misspelling. A missing-include action adds to `uvm.includeDirs` with status-bar feedback, leaving simulator filelists unchanged: one candidate is preferred, two or three offer a choice, and more than three offer none.
 

@@ -909,6 +909,26 @@ class Extractor:
 
     # -- methods -------------------------------------------------------------
 
+    def method_calls(self, decl) -> list[tuple[str, bool]] | None:
+        if any(t.isMissing or self.sm.isMacroLoc(t.location) for t in iter_tokens(decl)):
+            return None
+        calls, pending = [], [decl]
+        while pending:
+            node = pending.pop()
+            if node.kind in (K.NewClassExpression, K.SuperNewDefaultedArgsExpression):
+                return None  # constructor dispatch is not resolved by the syntax index
+            if node.kind == K.NamedType:
+                continue
+            if node.kind == K.InvocationExpression:
+                calls.append((compact(node.left), True))
+            elif node.kind in (K.IdentifierName, K.IdentifierSelectName, K.ScopedName, K.SystemName):
+                # A value name can call a function without parentheses, even in an expression.
+                if node.parent.kind not in (K.FunctionPrototype, K.InvocationExpression):
+                    calls.append((compact(node), False))
+                continue
+            pending.extend(c for c in node if isinstance(c, Node))
+        return calls
+
     def prototype(self, proto, quals: list[str], decl_node, doc_node=None) -> Method | None:
         tok = name_token(proto.name)
         if tok is None:
@@ -931,6 +951,7 @@ class Extractor:
         return Method(name=tok.valueText, kind=kind, return_type=ret, signature=pretty(proto),
                       range=r, decl_range=self.node_range(decl_node) or r, args=args,
                       qualifiers=quals, is_prototype=True, generated=gen,
+                      calls=self.method_calls(decl_node) if not self.library and not self.in_library(r.path) else None,
                       doc=self.doc_of(decl_node if doc_node is None else doc_node, tok.valueText))
 
     def method(self, decl, quals, owner) -> Method | None:

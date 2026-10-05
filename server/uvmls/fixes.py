@@ -21,7 +21,7 @@ from .lints import (
 )
 from .elab import SOURCE as ELAB_SOURCE
 from .indexer import EOL_RE, FIX_DATA, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
-from .model import ClassInfo, Range
+from .model import ClassInfo, Method, Range, Variable
 from .project import directory_stamp, discover_files, is_bundled
 from .views import canonical_type, config_db_report, mismatched
 from .workspace import BUILTIN_TYPES
@@ -548,22 +548,71 @@ def _utils_param(ctx: Context, d) -> list[Fix]:
     return [Fix(f"Change to `{new}({arg})", changes, preferred=True)]
 
 
+def _visible_phase_work(ws, cls, name: str) -> bool:
+    """Prove the actual super method and its callees contain no configuration reads.
+
+    Only statically resolved class methods are inspectable here. Library, virtual,
+    generated and unresolved calls leave the work unknown and therefore uneditable.
+    """
+    chain = ws.chain(cls)
+    base = chain[1].spec.cls if len(chain) > 1 else None
+    pending = [ws.find_member(base, name)] if base else []
+    if not pending:
+        return False
+    seen = set()
+    unknown = unknown_macro_lines(ws)
+    while pending:
+        hit = pending.pop()
+        if not hit or not isinstance(hit[0], ClassInfo) or not isinstance(hit[1], Method):
+            return False
+        owner, meth, _ = hit
+        if owner.library or meth.is_prototype or meth.calls is None:
+            return False
+        key = (owner.qualname, meth.name)
+        if key in seen:
+            continue
+        seen.add(key)
+        declaration = next((m for m in owner.methods if m.name == meth.name), meth)
+        methods = [meth] if declaration is meth else [declaration, meth]
+        parents = ws.chain(owner)
+        local_names = {v.name for v in meth.args + meth.locals}
+        for part in methods:
+            if part.calls is None or any(part.decl_range.line <= line <= part.decl_range.end_line
+                                         for line in unknown.get(part.range.path, [])):
+                return False
+            for call, explicit in part.calls:
+                parsed = re.fullmatch(r"(?:(this|super)\s*\.\s*)?([A-Za-z_][A-Za-z0-9_$]*)", call)
+                if parsed is None:
+                    return False
+                receiver, callee = parsed.groups()
+                if not explicit and receiver is None and callee in local_names:
+                    continue
+                target = owner
+                if receiver == "super":
+                    target = parents[1].spec.cls if len(parents) > 1 else None
+                called = ws.find_member(target, callee) if target else None
+                if not explicit and called and isinstance(called[1], Variable):
+                    continue
+                if receiver != "super" and any(m.name == callee and "virtual" in m.qualifiers
+                                               for e in parents if e.spec.cls for m in e.spec.cls.methods):
+                    return False  # the body selected at runtime is not established here
+                pending.append(called)
+    return True
+
+
 def _phase_no_super(ctx: Context, d) -> list[Fix]:
     """A phase method that skips its base's: call super's first, or after leading factory overrides
-    that must precede the base's creates, unless configuration dependencies make ordering unclear."""
+    that must precede the base's work, only when that work is visible and reads no configuration."""
     ws, data = ctx.ws, d.data or {}
     cls, name = ws.class_by_qual.get(data.get("cls")), data.get("method")
     skipped = cls and skipped_super(ws, cls, name)
     meth = body_of(ws, cls, name) if skipped else None
     if meth is None or skipped[0].qualname != data.get("base") or meth.generated or not meth.args:
         return []
+    if not _visible_phase_work(ws, cls, name):
+        return []
     call = f"super.{name}({meth.args[0].name});"
     calls = ws.calls_of(cls)
-    if any(c.method == name and c.op == "set" for c in calls.config_db) and \
-            any(c.method == name and c.op != "set" for c in ws.calls_in_chain(skipped[0]).config_db):
-        # A base phase may read configuration supplied here. Neither putting super before the
-        # sets nor moving it past other work is a known-correct ordering.
-        return []
     marks = [c.range for c in calls.overrides if c.method == name]
     marks = [r for r in marks if r.path == meth.range.path and meth.decl_range.contains(r.line, r.col)]
     ft = ctx.files.get(meth.range.path)
@@ -602,8 +651,7 @@ def _phase_no_super(ctx: Context, d) -> list[Fix]:
         at, text = ft.starts[first], indent + call + ft.eol(first)
     else:
         at, text = span[0], call + " "
-    # Neither preferred nor safe: helper calls can hide ordering dependencies from the index.
-    # Even when the checks above pass, the insertion point needs manual review.
+    # Neither preferred nor safe: adding base work still changes runtime behaviour.
     return [Fix(title, [TextChange(ft.path, at, at, text)])]
 
 
