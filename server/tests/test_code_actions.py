@@ -352,7 +352,7 @@ def test_commands_only_for_a_client_that_has_them(client, tb):
 
 
 def test_missing_include(tb):
-    # slang's diagnostic: the setting, through the editor's command, or the filelist, a file not open.
+    # The editor owns settings changes; unsynced filelists cannot be edited safely.
     inc = os.path.join(tb, "inc")
     os.makedirs(os.path.join(inc, "sub"))
     with open(os.path.join(inc, "sub", "hdr.svh"), "w") as f:
@@ -363,15 +363,13 @@ def test_missing_include(tb):
         doc.change('`include "sub/hdr.svh"\n' + doc.text)
         [d] = doc.diagnostics(lambda ds: ds)
         assert (d["source"], d["code"], d["data"]) == ("slang", "CouldNotOpenIncludeFile", {"include": "sub/hdr.svh"})
-        setting, filelist = doc.actions([d])
+        [setting] = doc.actions([d])
         assert (setting["title"], setting["command"]["command"], setting["command"]["arguments"]) == (
             "Add 'inc' to uvm.includeDirs", "uvm.addIncludeDir", [{"value": "inc"}])
-        assert filelist["title"] == "Add +incdir+inc to alu_tb.f" and "isPreferred" not in filelist
-        path = os.path.join(tb, "alu_tb.f")
-        with open(path) as f:
-            text = f.read()
-        assert applied(text, edits_for(filelist, f"file://{path}")) == \
-            text.replace("+incdir+tests\n", "+incdir+tests\n+incdir+inc\n")
+        assert "edit" not in setting
+        c.notify('workspace/didChangeConfiguration', {'settings': {'uvm': {
+            'filelists': [os.path.join(tb, 'alu_tb.f')], 'elaboration': 'off', 'includeDirs': ['inc']}}})
+        doc.diagnostics(lambda ds: not ds)
     finally:
         c.close()
         shutil.rmtree(inc)

@@ -1351,7 +1351,7 @@ def test_missing_include_candidate_limit_and_order(tmp_path, names, expected):
     [d] = slang_findings(w, 'CouldNotOpenIncludeFile')
     fixes = offered(w, d, commands=frozenset({'uvm.addIncludeDir'}))
     assert [f.command[1][0]['value'] for f in fixes if f.command] == expected
-    assert len([f for f in fixes if f.changes]) == len(expected)
+    assert not any(f.changes for f in fixes)
     assert not any(f.preferred for f in fixes)
 
 
@@ -1362,27 +1362,25 @@ def test_missing_include_not_offered(tmp_path, name):
     assert offered(w, d, commands=frozenset({"uvm.addIncludeDir"})) == []
 
 
-@pytest.mark.parametrize("before, after", [
-    ("// the tb\n+incdir+rtl\n-incdir  ip\nt.sv\n", "// the tb\n+incdir+rtl\n-incdir  ip\n+incdir+inc\nt.sv\n"),
-    ("// the tb\n\n+define+X\nt.sv\n", "// the tb\n\n+incdir+inc\n+define+X\nt.sv\n"),
-    ("  +INCDIR+rtl\r\nt.sv", "  +INCDIR+rtl\r\n  +incdir+inc\r\nt.sv"),
-    ("t.sv\n+incdir+rtl", "t.sv\n+incdir+rtl\n+incdir+inc"),
-    ("/* the tb\n   +incdir+old\n*/ # and\n# more\nt.sv\n", "/* the tb\n   +incdir+old\n*/ # and\n# more\n+incdir+inc\nt.sv\n"),
+@pytest.mark.parametrize("before", [
+    "// the tb\n+incdir+rtl\n-incdir  ip\nt.sv\n",
+    "// the tb\n\n+define+X\nt.sv\n",
+    "  +INCDIR+rtl\r\nt.sv",
+    "t.sv\n+incdir+rtl",
+    "/* the tb\n   +incdir+old\n*/ # and\n# more\nt.sv\n",
 ])
-def test_missing_include_filelist(tmp_path, before, after):
+def test_missing_include_filelist(tmp_path, before):
     files = {"inc/sub/hdr.svh": "int q;\n", "rtl/r.sv": "", "ip/i.sv": "",
              "t.sv": '`include "sub/hdr.svh"\nmodule t; endmodule\n', "tb.f": before}
     w = index(tmp_path, files, filelists=[str(tmp_path / "tb.f")])
     [d] = slang_findings(w, "CouldNotOpenIncludeFile")
-    [fix] = offered(w, d)
-    assert (fix.title, fix.preferred) == ("Add +incdir+inc to tb.f", False)
-    # With the setting too: two ways, neither preferred.
-    assert [(f.title, f.preferred) for f in offered(w, d, commands=frozenset({"uvm.addIncludeDir"}))] == [
-        ("Add 'inc' to uvm.includeDirs", False), ("Add +incdir+inc to tb.f", False)]
-    apply_fix(w, fix)
+    assert offered(w, d) == []
+    [fix] = offered(w, d, commands=frozenset({"uvm.addIncludeDir"}))
+    assert fix.command == ("uvm.addIncludeDir", [{"value": "inc"}]) and not fix.changes
     with open(tmp_path / "tb.f", newline="") as f:
-        assert f.read() == after
-    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb.f")], bundled_uvm=False))
+        assert f.read() == before
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb.f")],
+                              include_dirs=[str(tmp_path / "inc")], bundled_uvm=False))
     assert not slang_findings(w, "CouldNotOpenIncludeFile")
 
 
@@ -1393,9 +1391,7 @@ def test_missing_include_filelist_outside_the_workspace(tmp_path):
     w = index(tmp_path / "ws", files, filelists=[str(tmp_path / "flows" / "tb.f")])
     [d] = slang_findings(w, "CouldNotOpenIncludeFile")
     assert offered(w, d) == []
-    [fix] = offered(w, d, disabled_support=True)
-    assert (fix.title, fix.changes, fix.disabled) == (
-        "Add +incdir+../ws/inc to tb.f", [], f"{tmp_path / 'flows' / 'tb.f'} is outside the workspace")
+    assert offered(w, d, disabled_support=True) == []
 
 
 # -- fix-all -------------------------------------------------------------------------------

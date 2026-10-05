@@ -22,7 +22,7 @@ from .lints import (
 from .elab import SOURCE as ELAB_SOURCE
 from .indexer import EOL_RE, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
 from .model import ClassInfo, Range
-from .project import discover_files, is_bundled, parse_filelist
+from .project import discover_files, is_bundled
 from .views import canonical_type, config_db_report, mismatched
 from .workspace import BUILTIN_TYPES
 
@@ -772,57 +772,21 @@ def setting_value(ws, path: str) -> str:
     return path
 
 
-def add_incdir(ft: FileText, path: str) -> tuple[TextChange, str] | None:
-    """An edit that adds +incdir+ for a directory to a filelist: after its last +incdir+ (or
-    -incdir) line, else before its first line of anything but comments; and the option written."""
-    rel = os.path.relpath(path, os.path.dirname(ft.path)).replace(os.sep, "/")
-    if re.search(r"\s|[\"'$]", rel):
-        return None  # the filelist would need quoting, which simulators read differently
-    option = f"+incdir+{rel}"
-    masked = mask(ft.text)  # its // and /* */ comments; # ones are left to the line test
-    last = first = None
-    for n in range(len(ft.starts)):
-        line = masked[ft.starts[n]:ft.ends[n]].strip()
-        if re.match(r"(\+incdir\+|-incdir\b)", line, re.IGNORECASE):
-            last = n
-        elif first is None and line and not line.startswith("#"):
-            first = n
-    if last is not None:
-        at, indent = ft.ends[last], indent_of(ft.line(last))
-        return TextChange(ft.path, at, at, ft.eol(last) + indent + option), option
-    at = ft.starts[first] if first is not None else len(ft.text)
-    eol = ft.eol(first)
-    if first is None and ft.text and not ft.text.endswith(("\n", "\r")):
-        return TextChange(ft.path, at, at, eol + option + eol), option
-    return TextChange(ft.path, at, at, option + eol), option
-
-
-def _filelist_for(ws, path: str) -> str | None:
-    """The configured filelist an include directory for a file goes in: the first that lists the
-    file, else the first."""
-    lists = ws.config.filelists if ws.sources and ws.sources.mode == "filelist" else []
-    return next((fl for fl in lists if path in parse_filelist(fl).files), lists[0] if lists else None)
-
-
 def _missing_include(ctx: Context, d) -> list[Fix]:
     """An `include slang cannot open, of a file that is in the workspace: add the directory that
-    holds it, as the include names it, to uvm.includeDirs (through the editor), or to the filelist."""
+    holds it, as the include names it, to uvm.includeDirs through the editor. Filelists are not
+    synced by the client, so their live text is unavailable for a safe edit."""
     dirs = include_dirs_for(ctx.ws, (d.data or {}).get("include") or "", d.range.path)
     if len(dirs) > 3:
         return []  # too many candidates to suggest a directory
-    filelist = _filelist_for(ctx.ws, d.range.path)
     command = "uvm.addIncludeDir"
     fixes = []
     for path in dirs:
         if command in ctx.client.commands:
             value = setting_value(ctx.ws, path)
             fixes.append(Fix(f"Add '{value}' to uvm.includeDirs", command=(command, [{"value": value}])))
-        ft = filelist and ctx.files.get(filelist)
-        added = ft and add_incdir(ft, path)
-        if added:
-            fixes.append(Fix(f"Add {added[1]} to {os.path.basename(filelist)}", [added[0]]))
     if len(fixes) == 1 and fixes[0].command:
-        fixes[0].preferred = True  # a setting of this editor's; a filelist is the build's, not ours to change unasked
+        fixes[0].preferred = True
     return fixes
 
 
