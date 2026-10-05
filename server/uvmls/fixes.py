@@ -542,8 +542,8 @@ def _utils_param(ctx: Context, d) -> list[Fix]:
 
 
 def _phase_no_super(ctx: Context, d) -> list[Fix]:
-    """A phase method that skips its base's: call super's first, or right after the statements that
-    set factory overrides or config_db values (the base's build_phase creates what they are for)."""
+    """A phase method that skips its base's: call super's first, or after leading factory overrides
+    that must precede the base's creates. Config_db sets can follow the base's phase."""
     ws, data = ctx.ws, d.data or {}
     cls, name = ws.class_by_qual.get(data.get("cls")), data.get("method")
     skipped = cls and skipped_super(ws, cls, name)
@@ -552,16 +552,29 @@ def _phase_no_super(ctx: Context, d) -> list[Fix]:
         return []
     call = f"super.{name}({meth.args[0].name});"
     calls = ws.calls_of(cls)
-    marks = [c.range for c in calls.overrides if c.method == name] + \
-        [c.range for c in calls.config_db if c.method == name and c.op == "set"]
+    marks = [c.range for c in calls.overrides if c.method == name]
     marks = [r for r in marks if r.path == meth.range.path and meth.decl_range.contains(r.line, r.col)]
+    ft = ctx.files.get(meth.range.path)
+    if ft is None:
+        return []
     if marks:
         last = max(marks, key=lambda r: (r.line, r.col))
         stmt = next((it for it in meth.body_items if it.contains(last.line, last.col)), None)
+        # Other work before an override may need members the base creates. Neither moving super
+        # past it nor putting super before the override is a known-correct ordering.
+        for item in meth.body_items:
+            span = ft.span(item)
+            calls_here = [ft.span(r) for r in marks if item.contains(r.line, r.col)]
+            if span is None or len(calls_here) != 1 or calls_here[0] is None:
+                return []
+            a, b = calls_here[0]
+            if a != span[0] or mask(ft.text[b:span[1]]).strip() != ";":
+                return []
+            if item is stmt:
+                break
         title = f"Call {call[:-1]} after the factory overrides"
     else:
         stmt, title = meth.body_items[0], f"Call {call[:-1]} first"
-    ft = ctx.files.get(meth.range.path)
     span = ft.span(stmt) if ft and stmt else None
     if span is None:
         return []

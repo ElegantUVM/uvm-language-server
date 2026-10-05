@@ -956,8 +956,8 @@ class override_test extends base_test;
   function new(string name, uvm_component parent); super.new(name, parent); endfunction
   function void build_phase(uvm_phase phase);
     set_type_override_by_type(uvm_env::get_type(), uvm_env::get_type());
-    uvm_config_db #(int)::set(this, "*", "n", 1);
     super.build_phase(phase);
+    uvm_config_db #(int)::set(this, "*", "n", 1);
     `uvm_info("T", "built", UVM_LOW)
   endfunction
 endclass
@@ -971,8 +971,8 @@ endclass
 
 @pytest.mark.parametrize("old,new,title", [
     ("    int n;\n    super.build_phase(phase);\n", "    int n;\n", "Call super.build_phase(phase) first"),
-    ("uvm_config_db #(int)::set(this, \"*\", \"n\", 1);\n    super.build_phase(phase);\n",
-     "uvm_config_db #(int)::set(this, \"*\", \"n\", 1);\n", "Call super.build_phase(phase) after the factory overrides"),
+    ("set_type_override_by_type(uvm_env::get_type(), uvm_env::get_type());\n    super.build_phase(phase);\n",
+     "set_type_override_by_type(uvm_env::get_type(), uvm_env::get_type());\n", "Call super.build_phase(phase) after the factory overrides"),
     ("build_phase(uvm_phase phase); super.build_phase(phase); `uvm_info", "build_phase(uvm_phase phase); `uvm_info",
      "Call super.build_phase(phase) first"),
 ])
@@ -1026,6 +1026,53 @@ def test_phase_no_super_fix_compiles(tmp_path, override):
                         "the base class's build_phase, which creates m_env, never runs"
     fix_once(w, "phase-no-super")
     assert unchanged(tmp_path) and user_errors(w) == []
+
+
+@pytest.mark.parametrize('overrides,read', [('', ''), ('', '    m_env.set_report_verbosity_level(100);\n'),
+    ('    set_type_override_by_type(uvm_env::get_type(), uvm_env::get_type());\n',
+     '    m_env.set_report_verbosity_level(100);\n')])
+def test_phase_no_super_precedes_member_uses_and_config_sets(tmp_path, overrides, read):
+    text = """import uvm_pkg::*;
+class base_test extends uvm_test;
+  uvm_env m_env;
+  function void build_phase(uvm_phase phase);
+    m_env = uvm_env::type_id::create("m_env", this);
+    uvm_config_db #(int)::set(this, "m_env", "k", 1);
+  endfunction
+endclass
+class config_test extends base_test;
+  function void build_phase(uvm_phase phase);
+""" + overrides + '    super.build_phase(phase);\n' + read + """    uvm_config_db #(int)::set(this, "m_env", "k", 2);
+  endfunction
+endclass
+"""
+    planted = text.replace('    super.build_phase(phase);\n', '')
+    w, fix = round_trip(tmp_path, {'t.sv': text}, {'t.sv': planted}, 'phase-no-super')
+    where = 'after the factory overrides' if overrides else 'first'
+    assert fix.title == f'Call super.build_phase(phase) {where}'
+    assert fix.preferred and not fix.safe
+
+
+@pytest.mark.parametrize('body', [
+    '    m_env.set_report_verbosity_level(100);\n    set_type_override_by_type(uvm_env::get_type(), uvm_env::get_type());\n',
+    '    begin\n      m_env.set_report_verbosity_level(100);\n      set_type_override_by_type(uvm_env::get_type(), uvm_env::get_type());\n    end\n',
+])
+def test_phase_no_super_withholds_when_overrides_follow_other_work(tmp_path, body):
+    text = """import uvm_pkg::*;
+class base_test extends uvm_test;
+  uvm_env m_env;
+  function void build_phase(uvm_phase phase);
+    m_env = uvm_env::type_id::create("m_env", this);
+  endfunction
+endclass
+class config_test extends base_test;
+  function void build_phase(uvm_phase phase);
+""" + body + """  endfunction
+endclass
+"""
+    w = index(tmp_path, {'t.sv': text})
+    [d] = findings(w, 'phase-no-super')
+    assert offered(w, d) == []
 
 
 # -- config_db ---------------------------------------------------------------------------
