@@ -5,6 +5,7 @@ dist/**/*.map
 tsconfig.json
 esbuild.mjs
 scripts/**
+tests/**
 server/**/__pycache__/**
 server/tests/**
 server/.venv/**
