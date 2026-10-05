@@ -1594,6 +1594,41 @@ def test_ignore_on_this_line(tmp_path, layout):
     ignore_round_trip(w, d, WAIVE.replace("LINE", after).replace("\n", eol))
 
 
+@pytest.mark.parametrize('doc', ['', '  // Custom build.\n'])
+def test_ignore_quick_fix_preserves_phase_hover_docs(tmp_path, doc):
+    from uvmls.navigation import Navigator
+    text = """import uvm_pkg::*;
+class base_test extends uvm_test;
+  uvm_env m_env;
+  // Builds the env.
+  function void build_phase(uvm_phase phase);
+    m_env = uvm_env::type_id::create("m_env", this);
+  endfunction
+endclass
+class custom_test extends base_test;
+""" + doc + """  function void build_phase(uvm_phase phase); // override
+    int n;
+    n = 1;
+  endfunction
+endclass
+"""
+    w = index(tmp_path, {'t.sv': text})
+    cls = w.find_class('custom_test')
+    method = cls.methods[0]
+    before = Navigator(w).hover(cls.path, method.range.line, method.range.col, text)
+    [d] = findings(w, 'phase-no-super')
+    [fix] = fixes_ignore(w, d)
+    apply_fix(w, fix)
+    assert not findings(w, 'phase-no-super')
+    cls = w.find_class('custom_test')
+    method = cls.methods[0]
+    assert method.doc == ('Custom build.' if doc else '')
+    after = Navigator(w).hover(cls.path, method.range.line, method.range.col, (tmp_path / 't.sv').read_text())
+    assert after == before
+    assert 'uvm-lint' not in after
+    assert ('Custom build.' if doc else 'doc from `base_test::build_phase`') in after
+
+
 def test_ignore_two_codes_on_one_line(tmp_path):
     line = f'    c = cfg::type_id::create("c"); {M}'
     w = index(tmp_path, {"t.sv": WAIVE.replace("LINE", line)})

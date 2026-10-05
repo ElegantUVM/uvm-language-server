@@ -315,6 +315,8 @@ def clean_doc(comments: list[str]) -> str:
     for c in comments:
         c = c.strip()
         if c.startswith("//"):
+            if IGNORE_RE.match(c):
+                continue  # a lint waiver, not documentation
             parts = [c.lstrip("/").strip()]
         elif c.startswith("/*"):
             body = (c[2:-2] if c.endswith("*/") else c[2:]).lstrip("*")

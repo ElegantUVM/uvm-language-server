@@ -107,6 +107,25 @@ def test_latin1_source_text_is_indexed(tmp_path):
     assert "CouldNotOpenIncludeFile" in {d.code for d in w.user_diagnostics()}
 
 
+def test_ignore_directives_are_not_documentation(tmp_path):
+    f = tmp_path / 't.sv'
+    f.write_text("""// uvm-lint: ignore utils-mismatch
+class c;
+  // Doc.
+  // uvm-lint: ignore phase-no-super
+  function void f(); endfunction
+  // uvm-lint: ignore factory-ctor
+  function void g(); endfunction
+  /* uvm-lint: ignore is only a line-comment directive. */
+  function void h(); endfunction
+endclass
+""")
+    [cls] = Indexer([], {}, use_shim=True).parse(str(f)).classes
+    assert cls.doc == ''
+    assert {m.name: m.doc for m in cls.methods} == {
+        'f': 'Doc.', 'g': '', 'h': 'uvm-lint: ignore is only a line-comment directive.'}
+
+
 def test_doc_comments(tmp_path):
     f = tmp_path / "p.sv"
     f.write_text(
