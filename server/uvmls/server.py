@@ -9,6 +9,7 @@ import os
 import sys
 import time
 from dataclasses import replace
+from difflib import SequenceMatcher
 from urllib.parse import unquote, urlparse
 
 from lsprotocol import types as T
@@ -118,6 +119,8 @@ class UvmLanguageServer(LanguageServer):
         self.workspace_roots: list[str] = []
         self.published: dict[str, list[Diag]] = {}  # what the client was last sent, per file
         self.diag_texts: dict[str, str | None] = {}  # indexed text those describe, including unopened files
+        self.diag_origins: dict[str, dict[tuple, int | None]] = {}
+        self._diagnostic_id = 0
         self.client_commands: frozenset[str] = frozenset()  # client-side commands it can run
         self.pending: set[str] = set()
         self._debounce: asyncio.TimerHandle | None = None
@@ -258,6 +261,27 @@ class UvmLanguageServer(LanguageServer):
                 hits.add(i)
             shown += [have[i].severity for i in hits]
         self.elab_shown = shown
+        for path, diags in per_file.items():
+            then, now = self.diag_texts.get(path), self.ws.texts.get(path, docs.get(path))
+            where = finding_lines(then, now)
+            previous = {}
+            for d in self.published.get(path, ()):
+                line, end = where(d.range.line), where(d.range.end_line)
+                if line is not None and end is not None:
+                    moved = replace(d, range=replace(d.range, line=line, end_line=end))
+                    previous[diagnostic_key(lsp_diagnostic(moved))] = d
+            origins = self.diag_origins.setdefault(path, {})
+            for i, d in enumerate(diags):
+                key = diagnostic_key(lsp_diagnostic(d))
+                old = previous.get(key)
+                token = (old.data or {}).get(DIAGNOSTIC_ID) if old and _identity(old.data) == _identity(d.data) else None
+                if token is None:
+                    self._diagnostic_id += 1
+                    token = self._diagnostic_id
+                diags[i] = replace(d, data={**(d.data or {}), DIAGNOSTIC_ID: token})
+                # Without data, two findings sent at the same range are indistinguishable.
+                # Keep an ambiguous signature retired instead of silently selecting the newer one.
+                origins[key] = token if key not in origins or origins[key] == token else None
         for path in self.published.keys() - per_file.keys():
             self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), []))
         for path, diags in per_file.items():
@@ -773,7 +797,21 @@ FIX_DATA = {  # what another source's diagnostic must carry for a quick fix
     "CouldNotOpenIncludeFile": ("include",), "TypoKeyword": ("from", "to"),
     "TypoIdentifier": ("from", "to"), "UnknownMember": ("from", "to"),
 }
-POSITION_KEYS = ("at",)  # data that changes when lines move; the finding stays the same
+DIAGNOSTIC_ID = "_uvmls_id"
+POSITION_KEYS = ("at", DIAGNOSTIC_ID)  # metadata, not the lint's semantic identity
+
+
+def diagnostic_key(d: T.Diagnostic) -> tuple:
+    r = d.range
+    return d.source, d.code, d.message, r.start.line, r.start.character, r.end.line, r.end.character
+
+
+def finding_lines(then: str | None, now: str | None):
+    """Map unchanged lines across separate edits; a rewritten or deleted line has no identity."""
+    if then is None or now is None or then == now:
+        return lambda line: line
+    blocks = SequenceMatcher(None, fixes.EOL_RE.split(then), fixes.EOL_RE.split(now)).get_matching_blocks()
+    return lambda line: next((b + line - a for a, b, n in blocks if a <= line < a + n), None)
 
 
 def _kind_wanted(kind: str, only: list[str] | None) -> bool:
@@ -794,38 +832,28 @@ def _fixable(ls: UvmLanguageServer, path: str, d: T.Diagnostic) -> bool:
     data = _plain(d.data)
     if isinstance(data, dict):
         return all(k in data for k in keys)
-    return any(x.code == d.code and x.message == d.message and x.range.line == d.range.start.line
+    return diagnostic_key(d) in ls.diag_origins.get(path, {}) or any(
+               x.code == d.code and x.message == d.message and x.range.line == d.range.start.line
                for x in ls.published.get(path, ()))  # a client that does not send data back
 
 
 def _identity(data) -> dict | None:
     data = _plain(data)
-    return {k: v for k, v in data.items() if k not in POSITION_KEYS} if isinstance(data, dict) else None
+    return ({k: v for k, v in data.items() if k not in POSITION_KEYS} or None) if isinstance(data, dict) else None
 
 
 def current_finding(d: T.Diagnostic, published: list[Diag], then: str | None, now: str | None) -> Diag | None:
-    """The finding, as the index has it now, that a diagnostic from the client is about. The
-    client's copy can predate the latest edit: it must match on the mapped line, or inside the
-    block that replaced that line. A deleted finding must not select an unrelated neighbour."""
+    """Resolve a published identity, or an untagged diagnostic on an unchanged mapped line."""
+    same = [x for x in published if x.source == d.source and x.code == d.code and x.message == d.message]
+    payload = _plain(d.data)
+    if isinstance(payload, dict) and DIAGNOSTIC_ID in payload:
+        return next((x for x in same if (x.data or {}).get(DIAGNOSTIC_ID) == payload[DIAGNOSTIC_ID]), None)
     data = _identity(d.data)
-    same = [x for x in published if x.source == d.source and x.code == d.code and x.message == d.message
-            and (data is None or _identity(x.data) == data)]
-    if not same:
-        return None
-    line, col = d.range.start.line, d.range.start.character
-    lo, hi = line, line + 1
-    rewritten = False
-    if then is not None and now is not None and then != now:
-        moved = shift_lines(then, now)(line)
-        if moved is None:
-            lo, _, hi = changed_lines(then, now)
-            rewritten = True
-        else:
-            line = lo = moved
-            hi = moved + 1
-    near = [x for x in same if lo <= x.range.line < hi and
-            (rewritten or (x.range.col == col and x.range.end_col == d.range.end.character))]
-    return min(near, key=lambda x: (abs(x.range.line - line), abs(x.range.col - col))) if near else None
+    same = [x for x in same if data is None or _identity(x.data) == data]
+    where = finding_lines(then, now)
+    line, end = where(d.range.start.line), where(d.range.end.line)
+    return next((x for x in same if x.range.line == line and x.range.end_line == end
+                 and x.range.col == d.range.start.character and x.range.end_col == d.range.end.character), None)
 
 
 class _Actions:
@@ -892,7 +920,16 @@ def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], 
     emitted: set[str] = set()
     order = sorted(incoming, key=lambda d: (d.severity or 4, d.range.start.line, d.range.start.character))
     for d in order:
-        finding = current_finding(d, published, then, now)
+        sent, payload = d, _plain(d.data)
+        if not isinstance(payload, dict) or DIAGNOSTIC_ID not in payload:
+            origins = ls.diag_origins.get(path)
+            if origins is not None:
+                token = origins.get(diagnostic_key(d))
+                if token is None:
+                    continue
+                sent = T.Diagnostic(d.range, d.message, code=d.code, source=d.source,
+                                    data={**(payload if isinstance(payload, dict) else {}), DIAGNOSTIC_ID: token})
+        finding = current_finding(sent, published, then, now)
         if finding is None:
             continue
         for fix in fixes.fixes_for(ctx, finding):

@@ -385,7 +385,7 @@ def test_missing_include(tb):
         doc = Doc(c, agent(tb))
         doc.change('`include "sub/hdr.svh"\n' + doc.text)
         [d] = doc.diagnostics(lambda ds: ds)
-        assert (d["source"], d["code"], d["data"]) == ("slang", "CouldNotOpenIncludeFile", {"include": "sub/hdr.svh"})
+        assert (d["source"], d["code"], d["data"]["include"]) == ("slang", "CouldNotOpenIncludeFile", "sub/hdr.svh")
         [setting] = doc.actions([d])
         assert (setting["title"], setting["command"]["command"], setting["command"]["arguments"]) == (
             "Add 'inc' to uvm.includeDirs", "uvm.addIncludeDir", [{"value": "inc"}])
@@ -423,30 +423,39 @@ def test_a_stale_diagnostic_maps_to_the_finding_that_moved():
 
 @pytest.mark.parametrize('delete', [False, True])
 @pytest.mark.parametrize('data', [False, True])
-def test_removed_finding_does_not_match_its_neighbour(client, tb, delete, data):
+@pytest.mark.parametrize('republished', [False, True])
+def test_removed_finding_does_not_match_its_neighbour(tb, delete, data, republished):
+    client = start(tb)
     doc = Doc(client, agent(tb))
     original = doc.text
     call = '    m_monitor = alu_monitor::type_id::create("m_monitor");\n'
     planted = original.replace('    m_monitor = alu_monitor::type_id::create("m_monitor", this);\n',
-                               call + call.replace('m_monitor', 'm_monitor2'))
-    # Both calls create the same class, so their diagnostic identities match.
-    planted = planted.replace('alu_monitor2::', 'alu_monitor::')
+                               call.replace('m_monitor', 'mon1') + call.replace('m_monitor', 'mon2'))
+    call = call.replace('m_monitor', 'mon1')
+    # Same-length names give both findings identical ranges after deleting the first.
     try:
         doc.change(planted)
         ds = doc.diagnostics(lambda ds: len(ds) == 2)
         old = dict(ds[0])
+        assert doc.actions([old])
         if not data:
             old.pop('data', None)
-        doc.change(planted.replace(call, '' if delete else call.replace('");', '", this);'), 1))
+        changed = planted.replace(call, '' if delete else call.replace('");', '", this);'), 1)
+        # A second edit below the survivor must not make it part of the first edit.
+        doc.change(changed.replace('endclass', '// edited below both calls\nendclass'))
+        if republished:
+            current = doc.diagnostics(lambda ds: len(ds) == 1)
         assert doc.actions([old]) == []
-        doc.diagnostics(lambda ds: len(ds) == 1)
+        if not republished:
+            current = doc.diagnostics(lambda ds: len(ds) == 1)
         assert doc.actions([old]) == []
+        assert own_fixes(doc.actions(current))  # the survivor still has its own identity
     finally:
         doc.change(original)
-        doc.close()
+        client.close()
 
 
-def test_stale_finding_only_matches_the_replaced_lines():
+def test_stale_finding_only_matches_unchanged_lines():
     from uvmls.model import Diag, Range
     from uvmls.server import current_finding, lsp_diagnostic
 
@@ -455,9 +464,30 @@ def test_stale_finding_only_matches_the_replaced_lines():
     then = 'head\nfirst\nsecond\ntail\n'
     sent = lsp_diagnostic(diag(1))
     assert current_finding(sent, [diag(2)], then, then.replace('first', 'fixed')) is None
-    assert current_finding(sent, [diag(1), diag(2)], then, then.replace('first', 'edited')).range.line == 1
+    assert current_finding(sent, [diag(1), diag(2)], then, then.replace('first', 'edited')) is None
     assert current_finding(sent, [diag(1)], then, then.replace('first\n', '')) is None
     assert current_finding(sent, [diag(2)], then, then) is None
+
+
+@pytest.mark.parametrize('data', [False, True])
+def test_diagnostic_identity_survives_republication(tb, data):
+    client = start(tb)
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    try:
+        doc.change(original.replace('create("m_driver", this)', 'create("m_driver")'))
+        [old] = doc.diagnostics(lambda ds: ds)
+        if not data:
+            old.pop('data', None)
+        for i in range(2):
+            doc.change('// inserted\n' + doc.text.replace('endclass', '// below\nendclass'))
+            [current] = doc.diagnostics(lambda ds: ds)
+            [fix] = own_fixes(doc.actions([old]))
+            assert applied(doc.text, edits_for(fix, doc.uri, doc.version)) == doc.text.replace(
+                'create("m_driver")', 'create("m_driver", this)')
+            assert current['range']['start']['line'] == old['range']['start']['line'] + i + 1
+    finally:
+        client.close()
 
 
 def test_full_reindex_moves_an_unopened_finding(tmp_path):

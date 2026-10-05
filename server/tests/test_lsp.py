@@ -152,6 +152,7 @@ def test_stats_and_diagnostics(client):
     assert [d["code"] for d in diag["params"]["diagnostics"]] == ["config-db-no-set"]
     # What its quick fixes need comes with it.
     [d] = diag["params"]["diagnostics"]
+    assert isinstance(d["data"].pop("_uvmls_id"), int)
     assert d["data"] == {"field": "checks_enable", "at": [d["range"]["start"]["line"], d["range"]["start"]["character"]]}
 
 
