@@ -245,13 +245,15 @@ class FilelistResult:
     timescale: str | None = None
 
 
-def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | None = None) -> FilelistResult:
+def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | None = None,
+                   *, strict: bool = False) -> FilelistResult:
     """Parse a VCS / Xcelium / Questa style filelist.
 
     Only options that affect parsing are interpreted (-f/-F, +incdir+, -incdir,
     +define+, -D, -v), plus -timescale for elaboration. Every other option is
     ignored, so simulator specific flags never break the language server.
     Relative paths resolve against the filelist's own directory.
+    Strict mode raises read errors so CI cannot silently skip sources.
     """
     result = result or FilelistResult()
     seen = seen if seen is not None else set()
@@ -264,6 +266,8 @@ def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | 
         with open(path, encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError as e:
+        if strict:
+            raise
         result.warnings.append(f"cannot read filelist {path}: {e.strerror}")
         return result
 
@@ -292,11 +296,11 @@ def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | 
         nxt = tokens[i + 1] if i + 1 < len(tokens) else None
         low = tok.lower()
         if low in ("-f", "-file", "-filelist") and nxt:
-            parse_filelist(resolve(nxt), result, seen)
+            parse_filelist(resolve(nxt), result, seen, strict=strict)
             i += 2
             continue
         if tok == "-F" and nxt:
-            parse_filelist(resolve(nxt), result, seen)
+            parse_filelist(resolve(nxt), result, seen, strict=strict)
             i += 2
             continue
         if low.startswith("+incdir+"):

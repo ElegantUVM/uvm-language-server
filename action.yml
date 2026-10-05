@@ -53,6 +53,16 @@ runs:
           echo "elab must be true or false" >&2
           exit 2
         fi
+        python - <<'PY'
+        import os
+        import sys
+        from uvmls.project import parse_filelist
+
+        try:
+            parse_filelist(os.environ["UVMLS_FILELIST"], strict=True)
+        except OSError as e:
+            sys.exit(f"cannot read filelist {e.filename}: {e.strerror}")
+        PY
         args=(-f "$UVMLS_FILELIST")
         if [[ -n "$UVMLS_UVM_HOME" ]]; then
           args+=(--uvm-home "$UVMLS_UVM_HOME")

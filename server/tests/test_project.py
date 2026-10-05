@@ -39,7 +39,8 @@ def test_discovery_mode_skips_included_files():
     assert "agent/alu_driver.svh" not in rel  # included by alu_pkg.sv
 
 
-def test_filelist_options(tmp_path, monkeypatch):
+@pytest.mark.parametrize("strict", [False, True])
+def test_filelist_options(tmp_path, monkeypatch, strict):
     monkeypatch.setenv("MY_IP", str(tmp_path / "ip"))
     (tmp_path / "ip").mkdir()
     (tmp_path / "ip" / "ip.f").write_text("+incdir+$MY_IP/inc\n$(MY_IP)/ip_pkg.sv\n")
@@ -49,13 +50,25 @@ def test_filelist_options(tmp_path, monkeypatch):
         "-ntb_opts uvm\n"
         "tb.sv  # trailing comment\n"
     )
-    r = parse_filelist(str(tmp_path / "top.f"))
+    r = parse_filelist(str(tmp_path / "top.f"), strict=strict)
     assert r.defines == {"A": "1", "B": "", "C": "2"}
     assert r.include_dirs == [str(tmp_path / "ip" / "inc")]
     assert r.files == [str(tmp_path / "ip" / "ip_pkg.sv"), str(tmp_path / "tb.sv")]
     assert r.timescale == "1ns/1ps"
     (tmp_path / "xrun.f").write_text("-timescale 1ps/1fs\ntb.sv\n")
-    assert parse_filelist(str(tmp_path / "xrun.f")).timescale == "1ps/1fs"
+    assert parse_filelist(str(tmp_path / "xrun.f"), strict=strict).timescale == "1ps/1fs"
+
+
+@pytest.mark.parametrize("flag", ["-f", "-F", "-file", "-filelist"])
+def test_filelist_read_errors_can_be_fatal(tmp_path, flag):
+    path = tmp_path / "tb.f"
+    path.write_text(f"top.sv\n{flag} absent.f\n")
+    result = parse_filelist(str(path))
+    assert result.files == [str(tmp_path / "top.sv")]
+    assert len(result.warnings) == 1 and "cannot read filelist" in result.warnings[0]
+    with pytest.raises(FileNotFoundError) as exc:
+        parse_filelist(str(path), strict=True)
+    assert exc.value.filename == str(tmp_path / "absent.f")
 
 
 def test_repo_root_discovery_ignores_macro_shims(tmp_path):

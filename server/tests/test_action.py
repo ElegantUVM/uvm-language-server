@@ -177,6 +177,44 @@ def test_action_scans_the_callers_checkout_and_writes_outputs(tmp_path, elab):
     assert not (root / "unexpected").exists()
 
 
+@pytest.mark.parametrize("elab", ["false", "true"])
+@pytest.mark.parametrize("policy", ["warning", "error", "never"])
+@pytest.mark.parametrize("mode", ["missing", "unreadable", "nested-missing", "nested-unreadable", "empty"])
+def test_action_rejects_unreadable_filelists(tmp_path, elab, policy, mode):
+    (tmp_path / "top.sv").write_text("module top; endmodule\n")
+    filelist = tmp_path / "tb.f"
+    if mode.startswith("nested"):
+        (tmp_path / "lists").mkdir()
+        filelist.write_text('top.sv\n-f "lists/inner list.f"\n')
+        (tmp_path / "lists" / "inner list.f").write_text("-F ../absent.f\n")
+    unreadable = tmp_path / "absent.f" if mode.startswith("nested") else filelist
+    if mode.endswith("unreadable"):
+        unreadable.write_text("top.sv\n")
+        unreadable.chmod(0)
+        if os.access(unreadable, os.R_OK):
+            unreadable.chmod(0o600)
+            pytest.skip("file permissions do not prevent this user from reading")
+    output = tmp_path / "outputs"
+    env = {"UVMLS_FILELIST": "" if mode == "empty" else "tb.f", "UVMLS_UVM_HOME": "",
+           "UVMLS_ELAB": elab, "UVMLS_ACTION_PATH": str(REPO), "GITHUB_WORKSPACE": str(tmp_path),
+           "GITHUB_OUTPUT": str(output), "UVM_HOME": "", "PYTHONPATH": str(REPO / "server")}
+    steps = action()["runs"]["steps"]
+    scan = next(s for s in steps if s.get("id") == "scan")
+    try:
+        result = shell_step(scan, tmp_path, env)
+    finally:
+        if mode.endswith("unreadable"):
+            unreadable.chmod(0o600)
+    if result.returncode == 0:
+        values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        gate = shell_step(steps[-1], tmp_path, {**env, "UVMLS_FAIL_ON": policy,
+                         "UVMLS_LINT_STATUS": values["lint-status"], "UVMLS_ELAB_STATUS": values["elab-status"]})
+        assert gate.returncode != 0, f"action passed with {mode} filelist: {values}"
+    assert result.returncode != 0, "filelist loading must fail before analysis"
+    assert "cannot read filelist" in result.stderr
+    assert not output.exists() and not (tmp_path / "uvmls.sarif").exists()
+
+
 @pytest.mark.parametrize("policy,level,status", [
     ("warning", "note", 0), ("warning", "warning", 1), ("warning", "error", 1),
     ("error", "note", 0), ("error", "warning", 0), ("error", "error", 1),
