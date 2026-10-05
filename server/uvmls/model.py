@@ -77,10 +77,8 @@ class Method:
     non_ansi: bool = False  # arguments declared in the body cannot have default values
     generated: bool = False
     doc: str = ""
-    # Where a body is, for edits; None (empty) for one a macro writes.
-    header_end: Range | None = None  # the `;` that ends the prototype
+    # Where a body is, for edits; empty for one a macro writes.
     body_items: list[Range] = field(default_factory=list)  # top-level statements, declarations left out
-    end_kw: Range | None = None  # endfunction / endtask
     super_calls: list[str] = field(default_factory=list)  # super.X(...) -> 'X', C::X(...) -> 'C::X'
     forwarded_phase: str | None = None  # a body that only forwards its phase argument: 'super' or a base name
 

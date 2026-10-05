@@ -959,7 +959,6 @@ class Extractor:
             meth.super_calls = sink.super_calls
             meth.forwarded_phase = forwarded_phase(decl, meth)
             if not meth.generated:
-                meth.header_end, meth.end_kw = self.plain_range(decl.semi), self.plain_range(decl.end)
                 meth.body_items = [r for r in (self.span(st) for st in decl.items
                                                if st.kind not in DECLARATION_KINDS) if r is not None]
         return meth, sink

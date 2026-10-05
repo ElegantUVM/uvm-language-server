@@ -251,7 +251,7 @@ def skipped_super(ws: Workspace, cls, name: str):
     if name not in PHASES_WITH_SUPER or not ws.is_component(cls):
         return None
     meth = body_of(ws, cls, name)
-    if meth is None or not meth.body_items:  # an empty override is deliberate
+    if meth is None or meth.first_stmt is None:  # an empty override is deliberate
         return None
     chain = ws.chain(cls)
     called = {c for c in meth.super_calls if c == name or c.endswith("::" + name)}
@@ -272,7 +272,7 @@ def skipped_super(ws: Workspace, cls, name: str):
             if target is not None:
                 i = target
                 continue
-            return (base, found) if found.body_items else None
+            return (base, found) if found.first_stmt is not None else None
     return None
 
 

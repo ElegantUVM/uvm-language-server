@@ -586,7 +586,7 @@ def _phase_no_super(ctx: Context, d) -> list[Fix]:
                 break
         title = f"Call {call[:-1]} after the factory overrides"
     else:
-        stmt, title = meth.body_items[0], f"Call {call[:-1]} first"
+        stmt, title = meth.first_stmt, f"Call {call[:-1]} first"
     span = ft.span(stmt) if ft and stmt else None
     if span is None:
         return []

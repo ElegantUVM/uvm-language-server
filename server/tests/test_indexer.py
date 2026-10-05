@@ -204,7 +204,7 @@ def test_where_edits_go(tmp_path):
         ("uvm_component_utils", at(13, "`uvm", "(drv)"))
     new = next(m for m in item.methods if m.name == "new")
     assert [(a.name, a.type_text, a.default) for a in new.args] == [("name", "string", '"item"'), ("k", "int", "3")]
-    assert span(new.header_end) == at(8, ";") and span(new.end_kw) == at(10, "endfunction")
+    assert span(new.first_stmt) == at(9, "super", ";")
     assert [span(r) for r in new.body_items] == [at(9, "super", ";")]
     build = next(m for m in drv.methods if m.name == "build_phase")
     # The `if` ends where the macro call does; the declaration is not a statement.
@@ -213,7 +213,7 @@ def test_where_edits_go(tmp_path):
     assert build.first_stmt == build.body_items[0]
     assert build.super_calls == ["build_phase", "uvm_component::connect_phase"]
     macro_new = next(m for m in drv.methods if m.name == "new")  # `uvm_new_func
-    assert macro_new.generated and macro_new.header_end is None and macro_new.body_items == []
+    assert macro_new.generated and macro_new.first_stmt is None and macro_new.body_items == []
     assert [a.name for a in macro_new.args] == ["name", "parent"]
     assert ext.extends_args == "(5)" and ext.registration_macro is None
 
