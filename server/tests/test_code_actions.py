@@ -537,3 +537,21 @@ def test_per_code_fix_all_only_attaches_to_findings_it_fixes(client, tb):
     finally:
         doc.change(original)
         doc.close()
+
+
+@pytest.mark.parametrize('commands,expected', [
+    (5, frozenset()), (True, frozenset()), (1.5, frozenset()),
+    ('uvm.showConfigDb', frozenset()), ({'uvm.showConfigDb': True}, frozenset()),
+    (None, frozenset()), (False, frozenset()),
+    (['uvm.showConfigDb', 5, None], frozenset({'uvm.showConfigDb'})),
+])
+def test_initialize_validates_client_commands(commands, expected):
+    from lsprotocol import types as T
+    from pygls.workspace import Workspace as LspWorkspace
+    from uvmls.server import UvmLanguageServer, initialize
+
+    ls = UvmLanguageServer()
+    ls.protocol._workspace = LspWorkspace(None)
+    initialize(ls, T.InitializeParams(capabilities=T.ClientCapabilities(), initialization_options={
+        'settings': {'elaboration': 'off'}, 'clientCommands': commands}))
+    assert ls.client_commands == expected

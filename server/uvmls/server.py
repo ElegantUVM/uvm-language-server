@@ -501,7 +501,8 @@ def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
     opts = params.initialization_options or {}
     ls.settings = opts.get("settings", opts) if isinstance(opts, dict) else {}
     commands = opts.get("clientCommands") if isinstance(opts, dict) else None
-    ls.client_commands = frozenset(c for c in commands or () if isinstance(c, str))
+    ls.client_commands = frozenset(c for c in commands if isinstance(c, str)) \
+        if isinstance(commands, list) else frozenset()
 
 
 @server.feature(T.INITIALIZED)
