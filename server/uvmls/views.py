@@ -616,6 +616,12 @@ class ConfigDbReport(dict):
     def __init__(self, fields: list, dynamic: list, version: int):
         super().__init__(fields=fields, dynamic=dynamic, version=version)
         self.by_field = {row["field"]: row for row in fields}
+        self.dynamic_ids = {id(e) for e in dynamic}
+        self.by_file: dict[str, list[dict]] = {}
+        for entry in dynamic + [e for row in fields for e in row["sets"] + row["gets"]]:
+            self.by_file.setdefault(entry["file"], []).append(entry)
+        for entries in self.by_file.values():
+            entries.sort(key=lambda e: (e["line"], e["col"]))
         self.near_index = None
 
 

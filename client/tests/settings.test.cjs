@@ -87,3 +87,10 @@ test("the include command is contributed but hidden from the command palette", (
   assert.ok(contributes.commands.some((c) => c.command === "uvm.addIncludeDir"));
   assert.ok(contributes.menus.commandPalette.some((c) => c.command === "uvm.addIncludeDir" && c.when === "false"));
 });
+
+test("config_db lenses are enabled by default and forwarded to the server", () => {
+  const { contributes } = require("../package.json");
+  assert.equal(contributes.configuration.properties["uvm.codeLens.configDb"].default, true);
+  const extension = fs.readFileSync(path.join(__dirname, "../src/extension.ts"), "utf8");
+  assert.match(extension, /codeLens: \{ configDb: cfg.get\("codeLens.configDb"\) \}/);
+});

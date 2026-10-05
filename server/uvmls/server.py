@@ -773,11 +773,51 @@ def subtypes(ls: UvmLanguageServer, params: T.TypeHierarchySubtypesParams):
         return [_type_item(c) for c in ls.ws.subclasses.get(cls.qualname, [])]
 
 
-@server.feature(T.TEXT_DOCUMENT_CODE_LENS)
+def _entry_range(entry: dict) -> Range:
+    return Range(entry["file"], entry["line"], entry["col"], entry["endLine"], entry["endCol"])
+
+
+def config_db_lenses(ls: UvmLanguageServer, path: str) -> list[T.CodeLens]:
+    cfg = ls.settings.get("codeLens", {})
+    if isinstance(cfg, dict) and not cfg.get("configDb", True):
+        return []
+    if get_capability(ls.client_capabilities, "text_document.code_lens") is None:
+        return []
+    report = config_db_report(ls.ws)
+    lenses = []
+    for entry in report.by_file.get(path, ()):
+        row = report.by_field.get(entry["field"])
+        command, arguments = "uvm.showConfigDb", [{}]
+        if id(entry) in report.dynamic_ids:
+            title = "$(database) config_db · dynamic field"
+        else:
+            title = f"$(database) '{entry['field']}' · "
+            arguments = [{"field": entry["field"]}]
+            if entry["op"] == "set":
+                count = len(row["gets"])
+                title += f"{count} get{'s' if count != 1 else ''}" if count else "no get"
+                if row["status"] == "type-mismatch":
+                    title += " · type mismatch"
+            else:
+                count = len(row["sets"])
+                if count == 1:
+                    target = row["sets"][0]
+                    title += f"set in {os.path.basename(target['file'])}:{target['line'] + 1}"
+                    if "uvm.revealLocation" in ls.client_commands:
+                        command, arguments = "uvm.revealLocation", [_entry_range(target).to_json()]
+                else:
+                    title += f"{count} sets" if count else "no set"
+        lenses.append(T.CodeLens(range=lsp_range(_entry_range(entry)), command=T.Command(
+            title=title, command=command, arguments=arguments)))
+    return lenses
+
+
+@server.feature(T.TEXT_DOCUMENT_CODE_LENS, T.CodeLensOptions(resolve_provider=False))
 def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
     path = uri_to_path(params.text_document.uri)
     lenses = []
     with ls.ws.lock:
+        lenses.extend(config_db_lenses(ls, path))
         for sym in ls.ws.symbols_in(path):
             if not hasattr(sym, "qualname") or getattr(sym, "library", False):
                 continue

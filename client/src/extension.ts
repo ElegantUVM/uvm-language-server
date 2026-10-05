@@ -93,6 +93,7 @@ function settings(): Record<string, unknown> {
     useBundledUvm: cfg.get("useBundledUvm"),
     exclude: cfg.get("exclude"),
     lint: { enabled: cfg.get("lint.enabled") },
+    codeLens: { configDb: cfg.get("codeLens.configDb") },
     elaboration: cfg.get("elaboration"),
   };
 }
