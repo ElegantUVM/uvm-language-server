@@ -652,7 +652,8 @@ def _config_db_no_set(ctx: Context, d) -> list[Fix]:
         for name, entry in near:
             fixes.append(Fix(f"Change '{row['field']}' to '{name}' (set in {os.path.basename(entry['file'])}:"
                              f"{entry['line'] + 1})", [TextChange(ft.path, start, start + len(row["field"]), name)],
-                             preferred=len(near) == 1))
+                             preferred=len(near) == 1 and
+                             name.lower().replace("_", "") == row["field"].lower().replace("_", "")))
     return fixes + show_config_db(ctx, row["field"])
 
 

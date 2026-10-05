@@ -286,8 +286,8 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
             return  # `// uvm-lint: ignore code` on its line, or on a line of its own above it
         out.setdefault(r.path, []).append(Diag(r, msg, severity, code, "uvm", data=data or None))
 
-    # config_db: a get nothing sets (worth a warning when the code needs the value, or when a set
-    # of a name close to it looks like a typo), or a get of another type than what is set.
+    # config_db: a get nothing sets (worth a warning when the code needs the value), or a get
+    # of another type than what is set.
     report = config_db_report(ws)
     dynamic_sets = any(e["op"] == "set" for e in report["dynamic"])
     for row in report["fields"]:
@@ -305,7 +305,7 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
                 if len(near) == 1:
                     s0 = near[0][1]
                     said += f"; did you mean '{near[0][0]}' (set in {os.path.basename(s0['file'])}:{s0['line'] + 1})?"
-                add(r, said, "warning" if near or not (g["optional"] or g["conditional"]) else "info",
+                add(r, said, "info" if g["optional"] or g["conditional"] else "warning",
                     "config-db-no-set", field=row["field"], at=[r.line, r.col])
         for g in mismatched(row):
             r = _range(g)
@@ -418,7 +418,8 @@ def near_misses(report: dict, get: dict) -> list[tuple[str, dict]]:
                 (abs(len(other) - len(name)) > limit or osa_distance(name, other) > limit):
             continue
         same_type = next((e for e in row["sets"] if (e["canon"] or e["type"]) == kind), None)
-        if same_type:
+        read = any((e["canon"] or e["type"]) == kind for e in row["gets"])
+        if same_type and (not read or other.lower().replace("_", "") == key):
             out.append((other, same_type))
     return out
 

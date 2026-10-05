@@ -126,7 +126,7 @@ endmodule
 
 def test_config_db_precision(tmp_path):
     """Types compare after typedefs; a type parameter could be anything; an optional or conditional
-    get with no set is a note, unless a set of a close name looks like a typo."""
+    get with no set is a note, even when a set of a close name looks like a typo."""
     from uvmls.project import ProjectConfig
     from uvmls.workspace import Workspace
     (tmp_path / "t.sv").write_text(CONFIG_DB)

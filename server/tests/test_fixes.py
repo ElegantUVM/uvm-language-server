@@ -1153,10 +1153,10 @@ def test_config_db_typo(tmp_path):
     at = line_no(planted, '"checks_enabled"')
     w = index(tmp_path, {"t.sv": planted})
     [d] = findings(w, "config-db-no-set")
-    assert d.severity == "warning" and d.message.endswith(f"did you mean 'checks_enabled' (set in t.sv:{at})?")
+    assert d.severity == "info" and d.message.endswith(f"did you mean 'checks_enabled' (set in t.sv:{at})?")
     fixes = offered(w, d, commands=frozenset({"uvm.showConfigDb"}))
     assert [(f.title, f.preferred, f.command) for f in fixes] == [
-        (f"Change 'checks_enable' to 'checks_enabled' (set in t.sv:{at})", True, None),
+        (f"Change 'checks_enable' to 'checks_enabled' (set in t.sv:{at})", False, None),
         ("Show 'checks_enable' in the config_db cross-reference", False,
          ("uvm.showConfigDb", [{"field": "checks_enable"}]))]
     fix_once(w, "config-db-no-set")
