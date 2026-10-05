@@ -3,6 +3,7 @@
 import asyncio
 from unittest.mock import patch
 
+import pytest
 from lsprotocol import types as T
 from pygls.workspace import Workspace as LspWorkspace
 
@@ -53,3 +54,60 @@ def test_include_cache_tracks_created_deleted_and_full_index(tmp_path):
         await ls.full_index()
         assert candidates() == ['inc', 'inc2']
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('suffix', ['h', 'inc'])
+@pytest.mark.parametrize('move', [False, True])
+def test_include_cache_rechecks_unwatched_headers(tmp_path, suffix, move):
+    name = f'defs.{suffix}'
+    text = f'`include "{name}"\n'
+    ws = index(tmp_path, {f'a/{name}': '// header\n', 't.sv': text})
+
+    def candidates():
+        [d] = slang_findings(ws, 'CouldNotOpenIncludeFile')
+        return [f.command[1][0]['value'] for f in offered(ws, d, commands=frozenset({'uvm.addIncludeDir'}))]
+
+    with patch.object(fixes, 'discover_files', wraps=fixes.discover_files) as walk:
+        assert candidates() == ['a']
+        if move:
+            (tmp_path / 'b').mkdir()
+            (tmp_path / 'a' / name).rename(tmp_path / 'b' / name)
+        else:
+            (tmp_path / 'a' / name).unlink()
+        ws.update_document(str(tmp_path / 't.sv'), '// edited\n' + text)
+        assert candidates() == (['b'] if move else [])
+        assert walk.call_count == 2
+        assert candidates() == (['b'] if move else [])
+        assert walk.call_count == 2  # unchanged requests still reuse the refreshed walk
+
+
+def test_unwatched_header_move_over_stdio(tmp_path):
+    from test_code_actions import Doc, start
+
+    text = '`include "defs.h"\n'
+    path = tmp_path / 't.sv'
+    path.write_text('// before\n' + text)
+    (tmp_path / 'alu_tb.f').write_text('t.sv\n')
+    (tmp_path / 'a').mkdir()
+    (tmp_path / 'a' / 'defs.h').write_text('// header\n')
+    c = start(str(tmp_path), clientCommands=['uvm.addIncludeDir'], settings={
+        'filelists': [str(tmp_path / 'alu_tb.f')], 'elaboration': 'off', 'useBundledUvm': False})
+    try:
+        doc = Doc(c, str(path))
+        doc.change(text)
+        [d] = doc.diagnostics(lambda ds: ds and ds[0]['range']['start']['line'] == 0)
+        [action] = doc.actions([d])
+        assert action['command']['arguments'] == [{'value': 'a'}]
+        (tmp_path / 'b').mkdir()
+        (tmp_path / 'a' / 'defs.h').rename(tmp_path / 'b' / 'defs.h')
+        # The client does not watch .h: only the SV buffer triggers incremental indexing.
+        doc.change('// edited\n' + text)
+        [d] = doc.diagnostics(lambda ds: ds and ds[0]['range']['start']['line'] == 1)
+        [action] = doc.actions([d])
+        assert action['command']['arguments'] == [{'value': 'b'}]
+        c.notify('workspace/didChangeConfiguration', {'settings': {'uvm': {
+            'filelists': [str(tmp_path / 'alu_tb.f')], 'elaboration': 'off',
+            'useBundledUvm': False, 'includeDirs': ['b']}}})
+        doc.diagnostics(lambda ds: not ds)
+    finally:
+        c.close()
