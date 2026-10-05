@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from . import naturaldocs
 from .indexer import SHIM_FILE
 from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable
-from .views import config_db_report, mismatched
+from .uvm import builtin_params
+from .views import config_db_report, mismatched, norm_type
 from .workspace import Spec, Workspace
 
 WORD = re.compile(r"[A-Za-z0-9_$]")
@@ -211,6 +212,63 @@ class Navigator:
         if t.owner is not None and isinstance(t.obj, (Method, Typedef, str)):
             return ws.member_type_spec(t.owner, t.obj, t.bindings or {})
         return None
+
+    def bound_member_hints(self, path: str) -> list[tuple[Range, str, str]]:
+        ws = self.ws
+        if path in ws._bound_member_hints:
+            return ws._bound_member_hints[path]
+        hints, seen, chains = [], set(), {}
+        text = ws.texts.get(path, "")
+        lines = text.splitlines()
+        for name, rng in ws.identifiers_by_file.get(path, ()):
+            cls, _, _ = ws.enclosing(path, rng.line, rng.col)
+            if cls is None or cls.library or cls.base is None or rng.line >= len(lines):
+                continue
+            col = len(lines[rng.line].encode("utf-8")[:rng.col].decode("utf-8", errors="replace"))
+            expr = expr_at(lines[rng.line], col)
+            if expr is None or expr.is_macro or expr.segments not in ([name], ["this", name], ["super", name]):
+                continue
+            targets = self.resolve(path, rng.line, col, text)
+            if len(targets) != 1:
+                continue
+            target = targets[0]
+            member, owner = target.obj, target.owner
+            if isinstance(member, Variable):
+                if member.kind != "property" or member.type is None or member.type.scope or member.type.args:
+                    continue
+                if member.range.path == path and member.range.line == rng.line:
+                    continue
+                param = member.type.name
+                params = [p.name for p in owner.params if p.is_type] if isinstance(owner, ClassInfo) else []
+            elif isinstance(member, str) and isinstance(owner, str):
+                param = member
+                params = [p for p, _ in builtin_params(owner)]
+            else:
+                continue
+            if param not in params:
+                continue
+            if cls.qualname not in chains:
+                # A generic class's defaults are not bindings for every specialization of it.
+                chains[cls.qualname] = ws.chain(cls, {p.name: p.name for p in cls.params})
+            entry = next((e for e in chains[cls.qualname][1:]
+                          if (e.spec.cls or e.spec.name) == owner), None)
+            if entry is None:
+                continue
+            bound = entry.bindings.get(param, "")
+            if not bound or bound == param or any(re.search(r"\b" + re.escape(p.name) + r"\b", bound)
+                                                  for p in cls.params):
+                continue
+            key = (rng.line, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            target.bindings = entry.bindings
+            spec = self.type_of(target)
+            shown = (spec.via_typedef.name if spec.via_typedef else spec.name) if spec and not spec.args else bound
+            tooltip = f"{param} bound in {cls.name} extends {norm_type(cls.base.text)}"
+            hints.append((rng, norm_type(shown), tooltip))
+        ws._bound_member_hints[path] = hints
+        return hints
 
     def step(self, t: Target, name: str, sep: str, ctx_cls) -> list[Target]:
         ws = self.ws

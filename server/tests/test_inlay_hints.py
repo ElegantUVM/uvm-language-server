@@ -145,3 +145,164 @@ def test_factory_multiline_utf16_and_cache_invalidation(tb):
         assert hints(c, path) == []
     finally:
         c.close()
+
+
+@pytest.mark.parametrize("bundled", [True, False])
+def test_bound_driver_members(tb, bundled):
+    c = start(tb, capabilities=CAPABILITIES, settings=settings(tb, useBundledUvm=bundled))
+    try:
+        path = tb / "agent/alu_driver.svh"
+        found = hints(c, path)
+        assert [label(h) for h in found] == [": alu_seq_item", ": alu_seq_item"]
+        assert [h["position"] for h in found] == [
+            {"line": 25, "character": 35}, {"line": 26, "character": 18}]
+        assert all(h["kind"] == 1 and h["paddingLeft"] for h in found)
+        assert all(h["tooltip"] == {"kind": "markdown", "value":
+            "REQ bound in alu_driver extends uvm_driver #(alu_seq_item)"} for h in found)
+        assert hints(c, path, start=(26, 0), end=(27, 0)) == found[1:]
+        assert hints(c, path, end=(25, 35)) == []
+        assert hints(c, path, start=(27, 0)) == []
+        c.notify("workspace/didChangeConfiguration", {"settings": {"uvm": settings(tb, inlayHints=False)}})
+        c.wait_for("uvm/indexChanged")
+        assert hints(c, path) == []
+    finally:
+        c.close()
+
+
+MEMBERS = '''
+class hint_base #(type T = uvm_sequence_item);
+  T item;
+  T second;
+  int plain;
+  function void own(); item = item; endfunction
+endclass
+class hint_mid #(type U = uvm_sequence_item) extends hint_base #(U);
+endclass
+class hint_bound extends hint_mid #(alu_seq_item);
+  hint_base #(alu_seq_item) other;
+  function void use_members();
+    item = item; second = second;
+    this.item = this.item;
+    super.item = item;
+    plain = 1;
+    other.item = item;
+    $display("item req rsp");
+    // item second req rsp
+  endfunction
+  function void shadow(alu_seq_item item);
+    item = item;
+    this.item = item;
+  endfunction
+endclass
+class hint_unbound #(type T = uvm_sequence_item) extends hint_base #(T);
+  function void use_item(); item = item; endfunction
+endclass
+class hint_fixed #(type T = uvm_sequence_item) extends hint_base #(alu_seq_item);
+  function void use_item(); item = item; endfunction
+endclass
+class hint_int extends hint_base #(.T(int));
+  function void use_item(); item = item; endfunction
+endclass
+class hint_driver extends uvm_driver #(alu_seq_item);
+  function void use_members();
+    req = req; rsp = rsp;
+    seq_item_port.item_done();
+  endfunction
+endclass
+class hint_shadows extends hint_base #(alu_seq_item);
+  alu_seq_item item;
+  function void use_item(); item = item; endfunction
+endclass
+'''
+
+
+@pytest.fixture(scope="module")
+def members_tb(tmp_path_factory, tb):
+    root = tmp_path_factory.mktemp("bound-members") / "alu_tb"
+    shutil.copytree(tb, root)
+    path = root / "agent/alu_driver.svh"
+    path.write_text(path.read_text() + MEMBERS)
+    return root
+
+
+def test_bound_user_members_and_shadowing(members_tb):
+    c = start(members_tb, capabilities=CAPABILITIES)
+    try:
+        path = members_tb / "agent/alu_driver.svh"
+        lines = path.read_text().splitlines()
+        start_line = lines.index("class hint_base #(type T = uvm_sequence_item);")
+        found = hints(c, path, start=(start_line, 0))
+        expected = []
+        owner = ""
+        for i, line in enumerate(lines):
+            if line.startswith("class "):
+                owner = line.split()[1]
+            names = []
+            if owner == "hint_bound":
+                if line == "    item = item; second = second;":
+                    names = ["item", "second"]
+                elif line in ("    this.item = this.item;", "    super.item = item;", "    this.item = item;"):
+                    names = ["item"]
+                elif line == "    other.item = item;":
+                    expected.append((i, line.rindex("item") + 4, ": alu_seq_item"))
+            elif owner in ("hint_fixed", "hint_int") and "function void use_item" in line:
+                names = ["item"]
+            elif owner == "hint_driver" and "req = req" in line:
+                names = ["req", "rsp"]
+            for name in names:
+                col = line.index(name, line.index(";") + 1) if "function void use_item" in line else line.index(name)
+                expected.append((i, col + len(name), ": int" if owner == "hint_int" else ": alu_seq_item"))
+        assert [(h["position"]["line"], h["position"]["character"], label(h)) for h in found] == expected
+        assert len(found) == 10
+        assert found[0]["tooltip"]["value"] == "T bound in hint_bound extends hint_mid #(alu_seq_item)"
+        assert found[-1]["tooltip"]["value"] == "RSP bound in hint_driver extends uvm_driver #(alu_seq_item)"
+    finally:
+        c.close()
+
+
+def test_bound_member_unicode_and_edits(tb):
+    c = start(tb, capabilities=CAPABILITIES)
+    try:
+        path = tb / "agent/alu_driver.svh"
+        doc = Doc(c, str(path))
+        c.wait_for("uvm/indexChanged")
+        assert len(hints(c, path)) == 2
+        doc.change(doc.text.replace("    drive_item(req);", '    /* 😀 */ drive_item(req); req = req;').replace("\n", "\r\n"))
+        c.wait_for("uvm/indexChanged")
+        found = hints(c, path)
+        assert len(found) == 2
+        assert found[1]["position"] == {"line": 26, "character": 27}
+        doc.change(doc.text.replace("uvm_driver #(alu_seq_item)", "uvm_driver #(alu_agent_config)"))
+        c.wait_for("uvm/indexChanged")
+        assert [label(h) for h in hints(c, path)] == [": alu_agent_config", ": alu_agent_config"]
+    finally:
+        c.close()
+
+
+@pytest.mark.parametrize("refresh", [True, False])
+def test_inlay_refresh_after_configuration_change(tb, refresh):
+    c = Client()
+    requests = []
+    read = c.read
+
+    def record(timeout=30):
+        msg = read(timeout)
+        if "id" in msg and "method" in msg:
+            requests.append(msg["method"])
+        return msg
+
+    c.read = record
+    try:
+        c.request("initialize", {"processId": None, "rootUri": tb.as_uri(), "capabilities": {
+            **CAPABILITIES, "workspace": {"inlayHint": {"refreshSupport": refresh}}},
+            "initializationOptions": {"settings": settings(tb)}})
+        c.notify("initialized", {})
+        c.wait_for("uvm/indexChanged")
+        assert hints(c, tb / "agent/alu_driver.svh")
+        assert requests.count("workspace/inlayHint/refresh") == int(refresh)
+        c.notify("workspace/didChangeConfiguration", {"settings": {"uvm": settings(tb, inlayHints=False)}})
+        c.wait_for("uvm/indexChanged")
+        assert hints(c, tb / "agent/alu_driver.svh") == []
+        assert requests.count("workspace/inlayHint/refresh") == 2 * int(refresh)
+    finally:
+        c.close()

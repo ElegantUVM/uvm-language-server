@@ -232,6 +232,9 @@ class UvmLanguageServer(LanguageServer):
     def after_index(self):
         self.publish_diagnostics()
         self.protocol.notify("uvm/indexChanged", {"stats": self.ws.stats(), "version": self.ws.version})
+        if get_capability(self.client_capabilities, "text_document.inlay_hint") is not None and \
+                get_capability(self.client_capabilities, "workspace.inlay_hint.refresh_support", False):
+            self.workspace_inlay_hint_refresh(None)
 
     def publish_diagnostics(self):
         with self.ws.lock:
@@ -882,8 +885,6 @@ def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
     hints = []
     with ls.ws.lock:
         creates = ls.ws.creates_by_file.get(path, ())
-        if not creates:
-            return []
         result = None
         start, end = params.range.start, params.range.end
         for cr in creates:
@@ -905,6 +906,11 @@ def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
                     label=[T.InlayHintLabelPart(value=label, location=T.Location(
                         path_to_uri(ov.range.path), _indexed_range(ls, ov.range)))],
                     tooltip=T.MarkupContent(kind=T.MarkupKind.Markdown, value=tooltip)))
+        for rng, bound, tooltip in ls.nav.bound_member_hints(path):
+            pos = _indexed_range(ls, rng).end
+            if (start.line, start.character) <= (pos.line, pos.character) < (end.line, end.character):
+                hints.append(T.InlayHint(position=pos, kind=T.InlayHintKind.Type, padding_left=True,
+                    label=f": {bound}", tooltip=T.MarkupContent(kind=T.MarkupKind.Markdown, value=tooltip)))
     return sorted(hints, key=lambda h: (h.position.line, h.position.character))
 
 

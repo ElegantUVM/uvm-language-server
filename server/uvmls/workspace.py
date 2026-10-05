@@ -142,7 +142,9 @@ class Workspace:
     def _clear_maps(self):
         self._config_db_report = None
         self._effective_type_cache: dict = {}
+        self._bound_member_hints: dict = {}
         self.creates_by_file: dict[str, list[CreateCall]] = {}
+        self.identifiers_by_file: dict[str, list[tuple[str, Range]]] = {}
         self.texts: dict[str, str] = {}
         self.lines: dict[str, list[str]] = {}
         self.classes: list[ClassInfo] = []
@@ -223,10 +225,17 @@ class Workspace:
         self._clear_maps()
         self.version += 1
         seen_decl: set[tuple[str, int, str]] = set()
+        seen_ids: set[Range] = set()
         for idx in self.indices.values():
             self.texts.update(idx.texts)
             if idx.library:
                 self.library_files |= idx.files
+            else:
+                for name, ranges in idx.identifiers.items():
+                    for rng in ranges:
+                        if rng not in seen_ids:
+                            seen_ids.add(rng)
+                            self.identifiers_by_file.setdefault(rng.path, []).append((name, rng))
             for cls in idx.classes:
                 key = (cls.range.path, cls.range.line, cls.name)
                 if key in seen_decl:
@@ -260,6 +269,8 @@ class Workspace:
                     lst.append(m)
             for path, lines in idx.ignores.items():
                 self.ignores.setdefault(path, lines)  # a file two roots include: the same text
+        for identifiers in self.identifiers_by_file.values():
+            identifiers.sort(key=lambda pair: (pair[1].line, pair[1].col))
         # A definition in an `ifdef branch that cannot be in effect (UVM's empty stubs under
         # `ifdef UVM_EMPTY_MACROS) is left out, unless nothing else defines the macro. A macro
         # defined only in such branches (QUESTA under `ifdef MODEL_TECH) is not defined either.
@@ -396,9 +407,10 @@ class Workspace:
             return self.resolve_type_text(bound, cls)
         return self.resolve_spec(ref.name, ref.scope, ref.args, cls)
 
-    def chain(self, cls: ClassInfo) -> list[ChainEntry]:
+    def chain(self, cls: ClassInfo, bindings: dict[str, str] | None = None) -> list[ChainEntry]:
         """The class followed by all its ancestors, with type parameter bindings."""
-        entries = [ChainEntry(Spec(cls.name, cls), {p.name: p.default for p in cls.params})]
+        entries = [ChainEntry(Spec(cls.name, cls), bindings if bindings is not None else
+                              {p.name: p.default for p in cls.params})]
         seen = {cls.qualname}
         cur, bindings = cls, entries[0].bindings
         while cur is not None and cur.base is not None:

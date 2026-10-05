@@ -626,6 +626,9 @@ def test_large_project_code_action_budgets(tmp_path):
 
     async def run():
         filelist = generate(tmp_path, classes=2400)
+        driver = tmp_path / 'classes/node_0000.sv'
+        driver.write_text(driver.read_text().replace('extends uvm_component', 'extends uvm_driver #(node_0001)').replace(
+            'function void setup();', 'function void setup();\n    req = rsp;'))
         bench = tmp_path / 'bench.sv'
         bench.write_text(bench.read_text().replace('extends uvm_env', 'extends uvm_test').replace(
             'super.build_phase(phase);', 'super.build_phase(phase);\n'
@@ -689,16 +692,17 @@ def test_large_project_code_action_budgets(tmp_path):
         p95 = sorted(samples)[18]
         print(f'config lenses: p95 {p95:.2f} ms (target 50 ms)')
         assert p95 < 50
-        params = T.InlayHintParams(T.TextDocumentIdentifier(path.as_uri()),
-                                  T.Range(T.Position(0, 0), T.Position(10000, 0)))
-        inlay_hint(ls, params)
-        samples = []
-        for _ in range(20):
-            start = time.perf_counter()
-            hints = inlay_hint(ls, params)
-            samples.append((time.perf_counter() - start) * 1000)
-            assert len(hints) == 1
-        p95 = sorted(samples)[18]
-        print(f'inlay hints: p95 {p95:.2f} ms (target 50 ms)')
-        assert p95 < 50
+        for name, source, count in [('factory hints', path, 1), ('bound member hints', driver, 2)]:
+            params = T.InlayHintParams(T.TextDocumentIdentifier(source.as_uri()),
+                                      T.Range(T.Position(0, 0), T.Position(10000, 0)))
+            inlay_hint(ls, params)
+            samples = []
+            for _ in range(20):
+                start = time.perf_counter()
+                hints = inlay_hint(ls, params)
+                samples.append((time.perf_counter() - start) * 1000)
+                assert len(hints) == count
+            p95 = sorted(samples)[18]
+            print(f'{name}: p95 {p95:.2f} ms (target 50 ms)')
+            assert p95 < 50
     asyncio.run(run())
