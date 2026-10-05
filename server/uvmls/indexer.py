@@ -649,7 +649,7 @@ class Extractor:
         elif k == K.ClassDeclaration:
             self.class_decl(m, package, list(imports), None, before)
         elif k == K.TypedefDeclaration:
-            td = self.typedef(m, package, None)
+            td = self.typedef(m, package, None, imports)
             if td:
                 self.out.typedefs.append(td)
                 if unit is not None:
@@ -866,7 +866,7 @@ class Extractor:
                                                getattr(d, "initializer", None) is not None else None))
 
     def class_typedef(self, cls: ClassInfo, decl, package):
-        td = self.typedef(decl, package, cls.name)
+        td = self.typedef(decl, package, cls.name, cls.imports)
         if not td:
             return
         cls.typedefs.append(td)
@@ -882,7 +882,7 @@ class Extractor:
                 cls.registration_range = self.make_range(rng.start, rng.end)[0]
             cls.registration_arg = td.target.args[0] if td.target.args else None
 
-    def typedef(self, decl, package, owner_class) -> Typedef | None:
+    def typedef(self, decl, package, owner_class, imports) -> Typedef | None:
         if decl.kind != K.TypedefDeclaration:
             return None
         r, _ = self.tok_range(decl.name)
@@ -893,7 +893,8 @@ class Extractor:
         target_text = compact(t)
         if t is not None and t.kind in (K.EnumType, K.StructType, K.UnionType):
             target_text = {K.EnumType: "enum", K.StructType: "struct", K.UnionType: "union"}[t.kind]
-        return Typedef(decl.name.valueText, target_text, target, r, pretty(decl), package, owner_class)
+        return Typedef(decl.name.valueText, target_text, target, r, pretty(decl), package, owner_class,
+                       list(imports))
 
     def variable(self, declarator, kind: str, dtype, text: str, quals: list[str]) -> Variable | None:
         tok = declarator.name

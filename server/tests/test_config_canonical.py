@@ -139,6 +139,46 @@ endpackage
     assert row["status"] == "ok"
 
 
+@pytest.mark.parametrize("set_type,get_type,mismatch", [
+    ("direct_t", "p::item", False),
+    ("pitem_t", "p::item", False),
+    ("pitem_t", "q::item", True),
+    ("box #(pitem_t)", "box #(p::item)", False),
+    ("box #(pitem_t)", "box #(q::item)", True),
+    ("box", "box #(p::item)", False),
+])
+def test_config_unit_typedef_keeps_declaration_imports(tmp_path, set_type, get_type, mismatch):
+    declarations = '''package q; class item; endclass endpackage
+package p; class item; endclass endpackage
+import p::*;
+typedef item direct_t;
+typedef direct_t pitem_t;
+import q::*;
+class box #(type T = pitem_t); endclass
+'''
+    check_specialization_identity(set_type, get_type, declarations, same=not mismatch)
+    w, row = config_pair(tmp_path, set_type, get_type, declarations)
+    expected = "box #(T=p::item)" if set_type.startswith("box") else "p::item"
+    assert row["sets"][0]["canon"] == expected
+    assert len(findings(w, "config-db-type-mismatch")) == int(mismatch)
+    assert row["status"] == ("type-mismatch" if mismatch else "ok")
+
+
+@pytest.mark.parametrize("width,mismatch", [(32, False), (16, True)])
+def test_config_unit_typedef_bounds_use_declaration_imports(tmp_path, width, mismatch):
+    declarations = '''package q; parameter int WIDTH = 16; endpackage
+package p; parameter int WIDTH = 32; endpackage
+import p::*;
+typedef bit [WIDTH-1:0] addr_t;
+'''
+    get_type = f"bit [{width}-1:0]"
+    check_specialization_identity("addr_t", get_type, declarations, same=not mismatch)
+    w, row = config_pair(tmp_path, "addr_t", get_type, declarations)
+    assert row["sets"][0]["canon"] == "bit[31:0]"
+    assert len(findings(w, "config-db-type-mismatch")) == int(mismatch)
+    assert row["status"] == ("type-mismatch" if mismatch else "ok")
+
+
 @pytest.mark.parametrize("get_type,mismatch", [
     ("p::pair #(p::item)", False),
     ("p::pair #(item)", True),

@@ -401,7 +401,7 @@ INTEGRAL_ATOMS = {
 
 
 def _type_scope(ctx):
-    if isinstance(ctx, ClassInfo):
+    if isinstance(ctx, (ClassInfo, Typedef)):
         return ctx.package, ctx.imports
     return (ctx.name if ctx.kind == "package" else None, ctx.imports) if ctx else (None, ())
 
@@ -419,7 +419,8 @@ def _constant_integer(ws, text: str, ctx=None, depth: int = 0) -> int | None:
             if local:
                 return evaluate_default(local, ctx)
         package, imports = _type_scope(ctx)
-        scopes = ([ctx] if ctx else []) + [ws.find_unit(p, "package") for p in ([package] if package else []) + list(imports)]
+        scopes = ([ctx] if isinstance(ctx, (ClassInfo, DesignUnit)) else []) + \
+            [ws.find_unit(p, "package") for p in ([package] if package else []) + list(imports)]
         for owner in scopes:
             if owner is None:
                 continue
@@ -484,7 +485,8 @@ def _integral_type(ws, text: str, ctx) -> str | None:
     return kind + (" signed" if signed else "") + "".join(ranges)
 
 
-def canonical_type(ws: Workspace, text: str, ctx: ClassInfo | DesignUnit | None = None, depth: int = 0) -> str | None:
+def canonical_type(ws: Workspace, text: str, ctx: ClassInfo | DesignUnit | Typedef | None = None,
+                   depth: int = 0) -> str | None:
     """A config_db type identity: typedefs, integral synonyms and specialization arguments resolved
     in their declaration scopes. None when the index cannot determine an identity."""
     t = norm_type(text)
@@ -518,7 +520,7 @@ def canonical_type(ws: Workspace, text: str, ctx: ClassInfo | DesignUnit | None 
         if td.target_text in ("enum", "struct", "union"):
             return "::".join(x for x in (td.package, td.owner_class, td.name) if x)
         owner = ws.find_class(td.owner_class, td.package) if td.owner_class else ws.find_unit(td.package, "package")
-        return canonical_type(ws, td.target_text, owner, depth + 1)
+        return canonical_type(ws, td.target_text, owner or td, depth + 1)
     if cls is not None and scope and scope not in (cls.package, cls.outer_class):
         return None
     spec = Spec(name=name, cls=cls, args=args) if cls else ws.resolve_spec(name, scope, args)

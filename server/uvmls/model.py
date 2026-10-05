@@ -98,6 +98,7 @@ class Typedef:
     decl_text: str
     package: str | None = None
     owner_class: str | None = None
+    imports: list[str] = field(default_factory=list)
 
 
 @dataclass
