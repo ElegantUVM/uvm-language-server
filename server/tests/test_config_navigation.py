@@ -1,11 +1,13 @@
 """config_db navigation over stdio on an indexed copy of the ALU testbench."""
 
 import shutil
+from copy import deepcopy
 
 import pytest
 
 from conftest import EXAMPLE
-from test_code_actions import start
+from test_code_actions import Doc, start
+from test_lsp import Client
 
 CAPABILITIES = {"textDocument": {"codeLens": {}, "hover": {"contentFormat": ["markdown"]}}}
 COMMANDS = ["uvm.showConfigDb", "uvm.revealLocation"]
@@ -297,5 +299,79 @@ def test_config_navigation_follows_unsaved_set_location(tb):
         assert definitions(c, driver, '"alu_agent_config"') == [expected]
         assert "set in alu_env.svh:17" in hover(c, driver, '"alu_agent_config"', 1)
         assert "set in alu_env.svh:17" in config_lenses(c, driver)[0]["command"]["title"]
+    finally:
+        c.close()
+
+
+@pytest.mark.parametrize("method", ["codeLens"])
+@pytest.mark.parametrize("edited", ["env/alu_env.svh", "agent/alu_driver.svh"])
+def test_config_navigation_flushes_pending_edits(tb, method, edited):
+    c = start(tb, capabilities=CAPABILITIES, clientCommands=COMMANDS)
+    driver = tb / "agent/alu_driver.svh"
+    path = tb / edited
+    try:
+        doc = Doc(c, str(path))
+        c.wait_for("uvm/indexChanged")
+        params = {"textDocument": {"uri": driver.as_uri()}}
+        before = c.request("textDocument/" + method, params)
+        expected = deepcopy(before)
+        for lens in expected:
+            if path == driver:
+                for pos in lens["range"].values():
+                    pos["line"] += 1
+            elif lens["command"]["command"] == "uvm.revealLocation":
+                lens["command"]["title"] = lens["command"]["title"].replace(":16", ":17")
+                target = lens["command"]["arguments"][0]
+                target["line"] += 1
+                target["endLine"] += 1
+        doc.change("// moved\n" + doc.text)
+        assert c.request("textDocument/" + method, params) == expected
+    finally:
+        c.close()
+
+
+@pytest.mark.parametrize("support,refresh", [(True, True), (True, False), (True, None),
+                                           (False, True), (False, None)])
+def test_config_lenses_refresh_after_index_and_settings(tb, support, refresh):
+    c = Client()
+    requests = []
+    read = c.read
+
+    def record(timeout=30):
+        msg = read(timeout)
+        if "id" in msg and "method" in msg:
+            requests.append(msg["method"])
+        return msg
+
+    c.read = record
+    caps = {"textDocument": {"codeLens": {}}} if support else {}
+    if refresh is not None:
+        caps["workspace"] = {"codeLens": {"refreshSupport": refresh}}
+    settings = {"filelists": [str(tb / "alu_tb.f")], "elaboration": "off"}
+    path = tb / "agent/alu_driver.svh"
+    count = int(bool(support and refresh))
+    try:
+        c.request("initialize", {"processId": None, "rootUri": tb.as_uri(), "capabilities": caps,
+                                "initializationOptions": {"settings": settings, "clientCommands": COMMANDS}})
+        c.notify("initialized", {})
+        c.wait_for("uvm/indexChanged")
+        assert bool(config_lenses(c, path)) == support
+        assert requests.count("workspace/codeLens/refresh") == count
+        doc = Doc(c, str(tb / "env/alu_env.svh"))
+        c.wait_for("uvm/indexChanged")
+        lenses(c, path)
+        assert requests.count("workspace/codeLens/refresh") == 2 * count
+        doc.change("// moved\n" + doc.text)
+        c.wait_for("uvm/indexChanged")
+        found = config_lenses(c, path)
+        if support:
+            assert "set in alu_env.svh:17" in found[0]["command"]["title"]
+        assert requests.count("workspace/codeLens/refresh") == 3 * count
+        c.notify("workspace/didChangeConfiguration", {"settings": {"uvm": {
+            **settings, "codeLens": {"configDb": False}}}})
+        c.wait_for("uvm/indexChanged")
+        found = lenses(c, path)
+        assert found and all(l["command"]["command"] == "uvm.showClassGraph" for l in found)
+        assert requests.count("workspace/codeLens/refresh") == 4 * count
     finally:
         c.close()

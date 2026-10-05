@@ -682,11 +682,11 @@ def test_large_project_code_action_budgets(tmp_path):
             print(f'{name}: p95 {p95:.2f} ms (target {target} ms)')
             assert p95 < target
         params = T.CodeLensParams(T.TextDocumentIdentifier(path.as_uri()))
-        code_lens(ls, params)
+        await code_lens(ls, params)
         samples = []
         for _ in range(20):
             start = time.perf_counter()
-            lenses = code_lens(ls, params)
+            lenses = await code_lens(ls, params)
             samples.append((time.perf_counter() - start) * 1000)
             assert sum(l.command.title.startswith('$(database)') for l in lenses) == 20
         p95 = sorted(samples)[18]

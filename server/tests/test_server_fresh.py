@@ -10,10 +10,11 @@ from pygls.workspace import Workspace as LspWorkspace
 
 from test_fixes import WAIVE, M, findings, fixes_ignore, index
 from uvmls import elab
-from uvmls.server import UvmLanguageServer, code_action
+from uvmls.server import UvmLanguageServer, code_action, code_lens
 
 
-def test_full_index_wait_has_a_deadline(tmp_path):
+@pytest.mark.parametrize("handler", [code_action, code_lens])
+def test_full_index_wait_has_a_deadline(tmp_path, handler):
     async def run():
         ls = UvmLanguageServer()
         ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
@@ -39,9 +40,11 @@ def test_full_index_wait_has_a_deadline(tmp_path):
         rng = T.Range(T.Position(0, 0), T.Position(0, 1))
         params = T.CodeActionParams(T.TextDocumentIdentifier((tmp_path / 't.sv').as_uri()), rng,
                                     T.CodeActionContext([T.Diagnostic(rng, 'x', source='uvm', code='x')]))
+        if handler is code_lens:
+            params = T.CodeLensParams(params.text_document)
         start = time.monotonic()
         try:
-            assert await code_action(ls, params) is None
+            assert not await handler(ls, params)
             assert time.monotonic() - start < .15
             assert not task.done()  # timing out the request must not cancel the index
         finally:

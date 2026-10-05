@@ -232,6 +232,9 @@ class UvmLanguageServer(LanguageServer):
     def after_index(self):
         self.publish_diagnostics()
         self.protocol.notify("uvm/indexChanged", {"stats": self.ws.stats(), "version": self.ws.version})
+        if get_capability(self.client_capabilities, "text_document.code_lens") is not None and \
+                get_capability(self.client_capabilities, "workspace.code_lens.refresh_support", False):
+            self.workspace_code_lens_refresh(None)
         if get_capability(self.client_capabilities, "text_document.inlay_hint") is not None and \
                 get_capability(self.client_capabilities, "workspace.inlay_hint.refresh_support", False):
             self.workspace_inlay_hint_refresh(None)
@@ -854,7 +857,9 @@ def config_db_lenses(ls: UvmLanguageServer, path: str) -> list[T.CodeLens]:
 
 
 @server.feature(T.TEXT_DOCUMENT_CODE_LENS, T.CodeLensOptions(resolve_provider=False))
-def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
+async def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
+    if not await ls.fresh():
+        return []
     path = uri_to_path(params.text_document.uri)
     lenses = []
     with ls.ws.lock:
