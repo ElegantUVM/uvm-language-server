@@ -173,6 +173,7 @@ Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this pr
 
 - Topology and config_db matching are static approximations. Runtime-computed instance names, `for` loops creating arrays, and knobs set in derived tests are shown as conditional or by expression, not evaluated.
 - References are name-based (all identifier occurrences), not type-resolved.
+- If a document contains identical lines, an unrelated edit can disable quick fixes for fresh diagnostics on those lines in clients that do not return diagnostic `data` with code-action requests. VS Code returns it and is not affected.
 - Code inside inactive `` `ifdef `` branches is not indexed. Defines come from the filelist and `uvm.defines`.
 - The bundled library is UVM 1.2. A project on UVM 1.1d or IEEE 1800.2 should set `uvm.uvmHome` (or `$UVM_HOME`) or list its own `uvm_pkg.sv` in the filelist; otherwise navigation and the class graph show the 1.2 declarations.
 - Every full re-index (startup, a settings change, a file created or deleted) parses the UVM library again (about 0.27 s), and every root that includes `uvm_macros.svh` preprocesses the real macro headers: on the synthetic project a full index takes 2.6 s with the bundled UVM against 1.6 s with the built-in model.
