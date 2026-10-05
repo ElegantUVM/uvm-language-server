@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import os
 import re
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
 from . import naturaldocs
-from .indexer import SHIM_FILE
+from .indexer import EOL_RE, SHIM_FILE
 from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable
 from .uvm import builtin_params
 from .views import config_db_report, mismatched, norm_type
@@ -110,6 +111,9 @@ class Navigator:
 
     def resolve(self, path: str, line: int, col: int, text: str) -> list[Target]:
         ce = expr_at(line_of(text, line), col)
+        return self.resolve_expr(path, line, col, ce)
+
+    def resolve_expr(self, path: str, line: int, col: int, ce: CursorExpr | None) -> list[Target]:
         if ce is None:
             return []
         ws = self.ws
@@ -213,14 +217,26 @@ class Navigator:
             return ws.member_type_spec(t.owner, t.obj, t.bindings or {})
         return None
 
-    def bound_member_hints(self, path: str) -> list[tuple[Range, str, str]]:
+    def bound_member_hints(self, path: str, start_line: int = 0,
+                           end_line: int | None = None) -> list[tuple[Range, str, str]]:
         ws = self.ws
-        if path in ws._bound_member_hints:
-            return ws._bound_member_hints[path]
+        identifiers = ws.identifiers_by_file.get(path, ())
+        first = bisect_left(identifiers, start_line, key=lambda pair: pair[1].line)
+        last = bisect_right(identifiers, end_line, key=lambda pair: pair[1].line) \
+            if end_line is not None else len(identifiers)
+        identifiers = identifiers[first:last]
+        line_numbers = dict.fromkeys(rng.line for _, rng in identifiers)
+        cache = ws._bound_member_hints.setdefault(path, {})
+        missing = line_numbers.keys() - cache.keys()
+        if not missing:
+            return [hint for line in line_numbers for hint in cache[line]]
         hints, seen, chains = [], set(), {}
-        text = ws.texts.get(path, "")
-        lines = text.splitlines()
-        for name, rng in ws.identifiers_by_file.get(path, ()):
+        if path not in ws.lines:
+            ws.lines[path] = EOL_RE.split(ws.texts.get(path, ""))
+        lines = ws.lines[path]
+        for name, rng in identifiers:
+            if rng.line not in missing:
+                continue
             cls, _, _ = ws.enclosing(path, rng.line, rng.col)
             if cls is None or cls.library or cls.base is None or rng.line >= len(lines):
                 continue
@@ -228,7 +244,7 @@ class Navigator:
             expr = expr_at(lines[rng.line], col)
             if expr is None or expr.is_macro or expr.segments not in ([name], ["this", name], ["super", name]):
                 continue
-            targets = self.resolve(path, rng.line, col, text)
+            targets = self.resolve_expr(path, rng.line, rng.col, expr)
             if len(targets) != 1:
                 continue
             target = targets[0]
@@ -267,8 +283,11 @@ class Navigator:
             shown = (spec.via_typedef.name if spec.via_typedef else spec.name) if spec and not spec.args else bound
             tooltip = f"{param} bound in {cls.name} extends {norm_type(cls.base.text)}"
             hints.append((rng, norm_type(shown), tooltip))
-        ws._bound_member_hints[path] = hints
-        return hints
+        for line in missing:
+            cache[line] = []
+        for hint in hints:
+            cache[hint[0].line].append(hint)
+        return [hint for line in line_numbers for hint in cache[line]]
 
     def step(self, t: Target, name: str, sep: str, ctx_cls) -> list[Target]:
         ws = self.ws

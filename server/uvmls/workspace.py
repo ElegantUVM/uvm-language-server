@@ -158,6 +158,7 @@ class Workspace:
     def _clear_maps(self):
         self._config_db_report = None
         self._effective_type_cache: dict = {}
+        self._inlay_hint_cache: dict = {}
         self._bound_member_hints: dict = {}
         self.creates_by_file: dict[str, list[CreateCall]] = {}
         self.identifiers_by_file: dict[str, list[tuple[str, Range]]] = {}

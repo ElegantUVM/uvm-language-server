@@ -890,8 +890,29 @@ async def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
 async def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
     if ls.settings.get("inlayHints", True) is False:
         return []
-    if not await ls.fresh():
-        return []
+    while await ls.fresh():
+        if ls.settings.get("inlayHints", True) is False:
+            return []
+        selected_test = ls.settings.get("inlayHints.test")
+        start, end = params.range.start, params.range.end
+        key = (params.text_document.uri, start.line, start.character, end.line, end.character, selected_test)
+        if key in ls.ws._inlay_hint_cache:
+            return ls.ws._inlay_hint_cache[key]
+        version = ls.ws.version
+        hints = await asyncio.get_running_loop().run_in_executor(
+            None, _compute_inlay_hints, ls, params, selected_test)
+        if not await ls.fresh():
+            return []
+        # Edits may arrive while the worker is resolving the previous index.
+        if version == ls.ws.version and selected_test == ls.settings.get("inlayHints.test"):
+            if ls.settings.get("inlayHints", True) is False:
+                return []
+            ls.ws._inlay_hint_cache[key] = hints
+            return hints
+    return []
+
+
+def _compute_inlay_hints(ls: UvmLanguageServer, params: T.InlayHintParams, selected_test):
     path = uri_to_path(params.text_document.uri)
     hints = []
     with ls.ws.lock:
@@ -903,7 +924,7 @@ async def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
             if not (start.line, start.character) <= (pos.line, pos.character) < (end.line, end.character):
                 continue
             if result is None:
-                result = effective_type(ls.ws, ls.settings.get("inlayHints.test"))
+                result = effective_type(ls.ws, selected_test)
             for entry in result.get(cr.range, ()):
                 ov = entry.override
                 if ov is None:
@@ -917,7 +938,8 @@ async def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
                     label=[T.InlayHintLabelPart(value=label, location=T.Location(
                         path_to_uri(ov.range.path), _indexed_range(ls, ov.range)))],
                     tooltip=T.MarkupContent(kind=T.MarkupKind.Markdown, value=tooltip)))
-        for rng, bound, tooltip in ls.nav.bound_member_hints(path):
+        last_line = end.line if end.character else end.line - 1
+        for rng, bound, tooltip in ls.nav.bound_member_hints(path, start.line, last_line):
             pos = _indexed_range(ls, rng).end
             if (start.line, start.character) <= (pos.line, pos.character) < (end.line, end.character):
                 hints.append(T.InlayHint(position=pos, kind=T.InlayHintKind.Type, padding_left=True,

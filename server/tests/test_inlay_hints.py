@@ -432,6 +432,31 @@ endclass
         c.close()
 
 
+def test_cold_hints_allow_queued_stats_request(tb, tmp_path):
+    root = tmp_path / "alu_tb"
+    shutil.copytree(tb, root)
+    path = root / "agent/alu_driver.svh"
+    path.write_text(path.read_text().replace("    drive_item(req);", "    drive_item(req);\n" * 6000))
+    c = start(root, capabilities=CAPABILITIES)
+    try:
+        c.next_id += 2
+        hint_id, stats_id = c.next_id - 1, c.next_id
+        c.send({"jsonrpc": "2.0", "id": hint_id, "method": "textDocument/inlayHint", "params": {
+            "textDocument": {"uri": path.as_uri()},
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 10000, "character": 0}}}})
+        c.send({"jsonrpc": "2.0", "id": stats_id, "method": "uvm/stats", "params": {}})
+        responses = []
+        while len(responses) < 2:
+            msg = c.read()
+            if msg.get("id") in (hint_id, stats_id):
+                assert "error" not in msg
+                responses.append(msg)
+        assert [msg["id"] for msg in responses] == [stats_id, hint_id]
+        assert len(responses[1]["result"]) == 6001
+    finally:
+        c.close()
+
+
 @pytest.mark.parametrize("refresh", [True, False])
 def test_inlay_refresh_after_configuration_change(tb, refresh):
     c = Client()
