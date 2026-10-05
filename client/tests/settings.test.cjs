@@ -91,8 +91,7 @@ test("the include command is contributed but hidden from the command palette", (
 test("config_db lenses are enabled by default and forwarded to the server", () => {
   const { contributes } = require("../package.json");
   assert.equal(contributes.configuration.properties["uvm.codeLens.configDb"].default, true);
-  const extension = fs.readFileSync(path.join(__dirname, "../src/extension.ts"), "utf8");
-  assert.match(extension, /codeLens: \{ configDb: cfg.get\("codeLens.configDb"\) \}/);
+  assert.equal(configured().settings().codeLens.configDb, true);
 });
 
 test("hover command links trust only the config_db view command", () => {
@@ -100,11 +99,48 @@ test("hover command links trust only the config_db view command", () => {
   assert.match(extension, /markdown: \{ isTrusted: \{ enabledCommands: \["uvm.showConfigDb"\] \} \}/);
 });
 
-test("inlay hint settings are forwarded with the topology's default test", () => {
+function configured(overrides = {}) {
   const { contributes } = require("../package.json");
-  assert.equal(contributes.configuration.properties["uvm.inlayHints"].default, true);
-  assert.equal(contributes.configuration.properties["uvm.inlayHints.test"].default, "");
-  const extension = fs.readFileSync(path.join(__dirname, "../src/extension.ts"), "utf8");
-  assert.match(extension, /inlayHints: cfg.get\("inlayHints"\)/);
-  assert.match(extension, /"inlayHints.test": cfg.get\("inlayHints.test"\)/);
+  const values = Object.fromEntries(Object.entries(contributes.configuration.properties)
+    .map(([key, spec]) => [key, spec.default]));
+  Object.assign(values, overrides);
+  const tree = {};
+  // VS Code expands dotted setting names into a tree; a scalar parent loses its children.
+  for (const [key, value] of Object.entries(values)) {
+    const parts = key.split(".");
+    const leaf = parts.pop();
+    let node = tree;
+    for (const part of parts) {
+      node[part] ??= {};
+      assert.equal(typeof node[part], "object", `setting prefix collision: ${key}`);
+      node = node[part];
+    }
+    assert.ok(!(leaf in node), `setting overwrites a namespace: ${key}`);
+    node[leaf] = value;
+  }
+  const vscode = { workspace: { getConfiguration: (section) => ({
+    get: (key) => key.split(".").reduce((node, part) => node?.[part], tree[section]),
+  }) } };
+  const context = { exports: {}, require: (name) => name === "vscode" ? vscode : require(name) };
+  vm.runInNewContext(compiled, context);
+  return { settings: context.exports.serverSettings, values: tree.uvm };
+}
+
+test("inlay hint defaults coexist in the configuration tree", () => {
+  const value = configured().settings();
+  assert.equal(value.inlayHints, true);
+  assert.equal(value["inlayHints.test"], "");
+});
+
+test("the selected test and hint switch survive configuration changes independently", () => {
+  const c = configured({ "uvm.inlayHintsTest": "alu_add_test" });
+  assert.equal(c.settings()["inlayHints.test"], "alu_add_test");
+  assert.equal(c.settings().inlayHints, true);
+  c.values.inlayHints = false;
+  c.values.inlayHintsTest = "alu_random_test";
+  assert.equal(c.settings().inlayHints, false);
+  assert.equal(c.settings()["inlayHints.test"], "alu_random_test");
+  c.values.inlayHints = true;
+  assert.equal(c.settings().inlayHints, true);
+  assert.equal(c.settings()["inlayHints.test"], "alu_random_test");
 });

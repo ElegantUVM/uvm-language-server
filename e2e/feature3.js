@@ -94,7 +94,7 @@ endclass
     "uvm.elaboration": "onSave",
     "uvm.codeLens.configDb": true,
     "uvm.inlayHints": true,
-    "uvm.inlayHints.test": "alu_add_test",
+    "uvm.inlayHintsTest": "alu_add_test",
     "editor.codeLens": true,
     "editor.inlayHints.enabled": "on",
     "editor.hover.enabled": true,

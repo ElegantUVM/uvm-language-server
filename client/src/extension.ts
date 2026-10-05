@@ -9,7 +9,7 @@ import {
   State,
 } from "vscode-languageclient/node";
 import { GraphPanel, PanelTab } from "./panel";
-import { addIncludeDir, expandPath } from "./settings";
+import { addIncludeDir, expandPath, serverSettings } from "./settings";
 import { revealLocation } from "./navigation";
 
 let client: LanguageClient | undefined;
@@ -82,23 +82,6 @@ async function findPython(ctx: vscode.ExtensionContext): Promise<string | undefi
     }
   }
   return undefined;
-}
-
-function settings(): Record<string, unknown> {
-  const cfg = vscode.workspace.getConfiguration("uvm");
-  return {
-    filelists: cfg.get("filelists"),
-    includeDirs: cfg.get("includeDirs"),
-    defines: cfg.get("defines"),
-    uvmHome: cfg.get("uvmHome") || undefined,
-    useBundledUvm: cfg.get("useBundledUvm"),
-    exclude: cfg.get("exclude"),
-    lint: { enabled: cfg.get("lint.enabled") },
-    codeLens: { configDb: cfg.get("codeLens.configDb") },
-    inlayHints: cfg.get("inlayHints"),
-    "inlayHints.test": cfg.get("inlayHints.test"),
-    elaboration: cfg.get("elaboration"),
-  };
 }
 
 function run(cmd: string, args: string[], cwd?: string): Promise<{ ok: boolean; out: string }> {
@@ -217,7 +200,7 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
     ],
     // The server only offers command links and reveal actions the client can run.
     initializationOptions: {
-      settings: settings(), clientCommands: ["uvm.showConfigDb", "uvm.addIncludeDir", "uvm.revealLocation"],
+      settings: serverSettings(), clientCommands: ["uvm.showConfigDb", "uvm.addIncludeDir", "uvm.revealLocation"],
     },
     markdown: { isTrusted: { enabledCommands: ["uvm.showConfigDb"] } },
     synchronize: { fileEvents: watcher },
@@ -441,7 +424,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
         client = undefined;
         await ensureClient(ctx, false);
       } else if (e.affectsConfiguration("uvm") && client) {
-        client.sendNotification("workspace/didChangeConfiguration", { settings: { uvm: settings() } });
+        client.sendNotification("workspace/didChangeConfiguration", { settings: { uvm: serverSettings() } });
       }
     }),
   );

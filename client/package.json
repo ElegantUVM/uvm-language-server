@@ -215,7 +215,7 @@
           "default": true,
           "markdownDescription": "Show UVM type inlay hints. VS Code's `#editor.inlayHints.enabled#` also controls their display."
         },
-        "uvm.inlayHints.test": {
+        "uvm.inlayHintsTest": {
           "type": "string",
           "default": "",
           "description": "Test whose factory overrides appear in inlay hints. Empty: use the topology's default test."
