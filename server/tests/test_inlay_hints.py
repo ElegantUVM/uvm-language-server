@@ -368,6 +368,44 @@ def test_bound_member_unicode_and_edits(tb):
         c.close()
 
 
+@pytest.mark.parametrize("argument,expected", [
+    ("box #(U)", "box #(alu_seq_item)"),
+    ("box #(.U(U))", "box #(.U(alu_seq_item))"),
+    ("box #(box #(U))", "box #(box #(alu_seq_item))"),
+])
+def test_compound_bindings_through_intermediate_classes(tb, tmp_path, argument, expected):
+    root = tmp_path / "alu_tb"
+    shutil.copytree(tb, root)
+    path = root / "agent/alu_driver.svh"
+    text = path.read_text() + '''
+class box #(type U = int); endclass
+class chain_base #(type T = int);
+  T item;
+endclass
+class chain_mid #(type U = int) extends chain_base #(ARGUMENT);
+endclass
+class chain_bound extends chain_mid #(alu_seq_item);
+  function void use_item();
+    item = null;
+  endfunction
+endclass
+class chain_open #(type A = alu_seq_item) extends chain_mid #(A);
+  function void use_item(); item = null; endfunction
+endclass
+'''.replace("ARGUMENT", argument)
+    path.write_text(text)
+    c = start(root, capabilities=CAPABILITIES)
+    try:
+        lines = text.splitlines()
+        first = lines.index("class chain_bound extends chain_mid #(alu_seq_item);")
+        [hint] = hints(c, path, start=(first, 0))
+        assert label(hint) == ": " + expected
+        assert hint["position"] == {"line": first + 2, "character": 8}
+        assert hint["tooltip"]["value"] == "T bound in chain_bound extends chain_mid #(alu_seq_item)"
+    finally:
+        c.close()
+
+
 @pytest.mark.parametrize("refresh", [True, False])
 def test_inlay_refresh_after_configuration_change(tb, refresh):
     c = Client()

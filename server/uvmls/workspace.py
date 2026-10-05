@@ -79,6 +79,22 @@ def parse_type_text(text: str) -> tuple[str | None, str, list[str]] | None:
     return m.group(1), m.group(2), split_args(m.group(4)) if m.group(4) else []
 
 
+def substitute_params(text: str, bindings: dict[str, str]) -> str:
+    if not bindings or text in bindings:
+        return bindings.get(text, text)
+    previous = ""
+
+    def replace(m):
+        nonlocal previous
+        token = m.group()
+        # Qualified names, named selectors and literal contents belong to other scopes.
+        value = bindings.get(token, token) if previous not in (".", "::", "'") else token
+        previous = token
+        return value
+
+    return re.sub(r'"(?:\\.|[^"\\])*"|\\\S+|::|[A-Za-z_$][\w$]*|\S', replace, text)
+
+
 def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str, str]) -> dict[str, str]:
     """Map a class's parameters to the arguments of a specialization."""
     out: dict[str, str] = {}
@@ -90,12 +106,12 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
             named[m.group(1)] = m.group(2)
     for i, (pname, default) in enumerate(params):
         if pname in named:
-            val = named[pname]
+            val = substitute_params(named[pname], outer)
         elif i < len(positional):
-            val = positional[i]
+            val = substitute_params(positional[i], outer)
         else:
-            val = out.get(default, default)
-        out[pname] = outer.get(val, val)
+            val = substitute_params(default, out)
+        out[pname] = val
     return out
 
 
@@ -421,7 +437,7 @@ class Workspace:
             if base is None:
                 entries.append(ChainEntry(Spec(cur.base.name), {}))
                 break
-            args = [bindings.get(a, a) for a in (base.args or cur.base.args)]
+            args = base.args or cur.base.args
             if base.cls is not None:
                 if base.cls.qualname in seen:
                     break
