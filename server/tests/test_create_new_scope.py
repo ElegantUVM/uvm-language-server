@@ -69,3 +69,36 @@ def test_create_new_default_specialization_through_typedef(tmp_path):
     fix_once(w, "create-new")
     assert 'mt = mon_t::type_id::create("mt", this)' in (tmp_path / "t.sv").read_text()
     assert not findings(w, "create-new") and user_errors(w) == []
+
+
+@pytest.mark.parametrize("param", ["type", "localparam type"])
+@pytest.mark.parametrize("default", ["drv", "drv#(bit)"])
+def test_create_new_keeps_a_bound_type_parameter(tmp_path, param, default):
+    text = '''`include "uvm_macros.svh"
+import uvm_pkg::*;
+class drv #(type T = int) extends uvm_driver;
+  `uvm_component_param_utils(drv#(T))
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class env #(PARAM D = DEFAULT) extends uvm_env;
+  `uvm_component_param_utils(env#(D))
+  D d;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    d = new("d", this);
+  endfunction
+endclass
+module top; env#() e; endmodule
+'''.replace("PARAM", param).replace("DEFAULT", default)
+    if param == "localparam type":
+        text = text.replace("`uvm_component_param_utils(env#(D))", "`uvm_component_utils(env)")
+    else:
+        text = text.replace("env#() e;", "env#() e; env#(drv#(byte)) e2;")
+    w = index(tmp_path, {"t.sv": text}, bundled=True)
+    assert user_errors(w) == []
+    [d] = findings(w, "create-new")
+    assert d.message.endswith("use D::type_id::create")
+    fix = fix_once(w, "create-new")
+    assert fix.preferred and fix.title == "Create 'd' with D::type_id::create"
+    assert (tmp_path / "t.sv").read_text() == text.replace('d = new(', 'd = D::type_id::create(')
+    assert not findings(w, "create-new") and user_errors(w) == []
