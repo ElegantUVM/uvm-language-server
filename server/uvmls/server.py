@@ -126,6 +126,7 @@ class UvmLanguageServer(LanguageServer):
         self._debounce: asyncio.TimerHandle | None = None
         self._flush_task: asyncio.Future | None = None
         self._index_task: asyncio.Future | None = None
+        self._index_lock = asyncio.Lock()  # indexing through publication is one operation
         self.elab_diags: dict[str, list[Diag]] = {}
         self.elab_texts: dict[str, str] = {}  # the unsaved editor text those diagnostics come from
         self.elab_shown: list[str] = []  # the severity Problems shows for each of them
@@ -154,15 +155,16 @@ class UvmLanguageServer(LanguageServer):
         await asyncio.shield(self._index_task)
 
     async def _full_index(self):
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self.ws.configure, self.config())
-        for w in self.ws.sources.warnings if self.ws.sources else []:
-            self.window_log_message(T.LogMessageParams(T.MessageType.Warning, w))
-        if self.elab_mode == "off":
-            self.outdate_elaboration()
-        self.after_index()
-        if self.elab_mode != "off":
-            self.start_elaboration()
+        async with self._index_lock:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self.ws.configure, self.config())
+            for w in self.ws.sources.warnings if self.ws.sources else []:
+                self.window_log_message(T.LogMessageParams(T.MessageType.Warning, w))
+            if self.elab_mode == "off":
+                self.outdate_elaboration()
+            self.after_index()
+            if self.elab_mode != "off":
+                self.start_elaboration()
 
     def schedule(self, path: str):
         self.pending.add(path)
@@ -200,25 +202,24 @@ class UvmLanguageServer(LanguageServer):
                 return False
 
     async def flush(self):
-        if self._index_task is not None and not self._index_task.done():
-            await asyncio.shield(self._index_task)
-        paths, self.pending = self.pending, set()
-        loop = asyncio.get_running_loop()
-        docs, basis = self.documents, self.elab_basis
+        async with self._index_lock:
+            paths, self.pending = self.pending, set()
+            loop = asyncio.get_running_loop()
+            docs, basis = self.documents, self.elab_basis
 
-        def work() -> list[str]:
-            for p in paths:
-                self.ws.update_document(p, docs.get(p))
-            # An open file that is the file on disk again (reloaded after another program changed
-            # it, or reverted) but not what the latest run compiled: no save will elaborate it.
-            return [p for p in paths if p in docs and p in basis and docs[p] != basis[p]
-                    and _same_text(p, docs[p], None)]
-        reloaded = await loop.run_in_executor(None, work)
-        self.after_index()
-        if reloaded and self._elab_timer is None:  # unless a run is due anyway, or started meanwhile
-            docs = self.documents
-            if any(docs.get(p) != self.elab_basis.get(p) for p in reloaded):
-                self.schedule_elaboration(ELAB_SAVE_DELAY)
+            def work() -> list[str]:
+                for p in paths:
+                    self.ws.update_document(p, docs.get(p))
+                # An open file that is the file on disk again (reloaded after another program changed
+                # it, or reverted) but not what the latest run compiled: no save will elaborate it.
+                return [p for p in paths if p in docs and p in basis and docs[p] != basis[p]
+                        and _same_text(p, docs[p], None)]
+            reloaded = await loop.run_in_executor(None, work)
+            self.after_index()
+            if reloaded and self._elab_timer is None:  # unless a run is due anyway, or started meanwhile
+                docs = self.documents
+                if any(docs.get(p) != self.elab_basis.get(p) for p in reloaded):
+                    self.schedule_elaboration(ELAB_SAVE_DELAY)
 
     @property
     def documents(self) -> dict[str, str]:
