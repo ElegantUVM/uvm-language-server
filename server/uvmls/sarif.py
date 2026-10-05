@@ -70,7 +70,8 @@ def build_log(root: str | Path, diagnostics: list[Diag]) -> dict:
                 artifact = {"uri": path.as_uri()}
             if path not in texts:
                 try:
-                    texts[path] = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                    # Text reads normalize CR/LF; other whitespace is not a source line break.
+                    texts[path] = path.read_text(encoding="utf-8", errors="replace").split("\n")
                 except OSError:
                     texts[path] = []
             lines = texts[path]

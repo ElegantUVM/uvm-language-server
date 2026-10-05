@@ -157,6 +157,31 @@ def test_elab_columns_use_utf16(tmp_path, capsys, monkeypatch):
     assert run["columnKind"] == "utf16CodeUnits"
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("separator", ["\f", "\v", "\x85", "\u2028", "\u2029"])
+def test_fingerprint_uses_source_lines(tmp_path, capsys, newline, separator):
+    path = tmp_path / "t.sv"
+
+    def finding(comment, name="child"):
+        text = f"/* comment{separator} unrelated {comment} comment text */{newline}" \
+               f"class {name} extends absent;{newline}endclass{newline}"
+        path.write_bytes(text.encode("utf-8"))
+        code, out = invoke(capsys, ["lint", str(tmp_path), "--no-bundled-uvm", "--sarif", "-"])
+        assert code == 0
+        [result] = check_log(json.loads(out.out))["results"]
+        assert result["ruleId"] == "unknown-base"
+        return result
+
+    first = finding("before")
+    second = finding("edited")
+    assert first["locations"] == second["locations"]
+    assert first["partialFingerprints"] == second["partialFingerprints"]
+    expected = hashlib.sha256(json.dumps(["t.sv", "unknown-base", "class child extends absent;"],
+                                       ensure_ascii=False).encode("utf-8")).hexdigest()
+    assert first["partialFingerprints"] == {"primaryLocationLineHash": expected}
+    assert finding("edited", "other")["partialFingerprints"] != first["partialFingerprints"]
+
+
 def test_rules_ranges_external_paths_and_fingerprints(tmp_path):
     from uvmls.sarif import build_log
 
