@@ -417,6 +417,17 @@ def _factory_ctor(ctx: Context, d) -> list[Fix]:
     return _add_constructor(ctx, ft, cls)
 
 
+# Without library declarations, only these bases are known to accept the standard super call.
+STANDARD_CTOR_BASES = {
+    "uvm_object", "uvm_transaction", "uvm_sequence_item", "uvm_sequence_base", "uvm_sequence",
+    "uvm_sequence_library", "uvm_reg_sequence", "uvm_reg_frontdoor", "uvm_reg_item", "uvm_report_object",
+    "uvm_component", "uvm_test", "uvm_env", "uvm_agent", "uvm_driver", "uvm_push_driver", "uvm_monitor",
+    "uvm_scoreboard", "uvm_subscriber", "uvm_sequencer_base", "uvm_sequencer_param_base", "uvm_sequencer",
+    "uvm_push_sequencer", "uvm_reg_predictor", "uvm_reg_adapter", "uvm_reg_block", "uvm_reg_file",
+    "uvm_reg_field", "uvm_reg_map",
+}
+
+
 def _add_constructor(ctx: Context, ft: FileText, cls) -> list[Fix]:
     """The constructor the factory calls, right after the registration block."""
     ws = ctx.ws
@@ -424,10 +435,12 @@ def _add_constructor(ctx: Context, ft: FileText, cls) -> list[Fix]:
     base = ws.base_spec(cls)
     if cls.extends_args is not None or cls.registration_range is None or base is None:
         return []
-    if base.cls is not None and not base.cls.library:  # it must take super.new(...) too
+    if base.cls is not None:  # a user or library base must take super.new(...) too
         bctor = next((m for m in base.cls.methods if m.name == "new"), None)
         if bctor is None or ctor_call_problem(ws, base.cls, bctor.args, 2 if component else 1):
             return []
+    elif base.name not in STANDARD_CTOR_BASES:
+        return []
     body, reg = masked_body(ws, ft, cls), ft.span(cls.registration_range)
     if body is None or reg is None or cls.header_end is None:
         return []

@@ -717,6 +717,40 @@ endclass
     assert offered(w, found["sub_drv"]) == [] and offered(w, found["arg_drv"]) == []
 
 
+@pytest.mark.parametrize('base,bundled', [
+    (base, bundled) for base in ('uvm_reg', 'uvm_mem', 'uvm_vreg') for bundled in (False, True)
+] + [(base, True) for base in ('uvm_reg_fifo', 'uvm_reg_indirect_data', 'uvm_heartbeat')])
+def test_factory_ctor_rejects_library_bases_needing_more_arguments(tmp_path, base, bundled):
+    text = f"""`include "uvm_macros.svh"
+import uvm_pkg::*;
+class r extends {base};
+  `uvm_object_utils(r)
+  int x;
+endclass
+"""
+    w = index(tmp_path, {'t.sv': text}, bundled=bundled)
+    [d] = findings(w, 'factory-ctor')
+    assert offered(w, d) == []
+    assert all_fixed(w, d.range.path, 'factory-ctor') == ([], [])
+
+
+@pytest.mark.parametrize('base', ['uvm_reg_block', 'uvm_sequence_item', 'uvm_reg_sequence'])
+def test_factory_ctor_standard_library_bases_compile(tmp_path, base):
+    text = f"""`include "uvm_macros.svh"
+import uvm_pkg::*;
+class r extends {base};
+  `uvm_object_utils(r)
+endclass
+"""
+    w = index(tmp_path, {'t.sv': text}, bundled=True)
+    [d] = findings(w, 'factory-ctor')
+    [fix] = offered(w, d)
+    assert fix.preferred and fix.safe
+    fix_once(w, 'factory-ctor')
+    assert not findings(w, 'factory-ctor')
+    assert user_errors(w) == []
+
+
 # -- create-new ------------------------------------------------------------------------
 
 NEWS = """import uvm_pkg::*;
