@@ -71,6 +71,7 @@ class Method:
     decl_range: Range
     args: list[Variable] = field(default_factory=list)
     locals: list[Variable] = field(default_factory=list)
+    local_types: list[str] = field(default_factory=list)  # typedef names, including nested blocks
     qualifiers: list[str] = field(default_factory=list)
     is_prototype: bool = False  # extern / pure virtual declaration without a body
     non_ansi: bool = False  # arguments declared in the body cannot have default values

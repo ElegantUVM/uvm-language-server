@@ -383,6 +383,7 @@ class Sink:
         self.seq_starts: list[SeqStart] = []
         self.run_tests: list[tuple[str, Range]] = []
         self.locals: list[Variable] = []
+        self.local_types: list[str] = []
         self.super_calls: list[str] = []
 
 
@@ -953,6 +954,7 @@ class Extractor:
             for st in decl.items:
                 self.walk(st, ctx, sink)
             meth.locals = sink.locals
+            meth.local_types = sink.local_types
             meth.super_calls = sink.super_calls
             meth.forwarded_phase = forwarded_phase(decl, meth)
             if not meth.generated:
@@ -1011,6 +1013,8 @@ class Extractor:
             self.on_call(node, ctx, sink)
         elif k == K.AssignmentExpression:
             self.on_assign(node, ctx, sink)
+        elif k in TYPEDEF_KINDS:
+            sink.local_types.append(node.name.valueText)
         elif k == K.DataDeclaration:
             text = pretty(node)
             for d in nodes(node.declarators):

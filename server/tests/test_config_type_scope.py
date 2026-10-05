@@ -76,3 +76,52 @@ def test_config_type_does_not_copy_a_setter_local_dimension(tmp_path):
     assert user_errors(w) == []
     ds = findings(w, "config-db-type-mismatch")
     assert len(ds) == 2 and all(offered(w, d) == [] for d in ds)
+
+
+@pytest.mark.parametrize("shadow", ["none", "unrelated", "method", "block", "extern", "macro"])
+def test_config_type_does_not_copy_a_shadowed_member_alias(tmp_path, shadow):
+    text = '''`include "uvm_macros.svh"
+import uvm_pkg::*;
+class setter extends uvm_env;
+  typedef int set_t;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    uvm_config_db#(set_t)::set(this, "*", "flag", 3);
+  endfunction
+endclass
+class getter extends uvm_env;
+  typedef int flag_t;
+  flag_t flag;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  METHOD
+endclass
+'''
+    decl = "typedef uvm_object flag_t;"
+    call = '''void'(uvm_config_db#(bit)::get(this, "", "flag", flag));'''
+    if shadow == "none":
+        decl = ""
+    elif shadow == "unrelated":
+        decl = "typedef uvm_object other_t;"
+    elif shadow == "macro":
+        text = "`define LOCAL_TYPE typedef uvm_object flag_t;\n" + text
+        decl = "`LOCAL_TYPE"
+    body = decl + "\n    " + call
+    if shadow == "block":
+        body = "begin\n    " + body + "\n    end"
+    method = "function void build_phase(uvm_phase phase);\n    " + body + "\n  endfunction"
+    if shadow == "extern":
+        text = text.replace("METHOD", "extern function void build_phase(uvm_phase phase);")
+        text += method.replace("build_phase(", "getter::build_phase(") + "\n"
+    else:
+        text = text.replace("METHOD", method)
+    w = index(tmp_path, {"t.sv": text}, bundled=True)
+    assert user_errors(w) == []
+    [d] = findings(w, "config-db-type-mismatch")
+    if shadow in ("none", "unrelated"):
+        fix = fix_once(w, "config-db-type-mismatch")
+        assert fix.preferred and fix.changes[0].text == "flag_t"
+        assert not findings(w, "config-db-type-mismatch") and user_errors(w) == []
+    else:
+        assert offered(w, d) == []
+        [show] = offered(w, d, commands=frozenset({"uvm.showConfigDb"}))
+        assert show.command and not show.changes and not show.preferred
