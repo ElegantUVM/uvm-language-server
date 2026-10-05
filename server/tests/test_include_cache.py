@@ -97,14 +97,14 @@ def test_unwatched_header_move_over_stdio(tmp_path):
         doc.change(text)
         [d] = doc.diagnostics(lambda ds: ds and ds[0]['range']['start']['line'] == 0)
         [action] = doc.actions([d])
-        assert action['command']['arguments'] == [{'value': 'a'}]
+        assert action['command']['arguments'] == [{'dir': str(tmp_path / 'a'), 'value': 'a'}]
         (tmp_path / 'b').mkdir()
         (tmp_path / 'a' / 'defs.h').rename(tmp_path / 'b' / 'defs.h')
         # The client does not watch .h: only the SV buffer triggers incremental indexing.
         doc.change('// edited\n' + text)
         [d] = doc.diagnostics(lambda ds: ds and ds[0]['range']['start']['line'] == 1)
         [action] = doc.actions([d])
-        assert action['command']['arguments'] == [{'value': 'b'}]
+        assert action['command']['arguments'] == [{'dir': str(tmp_path / 'b'), 'value': 'b'}]
         c.notify('workspace/didChangeConfiguration', {'settings': {'uvm': {
             'filelists': [str(tmp_path / 'alu_tb.f')], 'elaboration': 'off',
             'useBundledUvm': False, 'includeDirs': ['b']}}})

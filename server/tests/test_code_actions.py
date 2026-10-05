@@ -388,7 +388,7 @@ def test_missing_include(tb):
         assert (d["source"], d["code"], d["data"]["include"]) == ("slang", "CouldNotOpenIncludeFile", "sub/hdr.svh")
         [setting] = doc.actions([d])
         assert (setting["title"], setting["command"]["command"], setting["command"]["arguments"]) == (
-            "Add 'inc' to uvm.includeDirs", "uvm.addIncludeDir", [{"value": "inc"}])
+            "Add 'inc' to uvm.includeDirs", "uvm.addIncludeDir", [{"dir": inc, "value": "inc"}])
         assert "edit" not in setting
         c.notify('workspace/didChangeConfiguration', {'settings': {'uvm': {
             'filelists': [os.path.join(tb, 'alu_tb.f')], 'elaboration': 'off', 'includeDirs': ['inc']}}})

@@ -802,7 +802,7 @@ def _missing_include(ctx: Context, d) -> list[Fix]:
     for path in dirs:
         if command in ctx.client.commands:
             value = setting_value(ctx.ws, path)
-            fixes.append(Fix(f"Add '{value}' to uvm.includeDirs", command=(command, [{"value": value}])))
+            fixes.append(Fix(f"Add '{value}' to uvm.includeDirs", command=(command, [{"dir": path, "value": value}])))
     if len(fixes) == 1 and fixes[0].command:
         fixes[0].preferred = True
     return fixes

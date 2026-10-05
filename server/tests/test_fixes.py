@@ -1385,7 +1385,7 @@ def test_missing_include_discovery(tmp_path):
     assert offered(w, d) == []  # no filelist, and no editor command to change the setting
     [fix] = offered(w, d, commands=frozenset({"uvm.addIncludeDir"}))
     assert (fix.title, fix.preferred, fix.changes, fix.command) == (
-        "Add 'inc' to uvm.includeDirs", True, [], ("uvm.addIncludeDir", [{"value": "inc"}]))
+        "Add 'inc' to uvm.includeDirs", True, [], ("uvm.addIncludeDir", [{"dir": str(tmp_path / "inc"), "value": "inc"}]))
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], include_dirs=[str(tmp_path / "inc")],
                               bundled_uvm=False))
     assert not slang_findings(w, "CouldNotOpenIncludeFile")
@@ -1447,7 +1447,7 @@ def test_missing_include_filelist(tmp_path, before):
     [d] = slang_findings(w, "CouldNotOpenIncludeFile")
     assert offered(w, d) == []
     [fix] = offered(w, d, commands=frozenset({"uvm.addIncludeDir"}))
-    assert fix.command == ("uvm.addIncludeDir", [{"value": "inc"}]) and not fix.changes
+    assert fix.command == ("uvm.addIncludeDir", [{"dir": str(tmp_path / "inc"), "value": "inc"}]) and not fix.changes
     with open(tmp_path / "tb.f", newline="") as f:
         assert f.read() == before
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb.f")],

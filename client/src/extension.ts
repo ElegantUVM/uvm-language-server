@@ -1,6 +1,5 @@
 import { execFile } from "child_process";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
@@ -10,6 +9,7 @@ import {
   State,
 } from "vscode-languageclient/node";
 import { GraphPanel, PanelTab } from "./panel";
+import { addIncludeDir, expandPath } from "./settings";
 
 let client: LanguageClient | undefined;
 let starting: Promise<boolean> | undefined;
@@ -30,11 +30,6 @@ const VENV_BIN = process.platform === "win32" ? path.join("Scripts", "python.exe
 /** A private virtual environment the extension can create for itself. */
 function managedVenv(ctx: vscode.ExtensionContext): string {
   return path.join(ctx.globalStorageUri.fsPath, "venv");
-}
-
-function expandPath(p: string): string {
-  const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-  return p.replace(/\$\{workspaceFolder\}/g, ws).replace(/^~(?=[\\/]|$)/, os.homedir());
 }
 
 /** Virtual environments in each workspace folder and up to three of its parents. */
@@ -86,23 +81,6 @@ async function findPython(ctx: vscode.ExtensionContext): Promise<string | undefi
     }
   }
   return undefined;
-}
-
-/** From a quick fix: add a directory to uvm.includeDirs, in the workspace's settings. */
-async function addIncludeDir(arg?: { value?: string }) {
-  const value = typeof arg?.value === "string" ? arg.value : undefined;
-  if (!value) {
-    return;
-  }
-  const cfg = vscode.workspace.getConfiguration("uvm");
-  const inWorkspace = !!vscode.workspace.workspaceFolders?.length;
-  const seen = cfg.inspect<string[]>("includeDirs");
-  // A workspace value replaces the user's list, so it starts as the list in effect now.
-  const current = (inWorkspace ? seen?.workspaceValue ?? cfg.get<string[]>("includeDirs") : seen?.globalValue) ?? [];
-  if (!current.includes(value)) {
-    await cfg.update("includeDirs", [...current, value],
-      inWorkspace ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
-  }
 }
 
 function settings(): Record<string, unknown> {
