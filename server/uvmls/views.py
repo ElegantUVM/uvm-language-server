@@ -582,7 +582,22 @@ def config_db_calls(ws: Workspace) -> list[tuple[str, ConfigDbCall]]:
     return out
 
 
-def config_db_report(ws: Workspace) -> dict:
+class ConfigDbReport(dict):
+    """The wire report plus private lookup state, shared until the workspace rebuilds."""
+
+    def __init__(self, fields: list, dynamic: list, version: int):
+        super().__init__(fields=fields, dynamic=dynamic, version=version)
+        self.by_field = {row["field"]: row for row in fields}
+        self.near_index = None
+
+
+def config_db_report(ws: Workspace) -> ConfigDbReport:
+    if ws._config_db_report is None:
+        ws._config_db_report = _build_config_db_report(ws)
+    return ws._config_db_report
+
+
+def _build_config_db_report(ws: Workspace) -> ConfigDbReport:
     groups: dict[str, dict] = {}
     dynamic = []
     for owner, c in config_db_calls(ws):
@@ -609,4 +624,4 @@ def config_db_report(ws: Workspace) -> dict:
         else:
             status = "ok"
         rows.append({**g, "types": sorted(set_types | get_types), "status": status})
-    return {"fields": rows, "dynamic": dynamic, "version": ws.version}
+    return ConfigDbReport(rows, dynamic, ws.version)

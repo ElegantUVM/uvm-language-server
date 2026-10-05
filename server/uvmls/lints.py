@@ -8,7 +8,7 @@ import re
 
 from .model import Diag, Variable
 from .uvm import COMPONENT_ROLES
-from .views import config_db_report, mismatched
+from .views import ConfigDbReport, config_db_report, mismatched
 from .workspace import BUILTIN_TYPES, Workspace, bind_params, parse_type_text
 
 
@@ -414,26 +414,72 @@ def osa_distance(a: str, b: str) -> int:
     return d[len(a)][len(b)]
 
 
+def _deletions(name: str, limit: int) -> set[str]:
+    variants = level = {name}
+    for _ in range(limit):
+        level = {s[:i] + s[i + 1:] for s in level for i in range(len(s))}
+        variants = variants | level
+    return variants
+
+
+class NearMissIndex:
+    """Candidate field names by type and shared deletions; distances still decide matches."""
+
+    def __init__(self, report: dict):
+        self.rows = report["fields"]
+        self.normal: dict[tuple[str, str], set[int]] = {}
+        self.deleted: dict[tuple[str, str], set[int]] = {}
+        self.entries: dict[tuple[int, str], dict] = {}
+        self.memo: dict[tuple[str, str], list[tuple[str, dict]]] = {}
+        for i, row in enumerate(self.rows):
+            name = row["field"]
+            if len(name) < 4 or not row["sets"]:
+                continue
+            key = name.lower().replace("_", "")
+            read = {g["canon"] or g["type"] for g in row["gets"]}
+            kinds = set()
+            for entry in row["sets"]:
+                kind = entry["canon"] or entry["type"]
+                self.entries.setdefault((i, kind), entry)
+                kinds.add(kind)
+            variants = _deletions(name, 2) if kinds - read else ()
+            for kind in kinds:
+                self.normal.setdefault((kind, key), set()).add(i)
+                if kind not in read:
+                    for variant in variants:
+                        self.deleted.setdefault((kind, variant), set()).add(i)
+
+    def find(self, get: dict) -> list[tuple[str, dict]]:
+        name, kind = get["field"], get["canon"] or get["type"]
+        cache_key = name, kind
+        if cache_key in self.memo:
+            return self.memo[cache_key]
+        if len(name) < 4:
+            return []
+        key, limit = name.lower().replace("_", ""), 1 if len(name) < 8 else 2
+        normal = self.normal.get((kind, key), set())
+        candidates = set(normal)
+        for variant in _deletions(name, limit):
+            candidates.update(self.deleted.get((kind, variant), ()))
+        out = []
+        for i in sorted(candidates):  # preserve report order, including the first set of each type
+            other = self.rows[i]["field"]
+            if other != name and (i in normal or
+                                  (abs(len(other) - len(name)) <= limit and osa_distance(name, other) <= limit)):
+                out.append((other, self.entries[i, kind]))
+        self.memo[cache_key] = out
+        return out
+
+
 def near_misses(report: dict, get: dict) -> list[tuple[str, dict]]:
     """Field names set with the get's type that its own name may be a typo of: the same but for case
-    and underscores, or one edit away (two for a name of 8 or more), with the first set of each."""
-    name = get["field"]
-    if len(name) < 4:
-        return []
-    key, limit, kind = name.lower().replace("_", ""), 1 if len(name) < 8 else 2, get["canon"] or get["type"]
-    out = []
-    for row in report["fields"]:
-        other = row["field"]
-        if other == name or len(other) < 4 or not row["sets"]:
-            continue
-        if other.lower().replace("_", "") != key and \
-                (abs(len(other) - len(name)) > limit or osa_distance(name, other) > limit):
-            continue
-        same_type = next((e for e in row["sets"] if (e["canon"] or e["type"]) == kind), None)
-        read = any((e["canon"] or e["type"]) == kind for e in row["gets"])
-        if same_type and (not read or other.lower().replace("_", "") == key):
-            out.append((other, same_type))
-    return out
+    and underscores, or one edit (two for 8+ characters). Shared with quick fixes."""
+    index = getattr(report, "near_index", None)
+    if index is None:
+        index = NearMissIndex(report)
+        if isinstance(report, ConfigDbReport):
+            report.near_index = index
+    return index.find(get)
 
 
 def _names(names: list) -> str:

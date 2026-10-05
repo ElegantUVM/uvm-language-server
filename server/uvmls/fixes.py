@@ -621,7 +621,7 @@ def _config_db_get(ctx: Context, d):
     when macros or unavailable text prevent an edit; the field can still be shown."""
     data = d.data or {}
     report = config_db_report(ctx.ws)
-    row = next((r for r in report["fields"] if r["field"] == data.get("field")), None)
+    row = report.by_field.get(data.get("field"))
     at = list(data.get("at") or ())
     g = row and next((e for e in row["gets"] if e["file"] == d.range.path and [e["line"], e["col"]] == at), None)
     if g is None:

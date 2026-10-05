@@ -138,6 +138,7 @@ class Workspace:
     # -- building ------------------------------------------------------------
 
     def _clear_maps(self):
+        self._config_db_report = None
         self.texts: dict[str, str] = {}
         self.classes: list[ClassInfo] = []
         self.classes_by_name: dict[str, list[ClassInfo]] = {}
