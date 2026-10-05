@@ -95,6 +95,8 @@ function settings(): Record<string, unknown> {
     exclude: cfg.get("exclude"),
     lint: { enabled: cfg.get("lint.enabled") },
     codeLens: { configDb: cfg.get("codeLens.configDb") },
+    inlayHints: cfg.get("inlayHints"),
+    "inlayHints.test": cfg.get("inlayHints.test"),
     elaboration: cfg.get("elaboration"),
   };
 }

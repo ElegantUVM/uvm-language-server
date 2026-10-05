@@ -141,7 +141,10 @@ class Workspace:
 
     def _clear_maps(self):
         self._config_db_report = None
+        self._effective_type_cache: dict = {}
+        self.creates_by_file: dict[str, list[CreateCall]] = {}
         self.texts: dict[str, str] = {}
+        self.lines: dict[str, list[str]] = {}
         self.classes: list[ClassInfo] = []
         self.classes_by_name: dict[str, list[ClassInfo]] = {}
         self.class_by_qual: dict[str, ClassInfo] = {}
@@ -285,6 +288,10 @@ class Workspace:
                 cs.connects += ob.connects
                 cs.seq_starts += ob.seq_starts
         for cls in self.classes:
+            if not cls.library:
+                for cr in self.calls_of(cls).creates:
+                    if cr.kind == "factory" and cr.range.path not in self.library_files:
+                        self.creates_by_file.setdefault(cr.range.path, []).append(cr)
             base = self.base_spec(cls)
             if base is not None:
                 self.subclasses.setdefault(base.key, []).append(cls)

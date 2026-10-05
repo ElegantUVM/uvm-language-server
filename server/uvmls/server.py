@@ -24,7 +24,7 @@ from .lints import lint
 from .model import Diag, Range
 from .navigation import Navigator
 from .project import ProjectConfig, is_sv_file, norm
-from .views import class_graph, config_db_report, topology
+from .views import class_graph, config_db_report, effective_type, topology
 from .workspace import Workspace, _same_text
 
 log = logging.getLogger("uvmls")
@@ -535,6 +535,8 @@ def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
     commands = opts.get("clientCommands") if isinstance(opts, dict) else None
     ls.client_commands = frozenset(c for c in commands if isinstance(c, str)) \
         if isinstance(commands, list) else frozenset()
+    if get_capability(params.capabilities, "text_document.inlay_hint") is not None:
+        ls.feature(T.TEXT_DOCUMENT_INLAY_HINT, T.InlayHintOptions(resolve_provider=False))(inlay_hint)
 
 
 @server.feature(T.INITIALIZED)
@@ -636,22 +638,21 @@ async def did_change_watched(ls: UvmLanguageServer, params: T.DidChangeWatchedFi
 # -- navigation ----------------------------------------------------------------
 
 
-def _config_lines(ls: UvmLanguageServer, path: str) -> list[str]:
-    report = config_db_report(ls.ws)
-    if path not in report.lines:
-        report.lines[path] = fixes.EOL_RE.split(ls.ws.texts.get(path, ""))
-    return report.lines[path]
+def _indexed_lines(ls: UvmLanguageServer, path: str) -> list[str]:
+    if path not in ls.ws.lines:
+        ls.ws.lines[path] = fixes.EOL_RE.split(ls.ws.texts.get(path, ""))
+    return ls.ws.lines[path]
 
 
-def _config_column(ls: UvmLanguageServer, path: str, pos: T.Position) -> int:
-    lines = _config_lines(ls, path)
+def _indexed_column(ls: UvmLanguageServer, path: str, pos: T.Position) -> int:
+    lines = _indexed_lines(ls, path)
     decoded = ls.workspace.position_codec.position_from_client_units(lines, pos)
     return len(lines[pos.line][:decoded.character].encode("utf-8")) if pos.line < len(lines) else 0
 
 
-def _config_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
+def _indexed_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
     # slang columns are UTF-8 bytes; editor positions use the negotiated encoding.
-    lines = _config_lines(ls, rng.path)
+    lines = _indexed_lines(ls, rng.path)
 
     def position(line, col):
         prefix = lines[line].encode("utf-8")[:col].decode("utf-8", errors="replace") if line < len(lines) else ""
@@ -664,9 +665,9 @@ def _config_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
 def definition(ls: UvmLanguageServer, params: T.DefinitionParams):
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
-        config = ls.nav.config_db_definition(path, params.position.line, _config_column(ls, path, params.position))
+        config = ls.nav.config_db_definition(path, params.position.line, _indexed_column(ls, path, params.position))
         if config:
-            return [T.Location(path_to_uri(r.path), _config_range(ls, r)) for r in config]
+            return [T.Location(path_to_uri(r.path), _indexed_range(ls, r)) for r in config]
         ranges = ls.nav.definition(path, params.position.line, params.position.character,
                                    _text(ls, params.text_document.uri))
     return [location(r) for r in ranges] or None
@@ -685,14 +686,14 @@ def type_definition(ls: UvmLanguageServer, params: T.TypeDefinitionParams):
 def hover(ls: UvmLanguageServer, params: T.HoverParams):
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
-        config = ls.nav.config_db_hover(path, params.position.line, _config_column(ls, path, params.position))
+        config = ls.nav.config_db_hover(path, params.position.line, _indexed_column(ls, path, params.position))
         if config:
             md, field, rng = config
             formats = get_capability(ls.client_capabilities, "text_document.hover.content_format", [])
             if "uvm.showConfigDb" in ls.client_commands and T.MarkupKind.Markdown in (formats or []):
                 args = quote(json.dumps([{"field": field}]), safe="")
                 md += f"\n\n[show in the config_db cross-reference](command:uvm.showConfigDb?{args})"
-            return T.Hover(contents=T.MarkupContent(kind=T.MarkupKind.Markdown, value=md), range=_config_range(ls, rng))
+            return T.Hover(contents=T.MarkupContent(kind=T.MarkupKind.Markdown, value=md), range=_indexed_range(ls, rng))
         md = ls.nav.hover(path, params.position.line, params.position.character,
                           _text(ls, params.text_document.uri))
     if not md:
@@ -839,12 +840,12 @@ def config_db_lenses(ls: UvmLanguageServer, path: str) -> list[T.CodeLens]:
                     target = row["sets"][0]
                     title += f"set in {os.path.basename(target['file'])}:{target['line'] + 1}"
                     if "uvm.revealLocation" in ls.client_commands:
-                        rng = _config_range(ls, _entry_range(target))
+                        rng = _indexed_range(ls, _entry_range(target))
                         command, arguments = "uvm.revealLocation", [{
                             **_entry_range(target).to_json(), "col": rng.start.character, "endCol": rng.end.character}]
                 else:
                     title += f"{count} sets" if count else "no set"
-        lenses.append(T.CodeLens(range=_config_range(ls, _entry_range(entry)), command=T.Command(
+        lenses.append(T.CodeLens(range=_indexed_range(ls, _entry_range(entry)), command=T.Command(
             title=title, command=command, arguments=arguments)))
     return lenses
 
@@ -872,6 +873,39 @@ def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
                     title="$(list-tree) show topology", command="uvm.showTopology",
                     arguments=[{"test": sym.name}])))
     return lenses
+
+
+def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
+    if ls.settings.get("inlayHints", True) is False:
+        return []
+    path = uri_to_path(params.text_document.uri)
+    hints = []
+    with ls.ws.lock:
+        creates = ls.ws.creates_by_file.get(path, ())
+        if not creates:
+            return []
+        result = None
+        start, end = params.range.start, params.range.end
+        for cr in creates:
+            pos = _indexed_range(ls, cr.range).end
+            if not (start.line, start.character) <= (pos.line, pos.character) < (end.line, end.character):
+                continue
+            if result is None:
+                result = effective_type(ls.ws, ls.settings.get("inlayHints.test"))
+            for entry in result.get(cr.range, ()):
+                ov = entry.override
+                if ov is None:
+                    continue
+                label = f" → {entry.effective}"
+                count = result.counts[cr.range]
+                if entry.instances < count:
+                    label += f" ({entry.instances} of {count} instances)"
+                tooltip = f"overridden in {ov.owner}::{ov.method} ({os.path.basename(ov.range.path)}:{ov.range.line + 1})"
+                hints.append(T.InlayHint(position=pos, kind=T.InlayHintKind.Type, padding_left=True,
+                    label=[T.InlayHintLabelPart(value=label, location=T.Location(
+                        path_to_uri(ov.range.path), _indexed_range(ls, ov.range)))],
+                    tooltip=T.MarkupContent(kind=T.MarkupKind.Markdown, value=tooltip)))
+    return sorted(hints, key=lambda h: (h.position.line, h.position.character))
 
 
 # -- code actions ------------------------------------------------------------------

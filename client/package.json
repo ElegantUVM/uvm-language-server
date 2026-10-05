@@ -210,6 +210,16 @@
           "default": true,
           "description": "Show config_db set/get cross-references above calls."
         },
+        "uvm.inlayHints": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show UVM type inlay hints. VS Code's `#editor.inlayHints.enabled#` also controls their display."
+        },
+        "uvm.inlayHints.test": {
+          "type": "string",
+          "default": "",
+          "description": "Test whose factory overrides appear in inlay hints. Empty: use the topology's default test."
+        },
         "uvm.elaboration": {
           "type": "string",
           "enum": [

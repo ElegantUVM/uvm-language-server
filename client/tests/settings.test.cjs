@@ -99,3 +99,12 @@ test("hover command links trust only the config_db view command", () => {
   const extension = fs.readFileSync(path.join(__dirname, "../src/extension.ts"), "utf8");
   assert.match(extension, /markdown: \{ isTrusted: \{ enabledCommands: \["uvm.showConfigDb"\] \} \}/);
 });
+
+test("inlay hint settings are forwarded with the topology's default test", () => {
+  const { contributes } = require("../package.json");
+  assert.equal(contributes.configuration.properties["uvm.inlayHints"].default, true);
+  assert.equal(contributes.configuration.properties["uvm.inlayHints.test"].default, "");
+  const extension = fs.readFileSync(path.join(__dirname, "../src/extension.ts"), "utf8");
+  assert.match(extension, /inlayHints: cfg.get\("inlayHints"\)/);
+  assert.match(extension, /"inlayHints.test": cfg.get\("inlayHints.test"\)/);
+});

@@ -622,16 +622,21 @@ def test_large_project_code_action_budgets(tmp_path):
     from tools.gen_big import generate
     from uvmls.documents import Workspace as LspWorkspace
     from uvmls.lints import lint
-    from uvmls.server import UvmLanguageServer, code_action, code_lens, lsp_diagnostic
+    from uvmls.server import UvmLanguageServer, code_action, code_lens, inlay_hint, lsp_diagnostic
 
     async def run():
         filelist = generate(tmp_path, classes=2400)
+        bench = tmp_path / 'bench.sv'
+        bench.write_text(bench.read_text().replace('extends uvm_env', 'extends uvm_test').replace(
+            'super.build_phase(phase);', 'super.build_phase(phase);\n'
+            '    set_type_override_by_type(node_0000::get_type(), node_0001::get_type());'))
         ls = UvmLanguageServer()
         ls.workspace_roots = [str(tmp_path)]
         ls.settings = {'filelists': [str(filelist)], 'useBundledUvm': False, 'elaboration': 'off'}
         ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
         ls.protocol.client_capabilities = T.ClientCapabilities(
-            text_document=T.TextDocumentClientCapabilities(code_lens=T.CodeLensClientCapabilities()))
+            text_document=T.TextDocumentClientCapabilities(code_lens=T.CodeLensClientCapabilities(),
+                                                            inlay_hint=T.InlayHintClientCapabilities()))
         ls.client_commands = frozenset({'uvm.addIncludeDir'})
         ls.ws.configure(ls.config())
         assert len(ls.ws.classes) == 2400
@@ -683,5 +688,17 @@ def test_large_project_code_action_budgets(tmp_path):
             assert sum(l.command.title.startswith('$(database)') for l in lenses) == 20
         p95 = sorted(samples)[18]
         print(f'config lenses: p95 {p95:.2f} ms (target 50 ms)')
+        assert p95 < 50
+        params = T.InlayHintParams(T.TextDocumentIdentifier(path.as_uri()),
+                                  T.Range(T.Position(0, 0), T.Position(10000, 0)))
+        inlay_hint(ls, params)
+        samples = []
+        for _ in range(20):
+            start = time.perf_counter()
+            hints = inlay_hint(ls, params)
+            samples.append((time.perf_counter() - start) * 1000)
+            assert len(hints) == 1
+        p95 = sorted(samples)[18]
+        print(f'inlay hints: p95 {p95:.2f} ms (target 50 ms)')
         assert p95 < 50
     asyncio.run(run())

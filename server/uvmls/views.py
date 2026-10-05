@@ -6,9 +6,10 @@ import ast
 import fnmatch
 import re
 from collections import deque
+from dataclasses import dataclass
 
 from . import naturaldocs
-from .model import ClassInfo, ConfigDbCall, DesignUnit, Param, Typedef, Variable
+from .model import ClassInfo, ConfigDbCall, DesignUnit, OverrideCall, Param, Range, Typedef, Variable
 from .uvm import BUILTIN_CLASSES, COMPONENT_ROLES, ROLE_ORDER, builtin_params, is_tlm_port
 from .workspace import BUILTIN_TYPES, Spec, Workspace, bind_params, parse_type_text, split_args
 
@@ -253,33 +254,71 @@ def list_tests(ws: Workspace) -> dict:
     return {"tests": [t.name for t in tests], "default": default, "runTest": run_tests}
 
 
+@dataclass
+class EffectiveType:
+    original: str
+    effective: str
+    override: OverrideCall | None
+    instances: int = 1
+
+
+class EffectiveTypes(dict):
+    """Create locations mapped to their effective types across the selected test's instances."""
+
+    def __init__(self, info):
+        super().__init__()
+        self.topology = {**info, "test": None, "root": None, "connections": [], "overrides": []}
+        self.counts: dict[Range, int] = {}
+
+    def add(self, created, original, effective, override):
+        rng = created.range
+        self.counts[rng] = self.counts.get(rng, 0) + 1
+        entries = self.setdefault(rng, [])
+        for entry in entries:
+            if (entry.original, entry.effective, entry.override) == (original, effective, override):
+                entry.instances += 1
+                return
+        entries.append(EffectiveType(original, effective, override))
+
+
 def topology(ws: Workspace, test: str | None = None) -> dict:
+    return effective_type(ws, test).topology
+
+
+def effective_type(ws: Workspace, test: str | None = None) -> EffectiveTypes:
+    key = test or ""
+    if key in ws._effective_type_cache:
+        return ws._effective_type_cache[key]
     info = list_tests(ws)
+    result = EffectiveTypes(info)
+    ws._effective_type_cache[key] = result
     name = test or info["default"]
     root_cls = ws.find_class(name) if name else None
     if root_cls is None:
-        return {**info, "test": None, "root": None, "connections": [], "overrides": []}
+        return result
 
     calls = ws.calls_in_chain(root_cls)
-    type_ovr: dict[str, str] = {}
-    inst_ovr: list[tuple[str, str, str]] = []
+    type_ovr: dict[str, OverrideCall] = {}
+    inst_ovr: list[OverrideCall] = []
     for ov in calls.overrides:
         if ov.kind == "type":
-            type_ovr[ov.original] = ov.override
+            type_ovr[ov.original] = ov
         elif ov.inst_path:
-            inst_ovr.append((ov.inst_path, ov.original, ov.override))
+            inst_ovr.append(ov)
 
-    def apply_overrides(type_name: str, path: str) -> tuple[str, str | None]:
+    def apply_overrides(type_name: str, path: str) -> tuple[str, OverrideCall | None]:
         original = type_name
-        for pattern, orig, new in inst_ovr:
-            pats = [pattern, f"uvm_test_top.{pattern}"]
-            if orig == type_name and any(fnmatch.fnmatchcase(path, p) for p in pats):
-                return new, original
+        for ov in inst_ovr:
+            pats = [ov.inst_path, f"uvm_test_top.{ov.inst_path}"]
+            if ov.original == type_name and any(fnmatch.fnmatchcase(path, p) for p in pats):
+                return ov.override, ov if ov.override != original else None
         seen = set()
+        override = None
         while type_name in type_ovr and type_name not in seen:
             seen.add(type_name)
-            type_name = type_ovr[type_name]
-        return type_name, (original if type_name != original else None)
+            override = type_ovr[type_name]
+            type_name = override.override
+        return type_name, override if type_name != original else None
 
     connections: list[dict] = []
     counter = [0]
@@ -325,20 +364,26 @@ def topology(ws: Workspace, test: str | None = None) -> dict:
             if cspec is None:
                 continue
             role = ws.role(cspec.cls) if cspec.cls else ws.role_of_name(cspec.name)
-            if role not in COMPONENT_ROLES:
+            if role not in COMPONENT_ROLES and cr.kind != "factory":
                 continue
             if cr.kind == "new" and (cr.parent_expr or "") != "this":
                 continue
             key = cr.target or cr.inst_name or cr.name_expr or str(len(by_target))
-            by_target[key] = (cr, cspec)
-        for key, (cr, cspec) in by_target.items():
+            by_target[key] = (cr, cspec, role in COMPONENT_ROLES)
+        for key, (cr, cspec, component) in by_target.items():
             child_inst = cr.inst_name or cr.name_expr or cr.target or "?"
             child_path = f"{path}.{child_inst}"
             tname = cspec.cls.name if cspec.cls else cspec.name
-            new_name, orig = apply_overrides(tname, child_path)
-            if orig is not None:
+            new_name, override = apply_overrides(tname, child_path) if cr.kind == "factory" else (tname, None)
+            orig = tname if override else None
+            if override is not None:
                 ospec = ws.resolve_spec(new_name, ctx=cls) or Spec(new_name)
                 cspec = ospec
+            if cr.kind == "factory":
+                effective = cspec.via_typedef.name if cspec.via_typedef else cspec.name
+                result.add(cr, tname, effective, override)
+            if not component:
+                continue
             child = build(cspec, child_inst, child_path, depth + 1, cr, orig, stack)
             child["target"] = cr.target_base
             node["children"].append(child)
@@ -381,8 +426,9 @@ def topology(ws: Workspace, test: str | None = None) -> dict:
     overrides = [{"kind": ov.kind, "original": ov.original, "override": ov.override,
                   "instPath": ov.inst_path, "owner": ov.owner, **_loc(ov.range)}
                  for ov in calls.overrides]
-    return {**info, "test": root_cls.name, "root": root, "connections": connections,
-            "overrides": overrides}
+    result.topology = {**info, "test": root_cls.name, "root": root, "connections": connections,
+                       "overrides": overrides}
+    return result
 
 
 # ----------------------------------------------------------------------------
@@ -618,7 +664,6 @@ class ConfigDbReport(dict):
         self.by_field = {row["field"]: row for row in fields}
         self.dynamic_ids = {id(e) for e in dynamic}
         self.calls = calls
-        self.lines: dict[str, list[str]] = {}
         self.by_file: dict[str, list[dict]] = {}
         for entry in dynamic + [e for row in fields for e in row["sets"] + row["gets"]]:
             self.by_file.setdefault(entry["file"], []).append(entry)
