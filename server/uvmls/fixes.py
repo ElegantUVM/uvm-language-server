@@ -700,13 +700,13 @@ def _config_db_type_mismatch(ctx: Context, d) -> list[Fix]:
     declared = " ".join(target.obj.type_text.split())
     getter = ctx.ws.class_by_qual.get(g["owner"])
     meth = body_of(ctx.ws, getter, g["method"]) if getter else None
-    local_names = set(meth.local_types + [v.name for v in meth.args + meth.locals]) if meth else set()
     candidates = [e["type"] for e in row["sets"]] + ([declared] if same else [])
     # The value's own declaration supplies a spelling only in the class that declares it.
     # A method-local declaration may shadow it; a.b may use a typedef private to a's class.
     written = next((t for t in candidates if scope_independent_type(ctx.ws, t) or
                     (same and owner is not None and owner is getter and t == declared and
-                     not local_names.intersection(IDENT_RE.findall(t)))), None)
+                     meth is not None and meth.scope_identifiers is not None and
+                     not meth.scope_identifiers.intersection(IDENT_RE.findall(t)))), None)
     if written is None:
         return fixes
     if not same and not (INTEGRAL_RE.match(written) and INTEGRAL_RE.match(g["type"])):

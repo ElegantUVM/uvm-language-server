@@ -78,8 +78,7 @@ def test_config_type_does_not_copy_a_setter_local_dimension(tmp_path):
     assert len(ds) == 2 and all(offered(w, d) == [] for d in ds)
 
 
-@pytest.mark.parametrize("shadow", ["none", "unrelated", "method", "block", "extern", "macro"])
-def test_config_type_does_not_copy_a_shadowed_member_alias(tmp_path, shadow):
+def shadowed_member_alias(shadow):
     text = '''`include "uvm_macros.svh"
 import uvm_pkg::*;
 class setter extends uvm_env;
@@ -105,8 +104,25 @@ endclass
     elif shadow == "macro":
         text = "`define LOCAL_TYPE typedef uvm_object flag_t;\n" + text
         decl = "`LOCAL_TYPE"
+    elif shadow in ("localparam-type", "block-parameter", "macro-parameter"):
+        decl = "localparam type flag_t = uvm_object;"
+        if shadow == "macro-parameter":
+            text = "`define LOCAL_TYPE " + decl + "\n" + text
+            decl = "`LOCAL_TYPE"
+    elif shadow == "parameter-type":
+        decl = "parameter type flag_t = uvm_object;"
+    elif shadow == "localparam-value":
+        decl = "localparam flag_t = 1;"
+    elif shadow == "enum-value":
+        decl = "typedef enum {flag_t} other_t;"
+    elif shadow == "enum-range":
+        text = text.replace("flag_t", "flag_t0")
+        decl = "typedef enum {flag_t[1]} other_t;"
+    elif shadow == "import":
+        text = "package p; import uvm_pkg::*; typedef uvm_object flag_t; endpackage\n" + text
+        decl = "import p::flag_t;"
     body = decl + "\n    " + call
-    if shadow == "block":
+    if shadow in ("block", "block-parameter"):
         body = "begin\n    " + body + "\n    end"
     method = "function void build_phase(uvm_phase phase);\n    " + body + "\n  endfunction"
     if shadow == "extern":
@@ -114,7 +130,16 @@ endclass
         text += method.replace("build_phase(", "getter::build_phase(") + "\n"
     else:
         text = text.replace("METHOD", method)
-    w = index(tmp_path, {"t.sv": text}, bundled=True)
+    return text
+
+
+@pytest.mark.parametrize("shadow", [
+    "none", "unrelated", "method", "block", "extern", "macro", "localparam-type",
+    "parameter-type", "localparam-value", "enum-value", "enum-range", "import", "block-parameter",
+    "macro-parameter",
+])
+def test_config_type_does_not_copy_a_shadowed_member_alias(tmp_path, shadow):
+    w = index(tmp_path, {"t.sv": shadowed_member_alias(shadow)}, bundled=True)
     assert user_errors(w) == []
     [d] = findings(w, "config-db-type-mismatch")
     if shadow in ("none", "unrelated"):
@@ -125,3 +150,33 @@ endclass
         assert offered(w, d) == []
         [show] = offered(w, d, commands=frozenset({"uvm.showConfigDb"}))
         assert show.command and not show.changes and not show.preferred
+
+
+def test_config_type_uses_a_builtin_despite_unknown_method_scope(tmp_path):
+    text = shadowed_member_alias("import").replace("flag_t flag;", "int flag;")
+    w = index(tmp_path, {"t.sv": text}, bundled=True)
+    assert user_errors(w) == []
+    fix = fix_once(w, "config-db-type-mismatch")
+    assert fix.preferred and fix.changes[0].text == "int"
+    assert not findings(w, "config-db-type-mismatch") and user_errors(w) == []
+
+
+@pytest.mark.parametrize("shadow", ["localparam-type", "enum-value", "import"])
+def test_config_type_shadow_has_no_preferred_lsp_fix(tmp_path, shadow):
+    from test_code_actions import IGNORE, start
+
+    path = tmp_path / "t.sv"
+    path.write_text(shadowed_member_alias(shadow))
+    (tmp_path / "alu_tb.f").write_text("t.sv\n")
+    uri = path.as_uri()
+    c = start(tmp_path, clientCommands=["uvm.showConfigDb"])
+    try:
+        msg = c.wait_for("textDocument/publishDiagnostics", lambda m: m["params"]["uri"] == uri)
+        [d] = [d for d in msg["params"]["diagnostics"] if d["code"] == "config-db-type-mismatch"]
+        actions = c.request("textDocument/codeAction", {
+            "textDocument": {"uri": uri}, "range": d["range"], "context": {"diagnostics": [d]}})
+        assert [a["title"] for a in actions] == [
+            "Show 'flag' in the config_db cross-reference", IGNORE.format(d["code"])]
+        assert all(not a.get("isPreferred") for a in actions)
+    finally:
+        c.close()
