@@ -90,6 +90,54 @@ def test_factory_object_override(client, tb):
     assert [label(h) for h in found] == [" → alu_add_only_seq"]
 
 
+@pytest.mark.parametrize("before", [True, False])
+def test_object_creates_do_not_replace_components(tb, tmp_path, before):
+    root = tmp_path / "alu_tb"
+    shutil.copytree(tb, root)
+    test = root / "tests/alu_tests.svh"
+    test.write_text(test.read_text().replace("    alu_random_seq::type_id::set_type_override",
+        "    alu_seq_item::type_id::set_type_override(hint_item::get_type());\n"
+        "    alu_random_seq::type_id::set_type_override"))
+    path = root / "agent/alu_agent.svh"
+    methods = '''
+  function void first_sequence();
+    alu_seq_item m_driver;
+    m_driver = alu_seq_item::type_id::create("seq");
+  endfunction
+  function void second_sequence();
+    alu_seq_item m_driver;
+    m_driver = alu_seq_item::type_id::create("seq");
+  endfunction
+'''
+    text = path.read_text()
+    text = text.replace("  function new", methods + "  function new") if before else text.replace(
+        "endclass", methods + "endclass")
+    text = '''class hint_item extends alu_seq_item;
+  `uvm_object_utils(hint_item)
+  function new(string name = "hint_item"); super.new(name); endfunction
+endclass
+''' + text
+    path.write_text(text)
+    c = start(root, capabilities=CAPABILITIES)
+    try:
+        tree = c.request("uvm/topology", {})["root"]
+        for agent in tree["children"][0]["children"]:
+            if agent["type"] != "alu_agent":
+                continue
+            assert {child["name"] for child in agent["children"]} == {"m_driver", "m_monitor", "m_sequencer"}
+            [driver] = [child for child in agent["children"] if child["name"] == "m_driver"]
+            assert driver["type"] == "alu_error_driver" and driver["overriddenFrom"] == "alu_driver"
+        found = hints(c, path)
+        expected = [" → hint_item"] * 2
+        expected.insert(2 if before else 0, " → alu_error_driver")
+        assert [label(h) for h in found] == expected
+        lines = text.splitlines()
+        assert [h["position"]["line"] for h in found] == [
+            i for i, line in enumerate(lines) if "m_driver = alu_seq_item" in line or "m_driver    =" in line]
+    finally:
+        c.close()
+
+
 def test_factory_range_and_no_creates(client, tb):
     path = tb / "agent/alu_agent.svh"
     [hint] = hints(client, path)

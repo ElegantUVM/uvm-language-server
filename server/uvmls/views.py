@@ -353,6 +353,7 @@ def effective_type(ws: Workspace, test: str | None = None) -> EffectiveTypes:
                 if v.type is not None and is_tlm_port(v.type.name):
                     node["ports"].append({"name": v.name, "type": v.type_text, **_loc(v.range)})
         by_target: dict[str, tuple] = {}
+        objects = []
         for cr in chain_calls.creates:
             cspec = None
             if cr.type is not None:
@@ -368,9 +369,13 @@ def effective_type(ws: Workspace, test: str | None = None) -> EffectiveTypes:
                 continue
             if cr.kind == "new" and (cr.parent_expr or "") != "this":
                 continue
-            key = cr.target or cr.inst_name or cr.name_expr or str(len(by_target))
-            by_target[key] = (cr, cspec, role in COMPONENT_ROLES)
-        for key, (cr, cspec, component) in by_target.items():
+            if role in COMPONENT_ROLES:
+                key = cr.target or cr.inst_name or cr.name_expr or str(len(by_target))
+                by_target[key] = (cr, cspec, True)
+            else:
+                # Local object handles can share names with component properties or each other.
+                objects.append((cr, cspec, False))
+        for cr, cspec, component in [*by_target.values(), *objects]:
             child_inst = cr.inst_name or cr.name_expr or cr.target or "?"
             child_path = f"{path}.{child_inst}"
             tname = cspec.cls.name if cspec.cls else cspec.name
