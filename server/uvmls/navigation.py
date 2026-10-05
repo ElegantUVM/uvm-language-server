@@ -313,6 +313,19 @@ class Navigator:
                     out.append(r)
         return out
 
+    def config_db_definition(self, path, line, col) -> list[Range]:
+        hit = self.config_db_at(path, line, col)
+        if hit is None:
+            return []
+        row, entry, _ = hit
+        report = config_db_report(self.ws)
+        ranges = set()
+        for other in row["gets" if entry["op"] == "set" else "sets"]:
+            rng = report.calls[other["file"], other["line"], other["col"]].field_range
+            if rng is not None:
+                ranges.add(rng)
+        return sorted(ranges, key=lambda r: (r.path, r.line, r.col))
+
     def type_definition(self, path, line, col, text) -> list[Range]:
         out = []
         for t in self.resolve(path, line, col, text):

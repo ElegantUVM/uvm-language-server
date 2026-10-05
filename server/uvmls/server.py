@@ -664,6 +664,9 @@ def _config_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
 def definition(ls: UvmLanguageServer, params: T.DefinitionParams):
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
+        config = ls.nav.config_db_definition(path, params.position.line, _config_column(ls, path, params.position))
+        if config:
+            return [T.Location(path_to_uri(r.path), _config_range(ls, r)) for r in config]
         ranges = ls.nav.definition(path, params.position.line, params.position.character,
                                    _text(ls, params.text_document.uri))
     return [location(r) for r in ranges] or None

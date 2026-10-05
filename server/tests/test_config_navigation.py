@@ -201,7 +201,7 @@ endclass'''))
         c.close()
 
 
-def test_config_hover_literal_ranges_with_unicode_and_crlf(tmp_path):
+def test_config_literal_ranges_with_unicode_and_crlf(tmp_path):
     root = tmp_path / "café"
     shutil.copytree(EXAMPLE, root)
     path = root / "env/alu_env.svh"
@@ -223,5 +223,72 @@ endclass''')
                                    "end": at(path, '"café😀"', len('"café😀"'), occurrence=1)["position"]}
         assert "**config_db" not in hover(c, path, '"café😀"', 1)
         assert "**config_db 'café😀'**" in hover(c, path, '"café😀"', 2, occurrence=2)
+        assert definitions(c, path, '"café😀"', occurrence=2) == [literal_location(path, "café😀", 1)]
+    finally:
+        c.close()
+
+
+def literal_location(path, field, occurrence=0):
+    needle = '"' + field + '"'
+    return {"uri": path.as_uri(),
+            "range": {"start": at(path, needle, occurrence=occurrence)["position"],
+                      "end": at(path, needle, len(needle), occurrence)["position"]}}
+
+
+def definitions(client, path, needle, within=1, occurrence=0):
+    return client.request("textDocument/definition", at(path, needle, within, occurrence))
+
+
+def test_config_definition_from_get_to_set_and_back(client, tb):
+    env = tb / "env/alu_env.svh"
+    assert definitions(client, tb / "agent/alu_driver.svh", '"alu_agent_config"') == [
+        literal_location(env, "alu_agent_config")]
+    expected = [literal_location(tb / "agent" / name, "alu_agent_config")
+                for name in ("alu_agent.svh", "alu_driver.svh", "alu_monitor.svh")]
+    assert sorted(definitions(client, env, '"alu_agent_config"'), key=lambda loc: loc["uri"]) == expected
+
+
+@pytest.mark.parametrize("field,get_occurrence", [("several", 2), ("same_line", 1), ("resource", 1)])
+def test_config_definition_all_candidates_and_same_line_calls(client, tb, field, get_occurrence):
+    path = tb / "env/alu_env.svh"
+    assert definitions(client, path, '"' + field + '"', occurrence=get_occurrence) == [
+        literal_location(path, field, i) for i in range(get_occurrence)]
+    assert definitions(client, path, '"' + field + '"') == [literal_location(path, field, get_occurrence)]
+
+
+def test_config_definition_exists_and_wait_modified(client, tb):
+    path = tb / "env/alu_env.svh"
+    for occurrence in (1, 2):
+        assert definitions(client, path, '"unread"', occurrence=occurrence) == [literal_location(path, "unread")]
+    assert definitions(client, path, '"unread"') == [literal_location(path, "unread", i) for i in (1, 2)]
+
+
+def test_config_definition_falls_back_without_counterparts_or_off_literal(client, tb):
+    path = tb / "agent/alu_monitor.svh"
+    [found] = definitions(client, path, '"checks_enable"')
+    assert found["uri"] == path.as_uri() and found["range"]["start"]["line"] == 7
+    [found] = definitions(client, path, "#(alu_agent_config)", 4)
+    assert found["uri"] == (tb / "agent/alu_agent_config.svh").as_uri()
+    [found] = definitions(client, path, "::get", 3)
+    assert found["uri"].endswith("uvm_config_db.svh")
+    assert definitions(client, tb / "env/alu_env.svh", '"orphan"') is None
+
+
+def test_config_navigation_follows_unsaved_set_location(tb):
+    c = start(tb, capabilities=CAPABILITIES, clientCommands=COMMANDS)
+    path = tb / "env/alu_env.svh"
+    try:
+        c.forget("uvm/indexChanged")
+        c.notify("textDocument/didOpen", {"textDocument": {
+            "uri": path.as_uri(), "languageId": "systemverilog", "version": 1,
+            "text": "// moved\n" + path.read_text()}})
+        c.wait_for("uvm/indexChanged")
+        expected = literal_location(path, "alu_agent_config")
+        for pos in expected["range"].values():
+            pos["line"] += 1
+        driver = tb / "agent/alu_driver.svh"
+        assert definitions(c, driver, '"alu_agent_config"') == [expected]
+        assert "set in alu_env.svh:17" in hover(c, driver, '"alu_agent_config"', 1)
+        assert "set in alu_env.svh:17" in config_lenses(c, driver)[0]["command"]["title"]
     finally:
         c.close()
