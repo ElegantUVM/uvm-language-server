@@ -680,6 +680,17 @@ def _typo(ctx: Context, d) -> list[Fix]:
     span = ft and ft.span(d.range)
     if not wrong or not right or span is None or ft.text[span[0]:span[1]] != wrong:
         return []  # the text changed, or the name comes from a macro
+    # Missing build inputs can make valid names look misspelt, even in another source file.
+    if any(x.code in ("CouldNotOpenIncludeFile", "UnknownDirective") for x in ctx.ws.user_diagnostics()):
+        return []
+    if d.code == "TypoKeyword" and any(
+            r.path == ft.path and (r.line, r.col) != (d.range.line, d.range.col)
+            for idx in ctx.ws.indices.values() if ft.path in idx.files
+            for r in idx.identifiers.get(wrong, ())):
+        return []
+    if any(c.decl_range.path == ft.path and c.decl_range.contains(d.range.line, d.range.col)
+           for c in ctx.ws.classes_by_name.get(right, ())):
+        return []
     return [Fix(f"Change '{wrong}' to '{right}'", [TextChange(ft.path, span[0], span[1], right)], preferred=True)]
 
 

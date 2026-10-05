@@ -996,6 +996,32 @@ def test_typo_keyword(tmp_path):
     assert (tmp_path / "m.sv").read_text() == text and not slang_findings(w, "TypoKeyword")
 
 
+@pytest.mark.parametrize("prefix", ['', '`include "missing.svh"\n', '`UNKNOWN\n'])
+def test_typo_keyword_does_not_replace_a_used_identifier(tmp_path, prefix):
+    w = index(tmp_path, {"m.sv": prefix + "module m;\n  int len;\n  len = 1;\nendmodule\n"})
+    [d] = slang_findings(w, "TypoKeyword")
+    assert d.data == {"from": "len", "to": "let"}
+    assert offered(w, d) == []
+
+
+@pytest.mark.parametrize("prefix", ['`include "missing.svh"\n', '`UNKNOWN\n'])
+def test_typo_with_incomplete_sources_is_withheld(tmp_path, prefix):
+    # A missing dependency elsewhere in the compilation can invalidate a suggestion here.
+    w = index(tmp_path, {"m.sv": 'module m;\n  logic a;\n  alwasy @(a) a = 0;\nendmodule\n',
+                         "p.sv": prefix + "package p; endpackage\n"})
+    [d] = slang_findings(w, "TypoKeyword")
+    assert offered(w, d) == []
+
+
+@pytest.mark.parametrize("prefix", ['', '`include "missing.svh"\n'])
+def test_typo_does_not_retype_a_member_as_its_enclosing_class(tmp_path, prefix):
+    text = prefix + "class register_block;\n  register_block_cg cg;\nendclass\n"
+    w = index(tmp_path, {"m.sv": text})
+    [d] = elab_findings(w, "TypoIdentifier")
+    assert d.data == {"from": "register_block_cg", "to": "register_block"}
+    assert offered(w, d) == []
+
+
 def test_typo_not_offered_for_other_text(tmp_path):
     # The editor's text no longer has the name there.
     text = "module m;\n  logic a;\n  alwasy @(a) a = 0;\nendmodule\n"
