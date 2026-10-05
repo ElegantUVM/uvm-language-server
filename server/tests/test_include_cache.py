@@ -111,3 +111,64 @@ def test_unwatched_header_move_over_stdio(tmp_path):
         doc.diagnostics(lambda ds: not ds)
     finally:
         c.close()
+
+
+@pytest.mark.parametrize('suffix', ['h', 'inc'])
+@pytest.mark.parametrize('existing', [False, True])
+@pytest.mark.parametrize('empty_dir', [False, True])
+def test_include_cache_finds_new_unwatched_headers(tmp_path, suffix, existing, empty_dir):
+    name = f'defs.{suffix}'
+    text = f'`include "{name}"\n'
+    files = {'t.sv': text}
+    if existing:
+        files[f'a/{name}'] = '// original\n'
+    ws = index(tmp_path, files)
+    other = tmp_path / 'b' / name
+    if empty_dir:
+        other.parent.mkdir()
+
+    def candidates():
+        [d] = slang_findings(ws, 'CouldNotOpenIncludeFile')
+        return [(f.command[1][0]['value'], f.preferred)
+                for f in offered(ws, d, commands=frozenset({'uvm.addIncludeDir'}))]
+
+    with patch.object(fixes, 'discover_files', wraps=fixes.discover_files) as walk:
+        assert candidates() == ([('a', True)] if existing else [])
+        other.parent.mkdir(exist_ok=True)
+        other.write_text('// new\n')
+        ws.update_document(str(tmp_path / 't.sv'), '// edited\n' + text)
+        expected = [('a', False), ('b', False)] if existing else [('b', True)]
+        assert candidates() == expected
+        assert walk.call_count == 2
+        assert candidates() == expected
+        assert walk.call_count == 2
+
+
+@pytest.mark.parametrize('existing', [False, True])
+def test_new_unwatched_header_over_stdio(tmp_path, existing):
+    from test_code_actions import Doc, start
+
+    text = '`include "defs.h"\n'
+    path = tmp_path / 't.sv'
+    path.write_text(text)
+    (tmp_path / 'alu_tb.f').write_text('t.sv\n')
+    if existing:
+        (tmp_path / 'a').mkdir()
+        (tmp_path / 'a' / 'defs.h').write_text('// original\n')
+    (tmp_path / 'b').mkdir()
+    c = start(str(tmp_path), clientCommands=['uvm.addIncludeDir'], settings={
+        'filelists': [str(tmp_path / 'alu_tb.f')], 'elaboration': 'off', 'useBundledUvm': False})
+    try:
+        doc = Doc(c, str(path))
+        doc.change('// initial\n' + text)
+        [d] = doc.diagnostics(lambda ds: ds and ds[0]['range']['start']['line'] == 1)
+        before = doc.actions([d])
+        assert [a['command']['arguments'][0]['value'] for a in before] == (['a'] if existing else [])
+        (tmp_path / 'b' / 'defs.h').write_text('// new\n')
+        doc.change('// edited\n// again\n' + text)
+        [d] = doc.diagnostics(lambda ds: ds and ds[0]['range']['start']['line'] == 2)
+        actions = doc.actions([d])
+        assert [a['command']['arguments'][0]['value'] for a in actions] == (['a', 'b'] if existing else ['b'])
+        assert all(bool(a.get('isPreferred')) == (not existing) for a in actions)
+    finally:
+        c.close()

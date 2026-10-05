@@ -133,7 +133,8 @@ class Workspace:
         self.overrides: dict[str, str] = {}
         self.version = 0
         self.last_index_seconds = 0.0
-        self._include_candidates: tuple[tuple, dict[str, list[str]]] | None = None
+        self._include_candidates: tuple[tuple, dict[str, list[str]],
+                                         dict[str, tuple[int, int, int] | None]] | None = None
         self._clear_maps()
 
     # -- building ------------------------------------------------------------

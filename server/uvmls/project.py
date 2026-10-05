@@ -197,16 +197,33 @@ def _exclusion(patterns: list[str]):
     return excluded
 
 
-def discover_files(roots: list[str], exclude: list[str], match=is_sv_file) -> list[str]:
+def directory_stamp(path: str) -> tuple[int, int, int] | None:
+    try:
+        st = os.stat(path)
+        return st.st_ino, st.st_mtime_ns, st.st_ctime_ns
+    except OSError:
+        return None
+
+
+def discover_files(roots: list[str], exclude: list[str], match=is_sv_file, *,
+                   directory_stamps: dict[str, tuple[int, int, int] | None] | None = None) -> list[str]:
     """The SystemVerilog files (or the files whose name `match`es) below the roots that neither
     DEFAULT_EXCLUDES nor `exclude` (VS Code globs, as in files.exclude) leave out."""
     excluded = _exclusion(DEFAULT_EXCLUDES + exclude)
     out = []
     for root in map(norm, roots):
+        if directory_stamps is not None:
+            directory_stamps[root] = directory_stamp(root)
         for dirpath, dirnames, filenames in os.walk(root):
             rel = os.path.relpath(dirpath, root).replace(os.sep, "/")
             prefix = "" if rel == "." else rel + "/"
             dirnames[:] = sorted(d for d in dirnames if not excluded(prefix + d, os.path.join(dirpath, d)))
+            if directory_stamps is not None:
+                # Stamp directories before walking them, including empty ones, so a later
+                # creation invalidates cached discovery even without a file watcher event.
+                for d in dirnames:
+                    path = os.path.join(dirpath, d)
+                    directory_stamps[path] = directory_stamp(path)
             for fn in sorted(filenames):
                 full = os.path.join(dirpath, fn)
                 if match(fn) and not excluded(prefix + fn, full):

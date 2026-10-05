@@ -22,7 +22,7 @@ from .lints import (
 from .elab import SOURCE as ELAB_SOURCE
 from .indexer import EOL_RE, FIX_DATA, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
 from .model import ClassInfo, Range
-from .project import discover_files, is_bundled
+from .project import directory_stamp, discover_files, is_bundled
 from .views import canonical_type, config_db_report, mismatched
 from .workspace import BUILTIN_TYPES
 
@@ -768,13 +768,16 @@ def include_dirs_for(ws, name: str, near: str) -> list[str]:
     base = os.path.basename(tail)
     key = tuple(ws.config.workspace_roots), tuple(ws.config.exclude)
     if ws._include_candidates is None or ws._include_candidates[0] != key or any(
+            directory_stamp(p) != stamp for p, stamp in ws._include_candidates[2].items()) or any(
             not os.path.isfile(p) for p in ws._include_candidates[1].get(base, ())):
-        # Includes may use extensions the client does not watch. A missing cached header
-        # needs a new walk so a move can suggest its destination, not its old directory.
+        # Includes may use extensions the client does not watch. Directory changes catch
+        # new candidates too, without enumerating every file again on unchanged requests.
         by_name: dict[str, list[str]] = {}
-        for path in discover_files(ws.config.workspace_roots, ws.config.exclude, match=lambda fn: True):
+        stamps: dict[str, tuple[int, int, int] | None] = {}
+        for path in discover_files(ws.config.workspace_roots, ws.config.exclude, match=lambda fn: True,
+                                   directory_stamps=stamps):
             by_name.setdefault(os.path.basename(path), []).append(path)
-        ws._include_candidates = key, by_name
+        ws._include_candidates = key, by_name, stamps
     files = ws._include_candidates[1].get(base, ())
     have = set(ws.sources.include_dirs) if ws.sources else set()
     dirs = [d for d in dict.fromkeys(f[:-len(tail)] for f in files if f.endswith(tail) and os.path.isfile(f))
