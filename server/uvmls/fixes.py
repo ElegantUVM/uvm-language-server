@@ -485,7 +485,7 @@ def _create_new(ctx: Context, d) -> list[Fix]:
     cr = cls and next((c for c in ws.calls_of(cls).creates if c.kind == "new"
                        and c.range.path == d.range.path and [c.range.line, c.range.col] == at), None)
     made = cr and new_target(ws, cls, cr)
-    ft = ctx.files.get(cr.range.path) if made else None
+    ft = ctx.files.get(cr.range.path) if made and made[1] else None
     span = ft and ft.span(cr.range)
     if span is None:
         return []

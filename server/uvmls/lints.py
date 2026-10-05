@@ -193,11 +193,12 @@ NEW_TARGET_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_$]*)(\[[^\]]*\])*$")  # x, or
 
 
 def new_target(ws: Workspace, cls, cr):
-    """(class, type as written) of what a `x = new(...)` makes, when that is a component of the
-    project's that the factory knows: a registered user class, not the class making it."""
+    """(class, factory scope) of what a `x = new(...)` makes, when that is a component of the
+    project's that the factory knows. The scope is None when its spelling cannot safely be copied."""
     m = NEW_TARGET_RE.match(cr.target or "")
     if cr.kind != "new" or cr.nargs != 2 or not (m or cr.type):
         return None
+    inherited = False
     if cr.type is not None:  # X::new(...)
         spec, written = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls), cr.type.text
     else:
@@ -210,10 +211,15 @@ def new_target(ws: Workspace, cls, cr):
             hit = ws.find_member(cls, m.group(1))
             var = hit[1] if hit and isinstance(hit[1], Variable) else None
             spec = ws.member_type_spec(*hit) if var is not None else None
+            inherited = hit is not None and hit[0] is not cls
         written = var.type_text if var is not None else ""
     t = spec.cls if spec is not None else None
     if t is None or t.library or t is cls or t.registration != "component" or not written:
         return None
+    if inherited:
+        written = None  # the base's imports and type spellings need not be visible here
+    elif any(not p.is_local for p in t.params) and spec.via_typedef is None and "#" not in written:
+        written = written + "#()" if cr.type is None else None
     role = ws.role(t)
     return (t, written) if role in COMPONENT_ROLES and role != "tlm" else None
 
@@ -343,8 +349,9 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
         for cr in ws.calls_of(cls).creates:
             made = new_target(ws, cls, cr) if cr.kind == "new" else None
             if made:
+                use = f"{made[1]}::type_id::create" if made[1] else "the factory's type_id::create"
                 add(cr.range, f"{cr.target} is created with new(), so a factory override of {made[0].name} never "
-                              f"applies here; use {made[1]}::type_id::create", "warning", "create-new",
+                              f"applies here; use {use}", "warning", "create-new",
                     cls=cls.qualname, at=[cr.range.line, cr.range.col])
             if cr.kind != "factory" or cr.type is None:
                 continue
