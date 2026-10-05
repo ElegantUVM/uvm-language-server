@@ -3,7 +3,7 @@
 import pytest
 import pyslang as P
 
-from test_fixes import findings, index, offered
+from test_fixes import findings, index
 from uvmls.elab import elaborate, request_for
 from uvmls.views import config_db_report
 
@@ -110,7 +110,7 @@ class box #(type T = int); endclass
     assert row["status"] == ("type-mismatch" if mismatch else "ok")
 
 
-def test_config_specialization_prefers_a_nearer_class(tmp_path):
+def test_config_specialization_with_competing_class_and_alias_is_unknown(tmp_path):
     declarations = '''package q; typedef int item; endpackage
 package p;
   import q::*;
@@ -120,12 +120,13 @@ endpackage
 '''
     check_specialization_identity("p::box", "p::box #(p::item)", declarations)
     w, row = config_pair(tmp_path, "p::box", "p::box #(p::item)", declarations)
-    assert row["sets"][0]["canon"] == row["gets"][0]["canon"] == "p::box #(T=p::item)"
+    assert row["sets"][0]["canon"] is None
+    assert row["gets"][0]["canon"] == "p::box #(T=p::item)"
     assert findings(w, "config-db-type-mismatch") == []
     assert row["status"] == "ok"
 
 
-def test_config_specialization_keeps_a_nearer_alias(tmp_path):
+def test_config_specialization_with_competing_alias_and_class_is_unknown(tmp_path):
     declarations = '''package q; class item; endclass endpackage
 package p;
   import q::*;
@@ -135,7 +136,8 @@ endpackage
 '''
     check_specialization_identity("p::box", "p::box #(int)", declarations)
     w, row = config_pair(tmp_path, "p::box", "p::box #(int)", declarations)
-    assert row["sets"][0]["canon"] == row["gets"][0]["canon"] == "p::box #(T=bit signed[31:0])"
+    assert row["sets"][0]["canon"] is None
+    assert row["gets"][0]["canon"] == "p::box #(T=bit signed[31:0])"
     assert findings(w, "config-db-type-mismatch") == []
     assert row["status"] == "ok"
 
@@ -143,7 +145,7 @@ endpackage
 @pytest.mark.parametrize("set_type,mismatch", [("int", False), ("p::item", True)])
 @pytest.mark.parametrize("imported_type", ["int", "byte"])
 @pytest.mark.parametrize("base", ["base", "middle"])
-def test_config_specialization_prefers_an_inherited_alias(tmp_path, set_type, mismatch, imported_type, base):
+def test_config_specialization_with_competing_inherited_alias_is_unknown(tmp_path, set_type, mismatch, imported_type, base):
     text = '''`include "uvm_macros.svh"
 package q; typedef IMPORTED item; endpackage
 package p;
@@ -179,11 +181,9 @@ module top; endmodule
     assert [d["code"] for d in result["diagnostics"] if d["severity"] == "error"] == \
         (["BadAssignment"] if mismatch else [])
     [row] = config_db_report(w)["fields"]
-    assert row["gets"][0]["canon"] == "p::box #(T=bit signed[31:0])"
-    assert row["status"] == ("type-mismatch" if mismatch else "ok")
-    ds = findings(w, "config-db-type-mismatch")
-    assert len(ds) == int(mismatch)
-    assert all(offered(w, d) == [] for d in ds)
+    assert row["gets"][0]["canon"] is None
+    assert row["status"] == "ok"
+    assert findings(w, "config-db-type-mismatch") == []
 
 
 @pytest.mark.parametrize("set_type,get_type,mismatch", [

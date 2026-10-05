@@ -28,7 +28,7 @@ The Problems panel and `uvmls lint` use these codes:
 | `create-virtual` | A factory create targets a virtual class. |
 | `unknown-base` | A non-UVM base class was not found in the indexed sources (info). |
 | `config-db-no-set` | No matching field is set in the indexed sources; optional or conditional gets are info, required gets are warnings. Dynamic field names in sets suppress this check. |
-| `config-db-type-mismatch` | A get uses a different type from the field's sets. Matching is static, so runtime scopes and values can remain uncertain. |
+| `config-db-type-mismatch` | A get uses a different type from the field's sets. Type names with competing declarations are treated as unknown and produce no mismatch warning. Matching is static, so runtime scopes and values can remain uncertain. |
 | `factory-ctor` | A registered class's constructor cannot accept the calls its UVM factory makes (error). The check follows the selected UVM library and defines. |
 | `create-new` | Direct `new(name, parent)` of a registered project component bypasses factory overrides (warning). |
 | `utils-param` | Name registration collides across used specializations, or a non-parameterized test uses a param-utils macro that does not register its name (warning). |

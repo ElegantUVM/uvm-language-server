@@ -8,8 +8,8 @@ import re
 from collections import deque
 
 from . import naturaldocs
-from .model import ClassInfo, ConfigDbCall, DesignUnit, Typedef, Variable
-from .uvm import COMPONENT_ROLES, ROLE_ORDER, builtin_params, is_tlm_port
+from .model import ClassInfo, ConfigDbCall, DesignUnit, Param, Typedef, Variable
+from .uvm import BUILTIN_CLASSES, COMPONENT_ROLES, ROLE_ORDER, builtin_params, is_tlm_port
 from .workspace import BUILTIN_TYPES, Spec, Workspace, bind_params, parse_type_text, split_args
 
 
@@ -406,31 +406,58 @@ def _type_scope(ctx):
     return (ctx.name if ctx.kind == "package" else None, ctx.imports) if ctx else (None, ())
 
 
+def _type_candidates(ws, name, scope, ctx):
+    """Possible declarations, without guessing precedence across the index's partial scopes."""
+    package, imports = _type_scope(ctx)
+    if scope:
+        scopes = {(scope, None)}
+        classes = list(ws.classes_by_name.get(scope, []))
+        owners = [u for u in ws.units_by_name.get(scope, []) if u.kind == "package"]
+    else:
+        scopes = {(None, None), (package, None)} | {(p, None) for p in imports}
+        classes = [ctx] if isinstance(ctx, ClassInfo) else \
+            [c for c in ws.classes_by_name.get(ctx.owner_class, []) if c.package == package] \
+            if isinstance(ctx, Typedef) and ctx.owner_class else []
+        owners = [ctx] if isinstance(ctx, DesignUnit) else []
+        owners += [u for p, _ in scopes for u in ws.units_by_name.get(p, []) if u.kind == "package"]
+    seen = set()
+    while classes:
+        cls = classes.pop()
+        if id(cls) in seen:
+            continue
+        seen.add(id(cls))
+        owners.append(cls)
+        scopes.add((cls.package, cls.name))
+        classes += [e.spec.cls for e in ws.chain(cls)[1:] if e.spec.cls]
+        if not scope and cls.outer_class:
+            classes += [c for c in ws.classes_by_name.get(cls.outer_class, []) if c.package == cls.package]
+    candidates = [(c, c) for c in ws.classes_by_name.get(name, []) if (c.package, c.outer_class) in scopes]
+    candidates += [(t, t) for t in ws.typedefs_by_name.get(name, []) if (t.package, t.owner_class) in scopes]
+    seen.clear()
+    for owner in owners:
+        if id(owner) in seen:
+            continue
+        seen.add(id(owner))
+        candidates += [(p, owner) for p in owner.params if p.name == name]
+        if isinstance(owner, ClassInfo):
+            candidates += [(p, owner) for p in owner.properties if p.kind == "parameter" and p.name == name]
+    return candidates
+
+
 def _constant_integer(ws, text: str, ctx=None, depth: int = 0) -> int | None:
     """Small signed integer expressions; unknown widths, overflow and other SV syntax stay unknown."""
     if depth > 8 or len(text) > 256:
         return None
 
     def parameter(name):
-        if isinstance(ctx, ClassInfo):
-            if any(p.name == name and not p.is_local for p in ctx.params):
-                return None
-            local = next((p for p in ctx.properties if p.kind == "parameter" and p.name == name), None)
-            if local:
-                return evaluate_default(local, ctx)
-        package, imports = _type_scope(ctx)
-        scopes = ([ctx] if isinstance(ctx, (ClassInfo, DesignUnit)) else []) + \
-            [ws.find_unit(p, "package") for p in ([package] if package else []) + list(imports)]
-        for owner in scopes:
-            if owner is None:
-                continue
-            p = next((p for p in owner.params if p.name == name), None)
-            if p is not None:
-                if isinstance(owner, ClassInfo) and not p.is_local or \
-                        isinstance(owner, DesignUnit) and owner.kind != "package" and not p.is_local:
-                    return None
-                return evaluate_default(p, owner)
-        return None
+        candidates = _type_candidates(ws, name, None, ctx)
+        if len(candidates) != 1:
+            return None
+        p, owner = candidates[0]
+        if not isinstance(p, (Param, Variable)) or isinstance(p, Param) and \
+                (p.is_type or not p.is_local and not (isinstance(owner, DesignUnit) and owner.kind == "package")):
+            return None
+        return evaluate_default(p, owner)
 
     def evaluate_default(p, owner):
         if p.type_text not in ("", "int", "int signed", "integer", "integer signed") or not p.default:
@@ -503,30 +530,19 @@ def canonical_type(ws: Workspace, text: str, ctx: ClassInfo | DesignUnit | Typed
     if parsed is None or parsed[1] in BUILTIN_TYPES:
         return t if t in BUILTIN_TYPES - {"bit", "logic", "reg", *INTEGRAL_ATOMS} else _integral_type(ws, t, ctx)
     scope, name, args = parsed
-    package, imports = _type_scope(ctx)
-    owners = [e.spec.cls for e in ws.chain(ctx) if e.spec.cls] if isinstance(ctx, ClassInfo) and not scope else []
-    td = next((t for c in owners for t in c.typedefs if t.name == name), None)
-    if td is None:
-        td = ws.find_typedef(name, scope or package, ctx.name if isinstance(ctx, ClassInfo) else None,
-                             [scope] if scope else imports)
-    if td is not None and scope and scope not in (td.package, td.owner_class):
-        td = None
-    cls = ws.find_class(name, scope or package, [scope] if scope else imports)
-    if td is not None and cls is not None and not scope:
-        # Both lookups can fall back to unrelated declarations. A nearer class wins over a typedef.
-        scopes = [(c.package, c.name) for c in owners] + \
-            [(package, None)] + [(p, None) for p in imports] + [(None, None)]
-        td_scope, cls_scope = (td.package, td.owner_class), (cls.package, cls.outer_class)
-        if cls_scope in scopes and (td_scope not in scopes or scopes.index(cls_scope) < scopes.index(td_scope)):
-            td = None
-    if td is not None:
+    candidates = _type_candidates(ws, name, scope, ctx)
+    if len(candidates) > 1:
+        return None
+    decl = candidates[0][0] if candidates else None
+    if isinstance(decl, (Param, Variable)):
+        return None
+    if isinstance(decl, Typedef):
+        td = decl
         if td.target_text in ("enum", "struct", "union"):
             return "::".join(x for x in (td.package, td.owner_class, td.name) if x)
-        owner = ws.find_class(td.owner_class, td.package) if td.owner_class else ws.find_unit(td.package, "package")
-        return canonical_type(ws, td.target_text, owner or td, depth + 1)
-    if cls is not None and scope and scope not in (cls.package, cls.outer_class):
-        return None
-    spec = Spec(name=name, cls=cls, args=args) if cls else ws.resolve_spec(name, scope, args)
+        return canonical_type(ws, td.target_text, td, depth + 1)
+    spec = Spec(name=name, cls=decl, args=args) if isinstance(decl, ClassInfo) else \
+        Spec(name=name, args=args) if name in BUILTIN_CLASSES and scope in (None, "uvm_pkg") else None
     args = _bound(ws, spec.cls.params if spec and spec.cls else [], spec.args, ctx, spec.cls, depth) if spec else None
     return None if args is None else spec.key + args
 
@@ -617,7 +633,8 @@ def _build_config_db_report(ws: Workspace) -> ConfigDbReport:
                  "inst": c.inst, "instLiteral": c.inst_literal, "field": c.field_name,
                  "value": c.value, "owner": owner, "method": c.method,
                  "conditional": c.conditional, "optional": c.optional,
-                 "canon": canonical_type(ws, c.type_text, ws.class_by_qual.get(owner)), **_loc(c.range)}
+                 "canon": canonical_type(ws, c.type_text, ws.class_by_qual.get(owner) or ws.find_unit(owner)),
+                 **_loc(c.range)}
         if not c.field_literal:
             dynamic.append(entry)
             continue
