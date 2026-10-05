@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import fnmatch
 import re
 from collections import deque
 
 from . import naturaldocs
-from .model import ClassInfo, ConfigDbCall, Typedef, Variable
+from .model import ClassInfo, ConfigDbCall, DesignUnit, Typedef, Variable
 from .uvm import COMPONENT_ROLES, ROLE_ORDER, builtin_params, is_tlm_port
 from .workspace import BUILTIN_TYPES, Spec, Workspace, bind_params, parse_type_text, split_args
 
@@ -392,43 +393,168 @@ def norm_type(t: str) -> str:
     return re.sub(r"\s+", " ", t.replace("#(", " #(")).strip()
 
 
-def canonical_type(ws: Workspace, text: str, ctx: ClassInfo | None = None, depth: int = 0) -> str | None:
-    """A config_db type as uvm_config_db matches it: typedefs followed, a class by its qualified name,
-    spacing normalized. None when the code alone cannot tell: a type parameter of the class (it
-    depends on the specialization), or a name nothing declares."""
+# Integral atoms have the same specialization identity as their packed vector form.
+INTEGRAL_ATOMS = {
+    "byte": ("bit", True, 8), "shortint": ("bit", True, 16), "int": ("bit", True, 32),
+    "longint": ("bit", True, 64), "integer": ("logic", True, 32), "time": ("logic", False, 64),
+}
+
+
+def _type_scope(ctx):
+    if isinstance(ctx, ClassInfo):
+        return ctx.package, ctx.imports
+    return (ctx.name if ctx.kind == "package" else None, ctx.imports) if ctx else (None, ())
+
+
+def _constant_integer(ws, text: str, ctx=None, depth: int = 0) -> int | None:
+    """Small signed integer expressions; unknown widths, overflow and other SV syntax stay unknown."""
+    if depth > 8 or len(text) > 256:
+        return None
+
+    def parameter(name):
+        if isinstance(ctx, ClassInfo):
+            if any(p.name == name and not p.is_local for p in ctx.params):
+                return None
+            local = next((p for p in ctx.properties if p.kind == "parameter" and p.name == name), None)
+            if local:
+                return evaluate_default(local, ctx)
+        package, imports = _type_scope(ctx)
+        scopes = ([ctx] if ctx else []) + [ws.find_unit(p, "package") for p in ([package] if package else []) + list(imports)]
+        for owner in scopes:
+            if owner is None:
+                continue
+            p = next((p for p in owner.params if p.name == name), None)
+            if p is not None:
+                if isinstance(owner, ClassInfo) and not p.is_local or \
+                        isinstance(owner, DesignUnit) and owner.kind != "package" and not p.is_local:
+                    return None
+                return evaluate_default(p, owner)
+        return None
+
+    def evaluate_default(p, owner):
+        if p.type_text not in ("", "int", "int signed", "integer", "integer signed") or not p.default:
+            return None
+        return _constant_integer(ws, p.default, owner, depth + 1)
+
+    def value(node):
+        if isinstance(node, ast.Constant) and type(node.value) is int:
+            result = node.value
+        elif isinstance(node, ast.Name):
+            result = parameter(node.id)
+        elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            v = value(node.operand)
+            result = None if v is None else v if isinstance(node.op, ast.UAdd) else -v
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult)):
+            a, b = value(node.left), value(node.right)
+            result = None if a is None or b is None else a + b if isinstance(node.op, ast.Add) else \
+                a - b if isinstance(node.op, ast.Sub) else a * b
+        else:
+            return None
+        return result if result is not None and -(1 << 31) <= result < (1 << 31) else None
+
+    try:
+        expr = ast.parse(text.strip(), mode="eval")
+        return value(expr.body) if sum(1 for _ in ast.walk(expr)) <= 64 else None
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+
+
+def _integral_type(ws, text: str, ctx) -> str | None:
+    m = re.fullmatch(r"(bit|logic|reg|byte|shortint|int|longint|integer|time)\s*"
+                     r"(?:(signed|unsigned)\s*)?((?:\[[^\[\]]+\]\s*)*)", text)
+    if m is None:
+        return None
+    name, signing, dimensions = m.groups()
+    kind, signed, width = INTEGRAL_ATOMS.get(name, ("logic" if name == "reg" else name, False, None))
+    if signing:
+        signed = signing == "signed"
+    ranges = []
+    for dim in re.findall(r"\[([^\]]+)\]", dimensions):
+        bounds = dim.split(":")
+        if len(bounds) != 2:
+            return None
+        left, right = (_constant_integer(ws, b, ctx) for b in bounds)
+        if left is None or right is None:
+            return None
+        ranges.append(f"[{left}:{right}]")
+    if width:
+        ranges.append(f"[{width - 1}:0]")
+    if ranges == ["[0:0]"]:
+        ranges = []
+    return kind + (" signed" if signed else "") + "".join(ranges)
+
+
+def canonical_type(ws: Workspace, text: str, ctx: ClassInfo | DesignUnit | None = None, depth: int = 0) -> str | None:
+    """A config_db type identity: typedefs, integral synonyms and specialization arguments resolved
+    in their declaration scopes. None when the index cannot determine an identity."""
     t = norm_type(text)
-    if not t or ctx is not None and {p.name for p in ctx.params} & set(re.findall(r"[A-Za-z_]\w*", t)):
+    if depth > 8 or not t or isinstance(ctx, ClassInfo) and \
+            {p.name for p in ctx.params if not p.is_local or p.is_type} & set(re.findall(r"[A-Za-z_]\w*", t)):
         return None
     m = re.match(r"^virtual\s+(?:interface\s+)?(\w+)\s*(?:#\s*\((.*)\))?\s*(\.\s*\w+)?$", t)
     if m:
         unit = ws.find_unit(m.group(1), "interface")
-        args = _bound(unit.params if unit else [], split_args(m.group(2)) if m.group(2) else [])
+        args = _bound(ws, unit.params if unit else [], split_args(m.group(2)) if m.group(2) else [], ctx, unit, depth)
         modport = re.sub(r"\s+", "", m.group(3) or "")
         return None if args is None else f"virtual {m.group(1)}{args}{modport}"
     parsed = parse_type_text(t)
-    if parsed is None or parsed[1] in BUILTIN_TYPES:  # bit [7:0], int unsigned
-        return re.sub(r"\s*([^\w\s])\s*", r"\1", t)
+    if parsed is None or parsed[1] in BUILTIN_TYPES:
+        return t if t in BUILTIN_TYPES - {"bit", "logic", "reg", *INTEGRAL_ATOMS} else _integral_type(ws, t, ctx)
     scope, name, args = parsed
-    package, imports = (ctx.package, ctx.imports) if ctx is not None else (None, ())
-    td = ws.find_typedef(name, scope or package, ctx.name if ctx else None, [scope] if scope else imports)
-    if td is not None and depth < 8:
+    package, imports = _type_scope(ctx)
+    td = ws.find_typedef(name, scope or package, ctx.name if isinstance(ctx, ClassInfo) else None,
+                         [scope] if scope else imports)
+    if td is not None and scope and scope not in (td.package, td.owner_class):
+        td = None
+    if td is not None:
         if td.target_text in ("enum", "struct", "union"):
-            return f"{td.package}::{td.name}" if td.package else td.name
-        return canonical_type(ws, td.target_text, ctx, depth + 1)
-    spec = ws.resolve_spec(name, scope, args, ctx)
-    args = _bound(spec.cls.params if spec and spec.cls else [], spec.args) if spec else None
+            return "::".join(x for x in (td.package, td.owner_class, td.name) if x)
+        owner = ws.find_class(td.owner_class, td.package) if td.owner_class else ws.find_unit(td.package, "package")
+        return canonical_type(ws, td.target_text, owner, depth + 1)
+    cls = ws.find_class(name, scope or package, [scope] if scope else imports)
+    if cls is not None and scope and scope not in (cls.package, cls.outer_class):
+        return None
+    spec = Spec(name=name, cls=cls, args=args) if cls else ws.resolve_spec(name, scope, args)
+    args = _bound(ws, spec.cls.params if spec and spec.cls else [], spec.args, ctx, spec.cls, depth) if spec else None
     return None if args is None else spec.key + args
 
 
-def _bound(params: list, args: list[str]) -> str | None:
-    """A specialization's arguments, the same however they are written: by name, defaults filled
-    in, package prefixes dropped. None for arguments that cannot be matched to parameters."""
+def _bound(ws, params: list, args: list[str], ctx, owner, depth: int) -> str | None:
+    """Canonical bound arguments, resolving explicit types at the use and defaults at the declaration."""
+    params = [p for p in params if not p.is_local]
     if not params:
         return None if args else ""
     if len([a for a in args if not a.startswith(".")]) > len(params):
         return None
-    bound = bind_params([(p.name, p.default) for p in params], args, {})
-    return " #(" + ", ".join(p.name + "=" + re.sub(r"(\w+::)|\s+", "", bound[p.name]) for p in params) + ")"
+    bound = bind_params([(p.name, "") for p in params], args, {})
+    values = {}
+    for p in params:
+        explicit = bool(bound[p.name])
+        text = bound[p.name] if explicit else p.default
+        scope = ctx if explicit else owner
+        if p.is_type and not explicit and text in values:
+            canon = values[text]
+        elif p.is_type:
+            canon = canonical_type(ws, text, scope, depth + 1)
+        else:
+            if not explicit:
+                text = values.get(text, text)
+            atom = re.fullmatch(r"(byte|shortint|int|longint|integer|time)(?:\s+(signed|unsigned))?", p.type_text)
+            n = _constant_integer(ws, text, scope)
+            if n is not None and (atom or not p.type_text):
+                if atom:
+                    _, signed, width = INTEGRAL_ATOMS[atom[1]]
+                    signed = atom[2] == "signed" if atom[2] else signed
+                    n %= 1 << width
+                    if signed and n >= 1 << (width - 1):
+                        n -= 1 << width
+                canon = str(n)
+            else:
+                canon = None
+        if canon is None:
+            return None
+        values[p.name] = canon
+    return " #(" + ", ".join(p.name + "=" + values[p.name] for p in params) + ")"
 
 
 def mismatched(row: dict) -> list[dict]:

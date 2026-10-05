@@ -58,7 +58,7 @@ class Variable:
     qualifiers: list[str] = field(default_factory=list)
     generated: bool = False  # produced by a macro expansion (e.g. p_sequencer)
     doc: str = ""
-    default: str | None = None  # an argument's default value
+    default: str | None = None  # an argument or parameter's default value
 
 
 @dataclass
@@ -177,6 +177,7 @@ class Param:
     default: str
     is_type: bool
     is_local: bool = False  # a localparam cannot be assigned in #(...)
+    type_text: str = ""  # a value parameter's declared type
 
 
 @dataclass

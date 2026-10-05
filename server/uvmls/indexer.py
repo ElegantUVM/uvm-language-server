@@ -743,6 +743,7 @@ class Extractor:
         out = []
         if decl is None:
             return out
+        local = local or decl.keyword.kind == TK.LocalParamKeyword
         if decl.kind == K.TypeParameterDeclaration:
             for d in nodes(decl.declarators):
                 default = compact(d.assignment.type) if d.assignment is not None else ""
@@ -750,7 +751,7 @@ class Extractor:
         elif decl.kind == K.ParameterDeclaration:
             for d in nodes(decl.declarators):
                 default = compact(d.initializer.expr) if d.initializer is not None else ""
-                out.append(Param(d.name.valueText, default, False, local))
+                out.append(Param(d.name.valueText, default, False, local, compact(decl.type)))
         return out
 
     def params(self, plist) -> list[Param]:
@@ -859,7 +860,9 @@ class Extractor:
             if r:
                 cls.properties.append(Variable(tok.valueText, "parameter", compact(decl.type) if
                                                getattr(decl, "type", None) is not None else "type",
-                                               None, r, text, ["localparam"], gen))
+                                               None, r, text, ["localparam"], gen,
+                                               default=compact(d.initializer.expr) if
+                                               getattr(d, "initializer", None) is not None else None))
 
     def class_typedef(self, cls: ClassInfo, decl, package):
         td = self.typedef(decl, package, cls.name)
