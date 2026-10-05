@@ -59,7 +59,7 @@ def brute_near_misses(report, get):
             continue
         match = next((s for s in row['sets'] if (s['canon'] or s['type']) == kind), None)
         read = any((g['canon'] or g['type']) == kind for g in row['gets'])
-        if match and (not read or normal):
+        if match and (not read or normal or lints._slip(name, other)):
             out.append((other, match))
     return out
 

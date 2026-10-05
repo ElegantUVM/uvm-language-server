@@ -52,3 +52,32 @@ endclass
     assert d.severity == "info"
     [fix] = offered(w, d)
     assert fix.preferred == preferred and not fix.safe
+
+
+@pytest.mark.parametrize("get_name,suggested", [
+    ("alu_agent_confg", True),   # a character missing
+    ("alu_agent_cofnig", True),  # two characters swapped
+    ("alu_agent_configs", True),  # a character extra
+    ("alu_agent_confog", False),  # a character changed: how separate knobs differ (rx/tx, cov0/cov1)
+])
+def test_a_slip_of_a_name_others_read_is_still_a_typo(tmp_path, get_name, suggested):
+    """The common typo: one class misspells a field that the other classes read correctly."""
+    get = 'if (!uvm_config_db #(bit)::get(this, "", "FIELD", v)) `uvm_fatal("CFG", "missing")'
+    text = '''import uvm_pkg::*;
+class env extends uvm_env;
+  bit v;
+  function void build_phase(uvm_phase phase);
+    uvm_config_db #(bit)::set(this, "*", "alu_agent_config", 1);
+    READ_OK
+    READ_OK
+    READ_GET
+  endfunction
+endclass
+'''.replace("READ_OK", get.replace("FIELD", "alu_agent_config")).replace("READ_GET", get.replace("FIELD", get_name))
+    w = index(tmp_path, {"t.sv": text})
+    [d] = findings(w, "config-db-no-set")
+    assert d.severity == "warning"
+    assert ("did you mean 'alu_agent_config'" in d.message) == suggested
+    fixes = offered(w, d)
+    assert [f.title.startswith("Change") for f in fixes] == ([True] if suggested else [])
+    assert not any(f.preferred for f in fixes)

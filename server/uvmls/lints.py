@@ -436,32 +436,45 @@ def _deletions(name: str, limit: int) -> set[str]:
     return variants
 
 
+def _slip(a: str, b: str) -> bool:
+    """One character missing, extra or swapped with its neighbour: the slips that make a typo of a
+    name, as opposed to a changed character, which also makes rx of tx and cov1 of cov0."""
+    if abs(len(a) - len(b)) == 1:
+        return osa_distance(a, b) == 1
+    if len(a) != len(b):
+        return False
+    diff = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
+    return len(diff) == 2 and diff[1] == diff[0] + 1 and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]]
+
+
 class NearMissIndex:
-    """Candidate field names by type and shared deletions; distances still decide matches."""
+    """Candidate field names by type and shared deletions; distances still decide matches. A set
+    field that other gets already read by the same type is presumed a separate knob, and is a
+    candidate only for a name one slip away from it."""
 
     def __init__(self, report: dict):
         self.rows = report["fields"]
         self.normal: dict[tuple[str, str], set[int]] = {}
         self.deleted: dict[tuple[str, str], set[int]] = {}
         self.entries: dict[tuple[int, str], dict] = {}
+        self.read: dict[int, set[str]] = {}  # the types each field is already read by
         self.memo: dict[tuple[str, str], list[tuple[str, dict]]] = {}
         for i, row in enumerate(self.rows):
             name = row["field"]
             if len(name) < 4 or not row["sets"]:
                 continue
             key = name.lower().replace("_", "")
-            read = {g["canon"] or g["type"] for g in row["gets"]}
+            self.read[i] = {g["canon"] or g["type"] for g in row["gets"]}
             kinds = set()
             for entry in row["sets"]:
                 kind = entry["canon"] or entry["type"]
                 self.entries.setdefault((i, kind), entry)
                 kinds.add(kind)
-            variants = _deletions(name, 2) if kinds - read else ()
+            variants = _deletions(name, 2)
             for kind in kinds:
                 self.normal.setdefault((kind, key), set()).add(i)
-                if kind not in read:
-                    for variant in variants:
-                        self.deleted.setdefault((kind, variant), set()).add(i)
+                for variant in variants:
+                    self.deleted.setdefault((kind, variant), set()).add(i)
 
     def find(self, get: dict) -> list[tuple[str, dict]]:
         name, kind = get["field"], get["canon"] or get["type"]
@@ -478,8 +491,10 @@ class NearMissIndex:
         out = []
         for i in sorted(candidates):  # preserve report order, including the first set of each type
             other = self.rows[i]["field"]
-            if other != name and (i in normal or
-                                  (abs(len(other) - len(name)) <= limit and osa_distance(name, other) <= limit)):
+            if other == name:
+                continue
+            close = i in normal or (abs(len(other) - len(name)) <= limit and osa_distance(name, other) <= limit)
+            if close and (kind not in self.read[i] or i in normal or _slip(name, other)):
                 out.append((other, self.entries[i, kind]))
         self.memo[cache_key] = out
         return out
