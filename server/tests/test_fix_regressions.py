@@ -189,6 +189,50 @@ def test_two_identical_findings_keep_their_identity_after_an_insertion(tmp_path,
         c.close()
 
 
+@pytest.mark.parametrize("data", [False, True])
+@pytest.mark.parametrize("republished", [False, True])
+@pytest.mark.parametrize("ranged", [False, True])
+@pytest.mark.parametrize("removed", [0, 1])
+def test_deleted_identical_call_does_not_transfer_its_diagnostic(tmp_path, data, republished, ranged, removed):
+    from test_code_actions import Doc, applied, edits_for, start
+
+    path = tmp_path / "t.sv"
+    path.write_text(COMPONENT)
+    (tmp_path / "alu_tb.f").write_text("t.sv\n")
+    c = start(str(tmp_path), settings={"filelists": [str(tmp_path / "alu_tb.f")],
+                                       "useBundledUvm": False, "elaboration": "off"})
+    try:
+        doc = Doc(c, str(path))
+        call = '    m_drv = drv::type_id::create("m_drv", this);\n'
+        broken = call.replace(', this', '')
+        doc.change(COMPONENT.replace(call, broken * 2))
+        ds = doc.diagnostics(lambda ds: len(ds) == 2)
+        old = dict(ds[removed])
+        if not data:
+            old.pop("data")
+        line = old["range"]["start"]["line"]
+        rng = {"start": {"line": line, "character": 0}, "end": {"line": line + 1, "character": 0}}
+        changed = applied(doc.text, [{"range": rng, "newText": ""}])
+        if ranged:
+            doc.version += 1
+            doc.text = changed
+            c.notify("textDocument/didChange", {"textDocument": {"uri": doc.uri, "version": doc.version},
+                                                 "contentChanges": [{"range": rng, "text": ""}]})
+        else:
+            doc.change(changed)
+        if republished:
+            current = doc.diagnostics(lambda ds: len(ds) == 1)
+        assert doc.actions([old]) == []
+        if not republished:
+            current = doc.diagnostics(lambda ds: len(ds) == 1)
+        assert doc.actions([old]) == []
+        assert current[0]["data"]["_uvmls_id"] not in {d["data"]["_uvmls_id"] for d in ds}
+        fix = next(a for a in doc.actions(current) if a["title"] == "Pass 'this' as the parent")
+        assert applied(doc.text, edits_for(fix, doc.uri, doc.version)) == COMPONENT
+    finally:
+        c.close()
+
+
 @pytest.mark.parametrize("disabled", [False, True])
 def test_outside_workspace_fix_respects_lsp_disabled_support(tmp_path, disabled):
     import copy

@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import time
+from collections import Counter
 from dataclasses import replace
 from difflib import SequenceMatcher
 from urllib.parse import unquote, urlparse
@@ -805,11 +806,17 @@ def diagnostic_key(d: T.Diagnostic) -> tuple:
 
 
 def finding_lines(then: str | None, now: str | None):
-    """Map unchanged lines across separate edits; a rewritten or deleted line has no identity."""
+    """Map unchanged, unambiguous lines across separate edits."""
     if then is None or now is None or then == now:
         return lambda line: line
-    blocks = SequenceMatcher(None, fixes.EOL_RE.split(then), fixes.EOL_RE.split(now)).get_matching_blocks()
-    return lambda line: next((b + line - a for a, b, n in blocks if a <= line < a + n), None)
+    before, after = fixes.EOL_RE.split(then), fixes.EOL_RE.split(now)
+    old_counts, new_counts = Counter(before), Counter(after)
+    blocks = SequenceMatcher(None, before, after).get_matching_blocks()
+    # A diff can attribute a deleted duplicate's line to its survivor. Text alone cannot
+    # establish which occurrence survived, so none of those lines can retain an identity.
+    lines = {a + i: b + i for a, b, n in blocks for i in range(n)
+             if old_counts[before[a + i]] == new_counts[before[a + i]] == 1}
+    return lines.get
 
 
 def _kind_wanted(kind: str, only: list[str] | None) -> bool:
