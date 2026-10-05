@@ -69,6 +69,7 @@ FAILURE_RE = re.compile(r"fatal|error", re.IGNORECASE)
 DECLARATION_KINDS = {  # the block items that are not statements
     K.DataDeclaration, K.TypedefDeclaration, K.ForwardTypedefDeclaration,
     K.ParameterDeclarationStatement, K.PackageImportDeclaration, K.LetDeclaration,
+    K.PortDeclaration,
 }
 CONFIG_DB_OPS = {"set", "get", "exists", "wait_modified"}
 RESOURCE_DB_OPS = {"set": "set", "read_by_name": "get", "read_by_type": "get",
@@ -936,6 +937,14 @@ class Extractor:
         if meth is None:
             return None, sink
         meth.is_prototype = False
+        meth.non_ansi = decl.prototype.portList is None
+        if meth.non_ansi:
+            for st in decl.items:
+                if st.kind == K.PortDeclaration and st.header is not None:
+                    for d in nodes(st.declarators):
+                        v = self.variable(d, "argument", getattr(st.header, "dataType", None), compact(st), [])
+                        if v:
+                            meth.args.append(v)
         if not self.library and not self.in_library(meth.range.path):
             ctx = BodyCtx(owner, meth.name)
             for st in decl.items:

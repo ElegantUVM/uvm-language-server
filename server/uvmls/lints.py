@@ -107,6 +107,9 @@ def ctor_problem(ws: Workspace, cls) -> tuple[str, str] | None:
             continue
         if why.startswith("the factory passes"):
             return "other", why
+        if ctor.non_ansi and why.startswith("give '"):
+            return "other", (f"the factory constructs {cls.name} with {call[k]}; "
+                             "use an ANSI argument list to supply default values")
         if k == 0 and len(calls) == 2 and why == f"give '{ctor.args[0].name}' a default value":
             return "name-default", f"the factory constructs {cls.name} with new() as well as new(name); {why}"
         return "other", f"the factory constructs {cls.name} with {call[k]}" + (", " if why.startswith("but") else "; ") + why

@@ -73,6 +73,7 @@ class Method:
     locals: list[Variable] = field(default_factory=list)
     qualifiers: list[str] = field(default_factory=list)
     is_prototype: bool = False  # extern / pure virtual declaration without a body
+    non_ansi: bool = False  # arguments declared in the body cannot have default values
     generated: bool = False
     doc: str = ""
     # Where a body is, for edits; None (empty) for one a macro writes.
