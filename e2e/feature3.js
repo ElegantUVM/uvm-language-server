@@ -217,7 +217,9 @@ async function eventually(description, fn, timeout = UI_TIMEOUT) {
 const editor = (page) => page.locator(".editor-group-container.active .monaco-editor:visible").first();
 const counts = (page) => page.locator(".statusbar-item[id='status.problems']").innerText().then(compact).catch(() => "unavailable");
 const selection = (page) => page.locator(".statusbar-item[id='status.editor.selection']").innerText().then(compact);
-const activeFile = (page) => page.locator(".editor-group-container.active .tab.active .label-name").first().innerText();
+// The replica renders the extension in a separate label-suffix element.
+const activeFile = (page) => page.locator(".editor-group-container.active .tab.active:visible").first()
+  .getAttribute("data-resource-name");
 
 async function trustWorkspace(page) {
   await page.waitForSelector(".monaco-workbench", { timeout: 60000 });
@@ -243,7 +245,10 @@ async function quickOpen(page, fixture, file) {
   await sleep(1500);
   await input.press("Enter");
   await input.waitFor({ state: "hidden", timeout: UI_TIMEOUT });
-  await eventually(`open ${file}`, async () => (await activeFile(page)) === path.basename(file));
+  await eventually(`open ${file}`, async () => {
+    assert.equal(await activeFile(page), path.basename(file), "active editor resource");
+    return true;
+  });
   await editor(page).locator(".view-line").first().waitFor();
   await sleep(500);
 }
@@ -403,7 +408,8 @@ async function main() {
     });
     await check("index-diagnostics", async () => {
       await quickOpen(page, fixture, "agent/alu_monitor.svh");
-      await page.waitForSelector(".squiggly-warning", { timeout: FIRST_INDEX });
+      // checks_enable is an optional read, so its missing set is informational.
+      await page.waitForSelector(".squiggly-info", { timeout: FIRST_INDEX });
       await page.keyboard.press("Control+Shift+M");
       await eventually("Problems includes the known missing set", async () => {
         const text = await page.locator(".markers-panel:visible").innerText();
@@ -584,7 +590,7 @@ async function main() {
   }
 }
 
-module.exports = { prepareWorkspace, checkSarif, at };
+module.exports = { prepareWorkspace, checkSarif, at, activeFile };
 if (require.main === module) main().catch((error) => {
   console.log(`FAIL driver ${compact(error.stack || error.message)}`);
   process.exitCode = 1;
