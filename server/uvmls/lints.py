@@ -276,12 +276,26 @@ def skipped_super(ws: Workspace, cls, name: str):
 
 
 def unknown_macro_lines(ws: Workspace) -> dict[str, list[int]]:
-    """Lines whose meaning a macro nobody defines hides."""
-    out: dict[str, list[int]] = {}
+    """Lines whose meaning a macro nobody defines hides, including the headers they include."""
+    out: dict[str, set[int]] = {}
     for d in ws.user_diagnostics():
         if d.code == "UnknownDirective":
-            bisect.insort(out.setdefault(d.range.path, []), d.range.line)
-    return out
+            out.setdefault(d.range.path, set()).add(d.range.line)
+    if not out:
+        return {}
+    parents: dict[str, set[tuple[str, int]]] = {}
+    for idx in ws.indices.values():
+        for path, includes in idx.includes.items():
+            for target, r in includes:
+                parents.setdefault(target, set()).add((path, r.line))
+    pending, seen = list(out), set(out)
+    while pending:
+        for path, line in parents.get(pending.pop(), ()):
+            out.setdefault(path, set()).add(line)
+            if path not in seen:
+                seen.add(path)
+                pending.append(path)
+    return {path: sorted(lines) for path, lines in out.items()}
 
 
 def hides_macro(unknown: dict[str, list[int]], cls) -> bool:

@@ -350,7 +350,8 @@ def test_register_not_offered(tmp_path, cfg_text):
 
 
 @pytest.mark.parametrize("check", ["lint", "fix", "fix-all"])
-def test_register_does_not_duplicate_an_unknown_macro(tmp_path, check):
+@pytest.mark.parametrize("location", ["body", "include", "nested-include"])
+def test_register_does_not_duplicate_an_unknown_macro(tmp_path, check, location):
     from uvmls.fixes import fix_all
     text = 'import uvm_pkg::*;\n`include "uvm_macros.svh"\n' + COMPONENT
     unregistered = text.replace("  `uvm_component_utils(drv)\n", "")
@@ -360,6 +361,13 @@ def test_register_does_not_duplicate_an_unknown_macro(tmp_path, check):
     assert control.preferred and control.safe
     path = str(tmp_path / "t.sv")
     hidden = text.replace("`uvm_component_utils(drv)", "`project_component_utils(drv)")
+    if location != "body":
+        hidden = hidden.replace("`project_component_utils(drv)", '`include "registration.svh"')
+        registration = "`project_component_utils(drv)\n"
+        if location == "nested-include":
+            (tmp_path / "utils.svh").write_text(registration)
+            registration = '`include "utils.svh"\n'
+        (tmp_path / "registration.svh").write_text(registration)
     (tmp_path / "t.sv").write_text(hidden)
     w.reindex_all()
     assert slang_findings(w, "UnknownDirective")
@@ -375,6 +383,18 @@ def test_register_does_not_duplicate_an_unknown_macro(tmp_path, check):
     (tmp_path / "t.sv").write_text('`define project_component_utils(T) `uvm_component_utils(T)\n' + hidden)
     w.reindex_all()
     assert not findings(w, "create-unregistered") and user_errors(w) == []
+
+
+def test_register_unknown_include_does_not_hide_another_class(tmp_path):
+    text = 'import uvm_pkg::*;\n`include "uvm_macros.svh"\n' + COMPONENT
+    text = text.replace("  `uvm_component_utils(drv)\n", "")
+    text += 'class other extends uvm_object;\n  `include "registration.svh"\nendclass\n'
+    w = index(tmp_path, {"t.sv": text, "registration.svh": "`project_object_utils(other)\n"})
+    assert slang_findings(w, "UnknownDirective")
+    ds = findings(w, "create-unregistered")
+    assert len(ds) == 2 and all(d.data["target"] == "drv" for d in ds)
+    [fix] = offered(w, ds[0])
+    assert fix.preferred and fix.safe and "uvm_component_utils(drv)" in fix.title
 
 
 def test_no_finding_for_a_class_that_is_not_a_uvm_object(tmp_path):

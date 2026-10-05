@@ -279,6 +279,29 @@ def test_a_fix_in_another_file(client, tb):
     published(client, env_path, lambda ds: not ds)
 
 
+def test_registration_hidden_in_an_include_has_no_actions(tmp_path):
+    from test_fixes import COMPONENT
+    text = 'import uvm_pkg::*;\n`include "uvm_macros.svh"\n' + COMPONENT
+    path = tmp_path / "t.sv"
+    path.write_text(text)
+    (tmp_path / "alu_tb.f").write_text("t.sv\n")
+    (tmp_path / "registration.svh").write_text('`include "utils.svh"\n')
+    (tmp_path / "utils.svh").write_text("`project_component_utils(drv)\n")
+    c = start(str(tmp_path))
+    try:
+        doc = Doc(c, str(path))
+        doc.change(text.replace("  `uvm_component_utils(drv)\n", ""))
+        ds = doc.diagnostics(lambda ds: any(d["code"] == "create-unregistered" for d in ds))
+        [d, _] = [d for d in ds if d["code"] == "create-unregistered"]
+        assert any(a.get("isPreferred") for a in doc.actions([d]))
+        assert doc.actions([], only=["source.fixAll.uvm"])
+        doc.change(text.replace("`uvm_component_utils(drv)", '`include "registration.svh"'))
+        assert doc.actions([d]) == []
+        assert doc.actions([], only=["source.fixAll.uvm"]) == []
+    finally:
+        c.close()
+
+
 def test_fix_all(client, tb):
     doc = Doc(client, agent(tb))
     original = doc.text
