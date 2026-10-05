@@ -504,14 +504,17 @@ def canonical_type(ws: Workspace, text: str, ctx: ClassInfo | DesignUnit | Typed
         return t if t in BUILTIN_TYPES - {"bit", "logic", "reg", *INTEGRAL_ATOMS} else _integral_type(ws, t, ctx)
     scope, name, args = parsed
     package, imports = _type_scope(ctx)
-    td = ws.find_typedef(name, scope or package, ctx.name if isinstance(ctx, ClassInfo) else None,
-                         [scope] if scope else imports)
+    owners = [e.spec.cls for e in ws.chain(ctx) if e.spec.cls] if isinstance(ctx, ClassInfo) and not scope else []
+    td = next((t for c in owners for t in c.typedefs if t.name == name), None)
+    if td is None:
+        td = ws.find_typedef(name, scope or package, ctx.name if isinstance(ctx, ClassInfo) else None,
+                             [scope] if scope else imports)
     if td is not None and scope and scope not in (td.package, td.owner_class):
         td = None
     cls = ws.find_class(name, scope or package, [scope] if scope else imports)
     if td is not None and cls is not None and not scope:
         # Both lookups can fall back to unrelated declarations. A nearer class wins over a typedef.
-        scopes = ([(package, ctx.name)] if isinstance(ctx, ClassInfo) else []) + \
+        scopes = [(c.package, c.name) for c in owners] + \
             [(package, None)] + [(p, None) for p in imports] + [(None, None)]
         td_scope, cls_scope = (td.package, td.owner_class), (cls.package, cls.outer_class)
         if cls_scope in scopes and (td_scope not in scopes or scopes.index(cls_scope) < scopes.index(td_scope)):

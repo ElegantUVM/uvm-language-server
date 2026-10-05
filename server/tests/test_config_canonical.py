@@ -3,7 +3,8 @@
 import pytest
 import pyslang as P
 
-from test_fixes import findings, index
+from test_fixes import findings, index, offered
+from uvmls.elab import elaborate, request_for
 from uvmls.views import config_db_report
 
 
@@ -137,6 +138,52 @@ endpackage
     assert row["sets"][0]["canon"] == row["gets"][0]["canon"] == "p::box #(T=bit signed[31:0])"
     assert findings(w, "config-db-type-mismatch") == []
     assert row["status"] == "ok"
+
+
+@pytest.mark.parametrize("set_type,mismatch", [("int", False), ("p::item", True)])
+@pytest.mark.parametrize("imported_type", ["int", "byte"])
+@pytest.mark.parametrize("base", ["base", "middle"])
+def test_config_specialization_prefers_an_inherited_alias(tmp_path, set_type, mismatch, imported_type, base):
+    text = '''`include "uvm_macros.svh"
+package q; typedef IMPORTED item; endpackage
+package p;
+  import uvm_pkg::*;
+  import q::*;
+  class item; endclass
+  class box #(type T = int); endclass
+  class base extends uvm_env;
+    typedef int item;
+    function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  endclass
+  class middle extends base;
+    function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  endclass
+  class env extends BASE;
+    function new(string name, uvm_component parent); super.new(name, parent); endfunction
+    box #(SET) sent;
+    box #(item) received;
+    function void build_phase(uvm_phase phase);
+      uvm_config_db #(box #(SET)) a;
+      uvm_config_db #(box #(item)) b;
+      uvm_config_db #(box #(SET))::set(this, "*", "value", sent);
+      void'(uvm_config_db #(box #(item))::get(this, "", "value", received));
+      a = b;
+    endfunction
+  endclass
+endpackage
+module top; endmodule
+'''.replace("IMPORTED", imported_type).replace("BASE", base).replace("SET", set_type)
+    w = index(tmp_path, {"t.sv": text}, bundled=True)
+    result = elaborate(request_for(w))
+    assert result["error"] is None
+    assert [d["code"] for d in result["diagnostics"] if d["severity"] == "error"] == \
+        (["BadAssignment"] if mismatch else [])
+    [row] = config_db_report(w)["fields"]
+    assert row["gets"][0]["canon"] == "p::box #(T=bit signed[31:0])"
+    assert row["status"] == ("type-mismatch" if mismatch else "ok")
+    ds = findings(w, "config-db-type-mismatch")
+    assert len(ds) == int(mismatch)
+    assert all(offered(w, d) == [] for d in ds)
 
 
 @pytest.mark.parametrize("set_type,get_type,mismatch", [
