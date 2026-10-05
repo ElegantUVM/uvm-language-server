@@ -462,3 +462,34 @@ def test_full_reindex_moves_an_unopened_finding(tmp_path):
             'create("m_driver");', 'create("m_driver");  // uvm-lint: ignore create-no-parent')
     finally:
         c.close()
+
+
+@pytest.mark.parametrize('separator', ['\f', '\v', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029'])
+def test_incremental_edits_use_lsp_lines(client, tb, separator):
+    path = agent(tb)
+    with open(path) as f:
+        original = f.read()
+    call = '    m_monitor = alu_monitor::type_id::create("m_monitor", this);\n'
+    original = '// page' + separator + '\n' + original.replace(call, call + call)
+    doc = Doc(client, path, original)
+    try:
+        lines = original.split('\n')
+        line = [i for i, text in enumerate(lines) if text + '\n' == call][1]
+        col = lines[line].index(', this')
+        rng = {'start': {'line': line, 'character': col}, 'end': {'line': line, 'character': col + 6}}
+        doc.version += 1
+        doc.text = applied(original, [{'range': rng, 'newText': ''}])
+        client.notify('textDocument/didChange', {'textDocument': {'uri': doc.uri, 'version': doc.version},
+                                                'contentChanges': [{'range': rng, 'text': ''}]})
+        [d] = doc.diagnostics(lambda ds: any(x['code'] == 'create-no-parent' for x in ds))
+        assert d['range']['start']['line'] == line
+        [fix] = own_fixes(doc.actions([d]))
+        assert applied(doc.text, edits_for(fix, doc.uri, doc.version)) == original
+    finally:
+        doc.close()
+
+
+def test_document_lines_preserve_non_lsp_separators():
+    from uvmls.documents import TextDocument
+    doc = TextDocument('file:///t.sv', source='a\fb\r\nc\rd\n')
+    assert doc.lines == ('a\fb\r\n', 'c\r', 'd\n')

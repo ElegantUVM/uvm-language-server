@@ -17,6 +17,7 @@ from pygls.lsp.server import LanguageServer
 from pygls.uris import from_fs_path
 
 from . import __version__, elab, fixes
+from .documents import Workspace as LspWorkspace
 from .lints import lint
 from .model import Diag, Range
 from .navigation import Navigator
@@ -486,6 +487,9 @@ def _text(ls: UvmLanguageServer, uri: str) -> str:
 
 @server.feature(T.INITIALIZE)
 def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
+    workspace = ls.workspace
+    ls.protocol._workspace = LspWorkspace(workspace.root_uri, workspace_folders=list(workspace.folders.values()),
+                                           position_encoding=workspace.position_encoding)
     roots = []
     for f in params.workspace_folders or []:
         roots.append(uri_to_path(f.uri))
