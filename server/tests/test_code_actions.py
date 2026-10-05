@@ -505,6 +505,9 @@ def test_full_reindex_moves_an_unopened_finding(tmp_path):
         extra.write_text('// new file\n')
         c.notify('workspace/didChangeWatchedFiles', {'changes': [
             {'uri': path.as_uri(), 'type': 2}, {'uri': extra.as_uri(), 'type': 1}]})
+        # The finding is republished two lines down once the full re-index is done. Asking for a
+        # fix before that may get no actions: the request does not wait past its deadline.
+        published(c, str(path), lambda ds: [x['range']['start']['line'] for x in ds] == [d['range']['start']['line'] + 2])
         acts = c.request('textDocument/codeAction', {
             'textDocument': {'uri': path.as_uri()}, 'range': d['range'], 'context': {'diagnostics': [d]}})
         fix, ignore = acts
