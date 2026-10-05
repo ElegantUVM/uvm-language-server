@@ -37,6 +37,14 @@ DESCRIPTIONS = {
 }
 
 
+def _column(lines: list[str], line: int, col: int) -> int:
+    if not 0 <= line < len(lines):
+        return col + 1
+    # slang counts UTF-8 bytes; SARIF consumers use the run's declared character units.
+    prefix = lines[line].encode("utf-8")[:col].decode("utf-8", errors="replace")
+    return len(prefix.encode("utf-16-le")) // 2 + 1
+
+
 def build_log(root: str | Path, diagnostics: list[Diag]) -> dict:
     root = Path(root).resolve()
     rules, results, texts = {}, [], {}
@@ -60,16 +68,16 @@ def build_log(root: str | Path, diagnostics: list[Diag]) -> dict:
                 artifact = {"uri": quote(relative), "uriBaseId": "SRCROOT"}
             else:
                 artifact = {"uri": path.as_uri()}
-            region = {"startLine": span.line + 1, "startColumn": span.col + 1}
-            if (span.end_line, span.end_col) > (span.line, span.col):
-                region.update(endLine=span.end_line + 1, endColumn=span.end_col + 1)
-            result["locations"] = [{"physicalLocation": {"artifactLocation": artifact, "region": region}}]
             if path not in texts:
                 try:
                     texts[path] = path.read_text(encoding="utf-8", errors="replace").splitlines()
                 except OSError:
                     texts[path] = []
             lines = texts[path]
+            region = {"startLine": span.line + 1, "startColumn": _column(lines, span.line, span.col)}
+            if (span.end_line, span.end_col) > (span.line, span.col):
+                region.update(endLine=span.end_line + 1, endColumn=_column(lines, span.end_line, span.end_col))
+            result["locations"] = [{"physicalLocation": {"artifactLocation": artifact, "region": region}}]
             line = lines[span.line] if 0 <= span.line < len(lines) else ""
             identity = json.dumps([relative, d.code, " ".join(line.split())], ensure_ascii=False)
             result["partialFingerprints"] = {"primaryLocationLineHash": hashlib.sha256(identity.encode("utf-8")).hexdigest()}
@@ -79,6 +87,7 @@ def build_log(root: str | Path, diagnostics: list[Diag]) -> dict:
     for result in results:
         result["ruleIndex"] = indices[result["ruleId"]]
     return {"$schema": "https://json.schemastore.org/sarif-2.1.0.json", "version": "2.1.0", "runs": [{
+        "columnKind": "utf16CodeUnits",
         "tool": {"driver": {"name": "uvmls", "version": __version__, "informationUri": INFORMATION_URI,
                             "rules": [rules[code] for code in ordered]}},
         "originalUriBaseIds": {"SRCROOT": {"uri": root.as_uri().removesuffix("/") + "/"}},

@@ -20,6 +20,7 @@ def check_log(log):
     assert log["$schema"] == "https://json.schemastore.org/sarif-2.1.0.json"
     assert log["version"] == "2.1.0" and len(log["runs"]) == 1
     [run] = log["runs"]
+    assert run["columnKind"] == "utf16CodeUnits"
     driver = run["tool"]["driver"]
     assert driver["name"] == "uvmls" and driver["version"] == __version__
     assert driver["informationUri"].startswith("https://")
@@ -121,6 +122,39 @@ def test_info_crlf_and_non_ascii_path(tmp_path, capsys):
     assert result["ruleId"] == "unknown-base" and result["level"] == "note"
     assert result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == quote(path.name)
     assert result["locations"][0]["physicalLocation"]["region"]["startLine"] == 1
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_lint_columns_use_utf16(tb, capsys, newline):
+    path = tb / "agent" / "alu_agent.svh"
+    text = path.read_text().replace('alu_driver::type_id::create', '/* é😀 */ alu_driver::type_id::create')
+    path.write_bytes(text.replace("\n", newline).encode("utf-8"))
+    code, out = invoke(capsys, ["lint", str(tb), "-f", str(tb / "alu_tb.f"), "--sarif", "-"])
+    assert code == 1
+    [run] = json.loads(out.out)["runs"]
+    [result] = [r for r in run["results"] if r["ruleId"] == "create-no-parent"]
+    lines = text.split("\n")
+    line = next(i for i, s in enumerate(lines) if 'create("m_driver")' in s)
+    start = lines[line].index("alu_driver::")
+    end = lines[line].index(";", start)
+    assert result["locations"][0]["physicalLocation"]["region"] == {
+        "startLine": line + 1, "startColumn": len(lines[line][:start].encode("utf-16-le")) // 2 + 1,
+        "endLine": line + 1, "endColumn": len(lines[line][:end].encode("utf-16-le")) // 2 + 1}
+    assert run["columnKind"] == "utf16CodeUnits"
+
+
+def test_elab_columns_use_utf16(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("UVM_HOME", raising=False)
+    text = 'module top; /* é😀 */ initial $display(no_such); endmodule\n'
+    (tmp_path / "top.sv").write_text(text, encoding="utf-8")
+    code, out = invoke(capsys, ["elab", str(tmp_path), "--sarif", "-"])
+    assert code == 1
+    [run] = json.loads(out.out)["runs"]
+    [result] = [r for r in run["results"] if "no_such" in r["message"]["text"]]
+    col = len(text[:text.index("no_such")].encode("utf-16-le")) // 2 + 1
+    assert result["locations"][0]["physicalLocation"]["region"] == {
+        "startLine": 1, "startColumn": col, "endLine": 1, "endColumn": col + len("no_such")}
+    assert run["columnKind"] == "utf16CodeUnits"
 
 
 def test_rules_ranges_external_paths_and_fingerprints(tmp_path):
