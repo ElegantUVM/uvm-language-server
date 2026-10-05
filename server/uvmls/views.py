@@ -669,11 +669,12 @@ class ConfigDbReport(dict):
         self.by_field = {row["field"]: row for row in fields}
         self.dynamic_ids = {id(e) for e in dynamic}
         self.calls = calls
+        call_order = {key: i for i, key in enumerate(calls)}
         self.by_file: dict[str, list[dict]] = {}
         for entry in dynamic + [e for row in fields for e in row["sets"] + row["gets"]]:
             self.by_file.setdefault(entry["file"], []).append(entry)
         for entries in self.by_file.values():
-            entries.sort(key=lambda e: (e["line"], e["col"]))
+            entries.sort(key=lambda e: (e["line"], e["col"], call_order[id(e)]))
         self.near_index = None
 
 
@@ -688,13 +689,14 @@ def _build_config_db_report(ws: Workspace) -> ConfigDbReport:
     dynamic = []
     calls = {}
     for owner, c in config_db_calls(ws):
-        calls[c.range.path, c.range.line, c.range.col] = c
         entry = {"op": c.op, "db": c.db, "type": norm_type(c.type_text), "context": c.context,
                  "inst": c.inst, "instLiteral": c.inst_literal, "field": c.field_name,
                  "value": c.value, "owner": owner, "method": c.method,
                  "conditional": c.conditional, "optional": c.optional,
                  "canon": canonical_type(ws, c.type_text, ws.class_by_qual.get(owner) or ws.find_unit(owner)),
                  **_loc(c.range)}
+        # Several expanded calls can share the same macro invocation range.
+        calls[id(entry)] = c
         if not c.field_literal:
             dynamic.append(entry)
             continue

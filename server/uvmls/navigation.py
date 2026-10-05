@@ -398,7 +398,7 @@ class Navigator:
         report = config_db_report(self.ws)
         ranges = set()
         for other in row["gets" if entry["op"] == "set" else "sets"]:
-            rng = report.calls[other["file"], other["line"], other["col"]].field_range
+            rng = report.calls[id(other)].field_range
             if rng is not None:
                 ranges.add(rng)
         return sorted(ranges, key=lambda r: (r.path, r.line, r.col))
@@ -420,7 +420,7 @@ class Navigator:
     def config_db_at(self, path, line, col, method=False):
         report = config_db_report(self.ws)
         for entry in report.by_file.get(path, ()):
-            call = report.calls[path, entry["line"], entry["col"]]
+            call = report.calls[id(entry)]
             if not call.field_literal:
                 continue
             for rng in (call.field_range, call.method_range if method else None):

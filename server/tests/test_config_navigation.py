@@ -462,3 +462,98 @@ def test_config_definition_through_macro_arguments(macro_tb, occurrence):
     counterparts = (2, 3, 4) if occurrence < 2 else (0, 1)
     assert definitions(c, path, '"café😀"', occurrence=occurrence) == [
         literal_location(path, "café😀", i) for i in counterparts]
+
+
+@pytest.fixture(scope="module", params=["uvm_config_db", "uvm_resource_db"])
+def multi_macro_tb(tmp_path_factory, request):
+    root = tmp_path_factory.mktemp("config-multi-macros") / "café"
+    shutil.copytree(EXAMPLE, root)
+    db = request.param
+    context = 'this, ' if db == "uvm_config_db" else ''
+    get = "get" if db == "uvm_config_db" else "read_by_name"
+    put_call = f'{db} #(int)::set({context}"*", A, 1)'
+    get_call = f'void\'({db} #(int)::{get}({context}"", B, value))'
+    (root / "env/config_pairs.svh").write_text(
+        f'`define SET_PAIR(A, B) {put_call}; \\\n'
+        f'  {put_call.replace(", A,", ", B,")}\n'
+        '`define PAIR_WRAPPER(A, B) `SET_PAIR(A, B)\n'
+        f'`define ROUND_TRIP(A, B) {put_call}; {get_call}\n')
+    path = root / "env/alu_env.svh"
+    text = '`include "config_pairs.svh"\n' + path.read_text().replace("endclass", '''
+  function void macro_pairs();
+    int value;
+    string dynamic_field;
+    /* 😀 */ `SET_PAIR("z_first😀", "a_second");
+    /* 😀 */ `PAIR_WRAPPER("z_wrapped😀", "a_wrapped");
+    `SET_PAIR("repeated", "repeated");
+    `ROUND_TRIP("shared", "shared");
+    `SET_PAIR("literal", dynamic_field);
+    GETS
+  endfunction
+endclass'''.replace("GETS", "\n    ".join(get_call.replace("B,", f'"{field}",') + ";"
+    for field in ("z_first😀", "a_second", "z_wrapped😀", "a_wrapped", "repeated", "literal"))))
+    path.write_bytes(text.replace("\n", "\r\n").encode())
+    c = start(root, capabilities=CAPABILITIES, clientCommands=COMMANDS)
+    yield c, path
+    c.close()
+
+
+@pytest.mark.parametrize("field", ["z_first😀", "a_second", "z_wrapped😀", "a_wrapped", "literal"])
+def test_config_multi_macro_arguments_keep_distinct_navigation(multi_macro_tb, field):
+    c, path = multi_macro_tb
+    needle = '"' + field + '"'
+    result = c.request("textDocument/hover", at(path, needle, 2))
+    assert result is not None
+    assert result["contents"]["value"].startswith(f"**config_db '{field}'**")
+    assert result["range"] == literal_location(path, field)["range"]
+    assert definitions(c, path, needle, occurrence=1) == [literal_location(path, field)]
+    assert definitions(c, path, needle) == [literal_location(path, field, 1)]
+
+
+def test_config_multi_macro_same_field_keeps_every_set(multi_macro_tb):
+    c, path = multi_macro_tb
+    assert definitions(c, path, '"repeated"', occurrence=2) == [
+        literal_location(path, "repeated", i) for i in (0, 1)]
+    for i in (0, 1):
+        assert definitions(c, path, '"repeated"', occurrence=i) == [literal_location(path, "repeated", 2)]
+
+
+def test_config_multi_macro_same_field_keeps_operation(multi_macro_tb):
+    c, path = multi_macro_tb
+    for i in (0, 1):
+        assert definitions(c, path, '"shared"', occurrence=i) == [literal_location(path, "shared", 1 - i)]
+
+
+def test_config_multi_macro_lenses_keep_expansion_order(multi_macro_tb):
+    c, path = multi_macro_tb
+    found = config_lenses(c, path)
+    for first, second in (("z_first😀", "a_second"), ("z_wrapped😀", "a_wrapped")):
+        line = at(path, '"' + first + '"')["position"]["line"]
+        pair = [lens for lens in found if lens["range"]["start"]["line"] == line]
+        assert [lens["command"]["arguments"] for lens in pair] == [[{"field": first}], [{"field": second}]]
+    line = at(path, '"literal"')["position"]["line"]
+    pair = [lens for lens in found if lens["range"]["start"]["line"] == line]
+    assert [lens["command"]["arguments"] for lens in pair] == [[{"field": "literal"}], [{}]]
+
+
+def test_config_multi_macro_navigation_after_unsaved_edit(multi_macro_tb):
+    c, path = multi_macro_tb
+    doc = Doc(c, str(path))
+    c.wait_for("uvm/indexChanged")
+    try:
+        original = doc.text
+        doc.change("// moved\n" + original)
+        expected = literal_location(path, "z_first😀")
+        for pos in expected["range"].values():
+            pos["line"] += 1
+        params = at(path, '"z_first😀"', 2, 1)
+        params["position"]["line"] += 1
+        assert c.request("textDocument/definition", params) == [expected]
+        params = at(path, '"z_first😀"', 2)
+        params["position"]["line"] += 1
+        result = c.request("textDocument/hover", params)
+        assert result["range"] == expected["range"]
+        assert result["contents"]["value"].startswith("**config_db 'z_first😀'**")
+    finally:
+        doc.change(original)
+        c.request("uvm/stats", {})
