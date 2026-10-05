@@ -1,0 +1,105 @@
+name: UVM lint
+description: Report SystemVerilog and UVM diagnostics in code scanning.
+inputs:
+  filelist:
+    description: Simulator filelist, relative to the caller's workspace.
+    required: true
+  uvm-home:
+    description: UVM installation directory (otherwise use UVM_HOME or the bundled UVM 1.2).
+    required: false
+    default: ""
+  python-version:
+    description: Python version for the server.
+    default: "3.12"
+  elab:
+    description: Also elaborate and merge those diagnostics into the same SARIF run.
+    default: "false"
+  fail-on:
+    description: Fail on warning, error, or never (analysis failures still fail).
+    default: "warning"
+outputs:
+  sarif-file:
+    description: Absolute path to the SARIF report.
+    value: ${{ steps.scan.outputs.sarif-file }}
+  problems:
+    description: Number of results, including notes, in the merged report.
+    value: ${{ steps.scan.outputs.problems }}
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install the server
+      shell: bash
+      env:
+        UVMLS_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        cd "$UVMLS_ACTION_PATH"
+        python -m pip install pyslang 'pygls>=2,<3'
+        python -m pip install ./server
+    - name: Run lint and optional elaboration
+      id: scan
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        UVMLS_ACTION_PATH: ${{ github.action_path }}
+        UVMLS_FILELIST: ${{ inputs.filelist }}
+        UVMLS_UVM_HOME: ${{ inputs.uvm-home }}
+        UVMLS_ELAB: ${{ inputs.elab }}
+      run: |
+        if [[ "$UVMLS_ELAB" != "true" && "$UVMLS_ELAB" != "false" ]]; then
+          echo "elab must be true or false" >&2
+          exit 2
+        fi
+        args=(-f "$UVMLS_FILELIST")
+        if [[ -n "$UVMLS_UVM_HOME" ]]; then
+          args+=(--uvm-home "$UVMLS_UVM_HOME")
+        fi
+        lint_status=0
+        python -m uvmls lint "${args[@]}" --sarif uvmls.sarif || lint_status=$?
+        reports=(uvmls.sarif)
+        elab_status=0
+        if [[ "$UVMLS_ELAB" == "true" ]]; then
+          python -m uvmls elab "${args[@]}" --sarif uvmls-elab.sarif --json > uvmls-elab.json || elab_status=$?
+          reports+=(uvmls-elab.sarif)
+        fi
+        python "$UVMLS_ACTION_PATH/tools/merge_sarif.py" "${reports[@]}" -o uvmls.sarif >> "$GITHUB_OUTPUT"
+        printf 'sarif-file=%s/uvmls.sarif\n' "$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
+        printf 'lint-status=%s\nelab-status=%s\n' "$lint_status" "$elab_status" >> "$GITHUB_OUTPUT"
+    - name: Upload SARIF
+      if: ${{ always() && steps.scan.outcome == 'success' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: uvmls.sarif
+        wait-for-processing: false
+    - name: Apply the failure policy
+      if: ${{ always() && steps.scan.outcome == 'success' }}
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        UVMLS_FAIL_ON: ${{ inputs.fail-on }}
+        UVMLS_ELAB: ${{ inputs.elab }}
+        UVMLS_LINT_STATUS: ${{ steps.scan.outputs.lint-status }}
+        UVMLS_ELAB_STATUS: ${{ steps.scan.outputs.elab-status }}
+      run: |
+        python - <<'PY'
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        policy = os.environ["UVMLS_FAIL_ON"]
+        if policy not in ("warning", "error", "never"):
+            sys.exit("fail-on must be warning, error, or never")
+        if any(int(os.environ[key]) not in (0, 1) for key in ("UVMLS_LINT_STATUS", "UVMLS_ELAB_STATUS")):
+            sys.exit("lint or elaboration could not complete; see the scan step")
+        levels = {"warning": {"warning", "error"}, "error": {"error"}, "never": set()}[policy]
+        report = json.loads(Path("uvmls.sarif").read_text(encoding="utf-8"))
+        failed = any(r["level"] in levels for r in report["runs"][0]["results"])
+        if os.environ.get("UVMLS_ELAB") == "true":
+            counts = json.loads(Path("uvmls-elab.json").read_text(encoding="utf-8"))["counts"]
+            failed |= any(counts[level + "s"] for level in levels)
+        sys.exit(int(failed))
+        PY

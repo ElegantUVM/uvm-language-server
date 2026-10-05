@@ -4,12 +4,14 @@ easily. Running the whole suite on 3.10 is the full check (README, Tests)."""
 
 import ast
 import io
+import os
 import sys
 import tokenize
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parent.parent
 SOURCES = sorted(p for d in ("uvmls", "tests", "tools") for p in (SERVER / d).rglob("*.py"))
+SOURCES += sorted((SERVER.parent / "tools").rglob("*.py"))
 OLDEST = (3, 10)
 
 
@@ -60,7 +62,7 @@ def _pep701(source: str) -> set[tuple[int, str]]:
 
 
 def test_sources_parse_on_the_oldest_python():
-    found = {str(p.relative_to(SERVER)): newer_syntax(p.read_text(encoding="utf-8")) for p in SOURCES}
+    found = {os.path.relpath(p, SERVER): newer_syntax(p.read_text(encoding="utf-8")) for p in SOURCES}
     assert "uvmls/server.py" in found and {path: what for path, what in found.items() if what} == {}
 
 

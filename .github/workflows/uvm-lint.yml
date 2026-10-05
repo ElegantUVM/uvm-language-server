@@ -1,0 +1,20 @@
+name: UVM lint
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check out the sources
+        uses: actions/checkout@v4
+      - name: Lint and elaborate the ALU example
+        uses: ./
+        with:
+          filelist: examples/alu_tb/alu_tb.f
+          elab: "true"

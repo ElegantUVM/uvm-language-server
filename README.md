@@ -60,6 +60,33 @@ m = mon::type_id::create("m"); // uvm-lint: ignore create-no-parent
 
 Use the code shown in Problems or `uvmls lint`; separate several codes with commas. A directive after code applies to that line. On its own line it applies to the next line containing code, skipping blank lines and comments. It is not a block-wide waiver, and preprocessor directives count as code. The CLI honours it too. slang parse and elaboration errors cannot be waived this way.
 
+## CI
+
+`lint --sarif FILE` and `elab --sarif FILE` write SARIF 2.1.0 reports for code scanning. The composite [UVM lint action](action.yml) installs the server, runs lint on the caller's checkout and uploads `uvmls.sarif`. Results appear under **Security > Code scanning** when code scanning is enabled for the repository. The workflow needs `contents: read`, `actions: read` and `security-events: write` permissions.
+
+| Input | Default | Meaning |
+|---|---|---|
+| `filelist` | required | Simulator filelist, relative to the caller's workspace. |
+| `uvm-home` | empty | UVM installation directory; otherwise use `$UVM_HOME`, a project UVM or the bundled UVM 1.2. |
+| `python-version` | `3.12` | Python version for the server (3.10 or newer). |
+| `elab` | `false` | Also elaborate and merge its diagnostics into the same SARIF run. |
+| `fail-on` | `warning` | `warning` fails on warnings or errors, matching `lint`'s exit code. `error` fails only on errors; `never` does not fail on findings. Notes never fail. |
+
+The action uploads before applying `fail-on`, so findings are available even when the check fails. Installation, analysis and upload failures still fail the action. Outputs are `sarif-file` (the report's absolute path) and `problems` (the number of listed results, including notes). With `elab: "true"`, it runs the two CLI commands separately and uses [tools/merge_sarif.py](tools/merge_sarif.py) to merge their rules and results into one run, preserving fingerprints. Findings reported by both commands remain separate results. The failure policy uses elaboration's full counts, including diagnostics beyond its listing limit.
+
+The [sample workflow](.github/workflows/uvm-lint.yml) runs on push and pull requests against `examples/alu_tb/alu_tb.f`, with elaboration enabled and a two-minute job limit. It checks out this repository and uses the local action:
+
+```yaml
+- uses: actions/checkout@v4
+- uses: ./
+  with:
+    filelist: examples/alu_tb/alu_tb.f
+    elab: "true"
+    fail-on: warning
+```
+
+For another project, check out this action alongside the project and use that local action path. The server is installed from the action's directory; the filelist and source paths remain relative to the project's checkout.
+
 ## Try it
 
 ```bash
