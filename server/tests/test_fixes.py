@@ -1269,6 +1269,24 @@ def test_missing_include_candidates(tmp_path):
         [f"Add '{tmp_path / 'b' / 'inc'}' to uvm.includeDirs"]
 
 
+@pytest.mark.parametrize('names,expected', [
+    (('uart', 'spi', 'i2c'), ['ip/i2c/rtl', 'ip/spi/rtl', 'ip/uart/rtl']),
+    (('uart', 'spi', 'i2c', 'gpio'), []),
+    (('uart', 'spi', 'i2c', 'gpio', 'usb'), []),
+    (('aaaa_long', 'zz'), ['ip/zz/rtl', 'ip/aaaa_long/rtl']),
+])
+def test_missing_include_candidate_limit_and_order(tmp_path, names, expected):
+    files = {f'ip/{n}/rtl/defines.svh': 'int q;\n' for n in names}
+    files['tb/tb.sv'] = '`include "defines.svh"\nmodule tb; endmodule\n'
+    files['tb/tb.f'] = 'tb.sv\n'
+    w = index(tmp_path, files, filelists=[str(tmp_path / 'tb' / 'tb.f')])
+    [d] = slang_findings(w, 'CouldNotOpenIncludeFile')
+    fixes = offered(w, d, commands=frozenset({'uvm.addIncludeDir'}))
+    assert [f.command[1][0]['value'] for f in fixes if f.command] == expected
+    assert len([f for f in fixes if f.changes]) == len(expected)
+    assert not any(f.preferred for f in fixes)
+
+
 @pytest.mark.parametrize("name", ["../inc/sub/hdr.svh", "/abs/sub/hdr.svh", "nowhere.svh"])
 def test_missing_include_not_offered(tmp_path, name):
     w = index(tmp_path, {"inc/sub/hdr.svh": "int q;\n", "t.sv": f'`include "{name}"\nmodule t; endmodule\n'})

@@ -746,7 +746,7 @@ def include_dirs_for(ws, name: str, near: str) -> list[str]:
     files = discover_files(ws.config.workspace_roots, ws.config.exclude, match=lambda fn: fn == base)
     have = set(ws.sources.include_dirs) if ws.sources else set()
     dirs = [d for d in dict.fromkeys(f[:-len(tail)] for f in files if f.endswith(tail)) if d not in have]
-    return sorted(dirs, key=lambda d: (-len(os.path.commonpath([d, near])), d))
+    return sorted(dirs, key=lambda d: (-len(os.path.commonpath([d, near])), len(d), d))
 
 
 def setting_value(ws, path: str) -> str:
@@ -793,7 +793,9 @@ def _filelist_for(ws, path: str) -> str | None:
 def _missing_include(ctx: Context, d) -> list[Fix]:
     """An `include slang cannot open, of a file that is in the workspace: add the directory that
     holds it, as the include names it, to uvm.includeDirs (through the editor), or to the filelist."""
-    dirs = include_dirs_for(ctx.ws, (d.data or {}).get("include") or "", d.range.path)[:3]
+    dirs = include_dirs_for(ctx.ws, (d.data or {}).get("include") or "", d.range.path)
+    if len(dirs) > 3:
+        return []  # too many candidates to suggest a directory
     filelist = _filelist_for(ctx.ws, d.range.path)
     command = "uvm.addIncludeDir"
     fixes = []
