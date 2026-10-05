@@ -293,6 +293,7 @@ class FileIndex:
 
     root: str
     files: set[str] = field(default_factory=set)
+    texts: dict[str, str] = field(default_factory=dict)  # indexed user text, for edit anchors
     classes: list[ClassInfo] = field(default_factory=list)
     typedefs: list[Typedef] = field(default_factory=list)
     units: list[DesignUnit] = field(default_factory=list)

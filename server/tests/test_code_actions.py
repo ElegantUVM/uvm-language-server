@@ -437,3 +437,28 @@ def test_stale_finding_only_matches_the_replaced_lines():
     assert current_finding(sent, [diag(1), diag(2)], then, then.replace('first', 'edited')).range.line == 1
     assert current_finding(sent, [diag(1)], then, then.replace('first\n', '')) is None
     assert current_finding(sent, [diag(2)], then, then) is None
+
+
+def test_full_reindex_moves_an_unopened_finding(tmp_path):
+    root = tmp_path / 'tb'
+    shutil.copytree(EXAMPLE, root)
+    path = root / 'agent' / 'alu_agent.svh'
+    planted = path.read_text().replace('create("m_driver", this)', 'create("m_driver")')
+    path.write_text(planted)
+    c = start(str(root))
+    try:
+        [d] = published(c, str(path), lambda ds: ds)
+        text = '// inserted\n// another\n' + planted
+        path.write_text(text)
+        extra = root / 'new.sv'
+        extra.write_text('// new file\n')
+        c.notify('workspace/didChangeWatchedFiles', {'changes': [
+            {'uri': path.as_uri(), 'type': 2}, {'uri': extra.as_uri(), 'type': 1}]})
+        acts = c.request('textDocument/codeAction', {
+            'textDocument': {'uri': path.as_uri()}, 'range': d['range'], 'context': {'diagnostics': [d]}})
+        fix, ignore = acts
+        assert applied(text, edits_for(fix, path.as_uri())) == text.replace('create("m_driver")', 'create("m_driver", this)')
+        assert applied(text, edits_for(ignore, path.as_uri())) == text.replace(
+            'create("m_driver");', 'create("m_driver");  // uvm-lint: ignore create-no-parent')
+    finally:
+        c.close()

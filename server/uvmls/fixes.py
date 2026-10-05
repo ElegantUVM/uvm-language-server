@@ -172,6 +172,13 @@ class Context:
     path: str  # the file the fixes are asked for
     nav: object = None  # Navigator, to find what a name in the code is
 
+    _indexed: dict[str, FileText] = field(default_factory=dict, init=False)
+
+    def indexed_text(self, path: str) -> FileText | None:
+        if path not in self._indexed and path in self.ws.texts:
+            self._indexed[path] = FileText(path, self.ws.texts[path])
+        return self._indexed.get(path)
+
     def not_editable(self, path: str) -> str | None:
         """Why a fix may not edit a file, or None. The library is never edited, nor a file outside
         the workspace folders (other than the one asked about)."""
@@ -840,6 +847,10 @@ def _ignore(ctx: Context, d) -> list[Fix]:
     ft = ctx.files.get(d.range.path)
     at = ft and ft.offset(d.range.line, d.range.col)  # the finding: code, so not in a comment
     if at is None or not re.fullmatch(r"[\w-]+", code or ""):
+        return []
+    indexed = ctx.indexed_text(d.range.path)
+    if indexed is not None and (d.range.line >= len(indexed.starts) or
+                                indexed.line(d.range.line) != ft.line(d.range.line)):
         return []
     n, title = d.range.line, f"Ignore '{code}' on this line"
     rest = ft.text[at:ft.ends[n]]

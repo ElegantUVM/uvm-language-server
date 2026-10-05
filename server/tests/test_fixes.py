@@ -1777,7 +1777,9 @@ def test_ignore_not_offered(tmp_path):
     path = d.range.path
 
     def on(text: str, line: int, col: int, code="create-new") -> list:
-        ctx = Context(w, FileTexts({path: (text, 1)}), Client(roots=[str(tmp_path)]), path)
+        inline = index(tmp_path / "inline", {"t.sv": text})
+        path = str(tmp_path / "inline" / "t.sv")
+        ctx = Context(inline, FileTexts({path: (text, 1)}), Client(roots=[str(tmp_path)]), path)
         return ignore_fixes(ctx, Diag(Range(path, line, col, line, col + 1), "x", "warning", code, "uvm"))
     assert on('    x = "abc\n', 0, 4) == [] and on('    x = "abc";\n', 0, 4) != []
     assert on("    x = y;  // uvm-lint: ignore a,create-new\n", 0, 4) == []

@@ -116,11 +116,12 @@ class UvmLanguageServer(LanguageServer):
         self.settings: dict = {}
         self.workspace_roots: list[str] = []
         self.published: dict[str, list[Diag]] = {}  # what the client was last sent, per file
-        self.diag_texts: dict[str, str | None] = {}  # the editor text those describe (None: the disk's)
+        self.diag_texts: dict[str, str | None] = {}  # indexed text those describe, including unopened files
         self.client_commands: frozenset[str] = frozenset()  # client-side commands it can run
         self.pending: set[str] = set()
         self._debounce: asyncio.TimerHandle | None = None
         self._flush_task: asyncio.Future | None = None
+        self._index_task: asyncio.Future | None = None
         self.elab_diags: dict[str, list[Diag]] = {}
         self.elab_texts: dict[str, str] = {}  # the unsaved editor text those diagnostics come from
         self.elab_shown: list[str] = []  # the severity Problems shows for each of them
@@ -139,6 +140,16 @@ class UvmLanguageServer(LanguageServer):
         return ProjectConfig.from_settings(self.workspace_roots, self.settings)
 
     async def full_index(self):
+        previous = self._index_task
+
+        async def work():
+            if previous is not None and not previous.done():
+                await asyncio.shield(previous)
+            await self._full_index()
+        self._index_task = asyncio.ensure_future(work())
+        await asyncio.shield(self._index_task)
+
+    async def _full_index(self):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self.ws.configure, self.config())
         for w in self.ws.sources.warnings if self.ws.sources else []:
@@ -166,20 +177,27 @@ class UvmLanguageServer(LanguageServer):
         False if that takes longer than `timeout`. Cancelling the wait never cancels the indexing."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
-        while self.pending or (self._flush_task is not None and not self._flush_task.done()):
-            if self._flush_task is None or self._flush_task.done():
-                if self._debounce is not None:
-                    self._debounce.cancel()
-                self._start_flush()
+        while True:
+            task = self._index_task
+            if task is None or task.done():
+                task = self._flush_task
+                if task is None or task.done():
+                    if not self.pending:
+                        return True
+                    if self._debounce is not None:
+                        self._debounce.cancel()
+                    self._start_flush()
+                    task = self._flush_task
             try:
-                await asyncio.wait_for(asyncio.shield(self._flush_task), max(0.0, deadline - loop.time()))
+                await asyncio.wait_for(asyncio.shield(task), max(0.0, deadline - loop.time()))
             except asyncio.TimeoutError:
                 return False
             except Exception:  # logged by the flush itself; the index may not be current
                 return False
-        return True
 
     async def flush(self):
+        if self._index_task is not None and not self._index_task.done():
+            await asyncio.shield(self._index_task)
         paths, self.pending = self.pending, set()
         loop = asyncio.get_running_loop()
         docs, basis = self.documents, self.elab_basis
@@ -247,7 +265,7 @@ class UvmLanguageServer(LanguageServer):
                 self.text_document_publish_diagnostics(T.PublishDiagnosticsParams(path_to_uri(path), items))
         self.published = per_file
         # Unchanged or not, what the client shows now describes this text.
-        self.diag_texts = {path: docs.get(path) for path in per_file}
+        self.diag_texts = {path: self.ws.texts.get(path, docs.get(path)) for path in per_file}
 
     def current_elab_diags(self, path: str, diags: list[Diag], docs: dict[str, str]) -> list[Diag]:
         """The last run's diagnostics for a file, on the lines they are on now: an edit since that run
@@ -862,7 +880,8 @@ def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], 
     ctx = fixes.Context(ls.ws, files, client, path, ls.nav)
     make = _Actions(ls, files, uris)
     published = ls.published.get(path, [])
-    now = docs.get(path, (None,))[0]
+    ft = files.get(path)
+    now = ft.text if ft else None
     out = []
     per_code: dict[str, T.CodeAction | None] = {}
     order = sorted(incoming, key=lambda d: (d.severity or 4, d.range.start.line, d.range.start.character))
@@ -907,8 +926,12 @@ async def code_action(ls: UvmLanguageServer, params: T.CodeActionParams):
         log.debug("codeAction: the index did not catch up in time")
         return None
     t1 = time.perf_counter()
-    with ls.ws.lock:
+    if not ls.ws.lock.acquire(blocking=False):
+        return None
+    try:
         actions = code_actions(ls, uri, incoming, then, fix_all)
+    finally:
+        ls.ws.lock.release()
     log.debug("codeAction: %d action(s) in %.1f ms after waiting %.1f ms", len(actions),
               (time.perf_counter() - t1) * 1000, (t1 - t0) * 1000)
     return actions or None

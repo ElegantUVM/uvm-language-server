@@ -1275,11 +1275,12 @@ class Extractor:
             text = self.overrides.get(path)
             if text is None:
                 try:
-                    with open(path, encoding="utf-8-sig", errors="replace") as f:
+                    with open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
                         text = f.read()
                 except OSError:
                     continue
             if not self.library:
+                self.out.texts[path] = text
                 self.collect_ignores(path, text)
             line, pos = 0, 0
             branches: list[tuple[list, list]] = []  # per open `ifdef: (tested, what this branch needs)

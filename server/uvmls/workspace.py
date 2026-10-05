@@ -138,6 +138,7 @@ class Workspace:
     # -- building ------------------------------------------------------------
 
     def _clear_maps(self):
+        self.texts: dict[str, str] = {}
         self.classes: list[ClassInfo] = []
         self.classes_by_name: dict[str, list[ClassInfo]] = {}
         self.class_by_qual: dict[str, ClassInfo] = {}
@@ -216,6 +217,7 @@ class Workspace:
         self.version += 1
         seen_decl: set[tuple[str, int, str]] = set()
         for idx in self.indices.values():
+            self.texts.update(idx.texts)
             if idx.library:
                 self.library_files |= idx.files
             for cls in idx.classes:
