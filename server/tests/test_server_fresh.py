@@ -4,10 +4,12 @@ import asyncio
 import threading
 import time
 
+import pytest
 from lsprotocol import types as T
 from pygls.workspace import Workspace as LspWorkspace
 
 from test_fixes import WAIVE, M, findings, fixes_ignore, index
+from uvmls import elab
 from uvmls.server import UvmLanguageServer, code_action
 
 
@@ -102,4 +104,72 @@ def test_full_index_overlapping_flush_keeps_the_action_deadline(tmp_path):
         finally:
             await full
             await ls._flush_task
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('superseded', [False, True])
+@pytest.mark.parametrize('started', [False, True])
+def test_elaboration_during_index_keeps_the_action_deadline(tmp_path, monkeypatch, superseded, started):
+    async def run():
+        ls = UvmLanguageServer()
+        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol.client_capabilities = T.ClientCapabilities()
+        ls.settings = {'elaboration': 'off'}
+        ls.protocol.notify = lambda *args: None
+        published = []
+        ls.text_document_publish_diagnostics = published.append
+        compiling, finish = asyncio.Event(), asyncio.Event()
+        configuring = threading.Event()
+        path = tmp_path / 't.sv'
+
+        async def worker(run, request):
+            compiling.set()
+            await finish.wait()
+            return {'diagnostics': [{'file': str(path), 'line': 0, 'col': 0, 'endLine': 0, 'endCol': 1,
+                                      'message': 'test error', 'severity': 'error', 'code': 'test', 'related': []}],
+                    'counts': {'errors': 1}}
+
+        def configure(config):
+            with ls.ws.lock:
+                configuring.set()
+                time.sleep(.4)
+
+        ls.run_worker = worker
+        ls.ws.configure = configure
+        monkeypatch.setattr(elab, 'skip_reason', lambda ws: None)
+        monkeypatch.setattr(elab, 'request_for', lambda ws, overrides: {'overrides': {}})
+        original_fresh = ls.fresh
+
+        async def fresh():
+            return await original_fresh(timeout=.08)
+        ls.fresh = fresh
+        if started:
+            compilation = asyncio.create_task(ls._elaborate(ls._elab_run))
+            await compiling.wait()
+        full = asyncio.create_task(ls.full_index())
+        while not configuring.is_set():
+            await asyncio.sleep(.001)
+        if not started:
+            compilation = asyncio.create_task(ls._elaborate(ls._elab_run))
+        rng = T.Range(T.Position(0, 0), T.Position(0, 1))
+        params = T.CodeActionParams(T.TextDocumentIdentifier(path.as_uri()), rng,
+                                    T.CodeActionContext([T.Diagnostic(rng, 'x', source='uvm', code='x')]))
+        asyncio.get_running_loop().call_later(.01, finish.set)
+        start = time.monotonic()
+        try:
+            assert await code_action(ls, params) is None
+            assert time.monotonic() - start < .25
+            assert not full.done() and not compilation.done()
+            assert ls.elab_status['state'] == ('running' if started else 'off')
+            if superseded:
+                ls.stop_elaboration()
+        finally:
+            await full
+            result = await compilation
+        if superseded:
+            assert result is None and not ls.elab_diags and not published
+        else:
+            assert result['state'] == 'done' and result['errors'] == 1
+            assert ls.elab_diags[str(path)][0].message == 'test error'
+            assert published[-1].diagnostics[0].message == 'test error'
     asyncio.run(run())

@@ -403,15 +403,18 @@ class UvmLanguageServer(LanguageServer):
             return self.elab_status
 
     async def _elaborate(self, run: int) -> dict | None:
-        with self.ws.lock:
-            reason = elab.skip_reason(self.ws)
-            request = None if reason else elab.request_for(self.ws, self.elab_overrides())
-            uvm = elab.uvm_label(self.ws.sources)
-        if reason:
-            self.elab_diags, self.elab_texts = {}, {}
-            self.publish_diagnostics()
-            self.notify_elaboration({"state": "skipped", "message": reason, "uvm": uvm})
-            return self.elab_status
+        async with self._index_lock:
+            if run != self._elab_run:
+                return None
+            with self.ws.lock:
+                reason = elab.skip_reason(self.ws)
+                request = None if reason else elab.request_for(self.ws, self.elab_overrides())
+                uvm = elab.uvm_label(self.ws.sources)
+            if reason:
+                self.elab_diags, self.elab_texts = {}, {}
+                self.publish_diagnostics()
+                self.notify_elaboration({"state": "skipped", "message": reason, "uvm": uvm})
+                return self.elab_status
         self.notify_elaboration({"state": "running", "uvm": uvm})
         t0 = time.monotonic()
         result = await self.run_worker(run, request)
@@ -441,17 +444,20 @@ class UvmLanguageServer(LanguageServer):
             if counts.get("libraryErrors"):
                 notes.append(f"{counts['libraryErrors']} error(s) the UVM library reports on its own "
                              "are not shown")
-        self.elab_diags, self.elab_texts = per_file, request["overrides"]
-        self.publish_diagnostics()
-        # The counts describe what Problems shows: an error the index already reports is shown once.
-        placed = [d.severity for ds in per_file.values() for d in ds]
-        errors, warnings = (counts.get(s + "s", 0) + self.elab_shown.count(s) - placed.count(s)
-                            for s in ("error", "warning"))
-        self.notify_elaboration({"state": "failed" if result.get("error") else "done",
-                                 "errors": errors, "warnings": warnings,
-                                 "seconds": round(time.monotonic() - t0, 2), "message": "; ".join(notes),
-                                 "uvm": uvm})
-        return self.elab_status
+        async with self._index_lock:
+            if run != self._elab_run:
+                return None
+            self.elab_diags, self.elab_texts = per_file, request["overrides"]
+            self.publish_diagnostics()
+            # The counts describe what Problems shows: an error the index already reports is shown once.
+            placed = [d.severity for ds in per_file.values() for d in ds]
+            errors, warnings = (counts.get(s + "s", 0) + self.elab_shown.count(s) - placed.count(s)
+                                for s in ("error", "warning"))
+            self.notify_elaboration({"state": "failed" if result.get("error") else "done",
+                                     "errors": errors, "warnings": warnings,
+                                     "seconds": round(time.monotonic() - t0, 2), "message": "; ".join(notes),
+                                     "uvm": uvm})
+            return self.elab_status
 
     async def run_worker(self, run: int, request: dict) -> dict | None:
         """`python -m uvmls elab-worker` on the request: pyslang holds the GIL while it compiles."""
