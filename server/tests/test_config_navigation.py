@@ -303,7 +303,7 @@ def test_config_navigation_follows_unsaved_set_location(tb):
         c.close()
 
 
-@pytest.mark.parametrize("method", ["codeLens"])
+@pytest.mark.parametrize("method", ["codeLens", "hover"])
 @pytest.mark.parametrize("edited", ["env/alu_env.svh", "agent/alu_driver.svh"])
 def test_config_navigation_flushes_pending_edits(tb, method, edited):
     c = start(tb, capabilities=CAPABILITIES, clientCommands=COMMANDS)
@@ -312,19 +312,31 @@ def test_config_navigation_flushes_pending_edits(tb, method, edited):
     try:
         doc = Doc(c, str(path))
         c.wait_for("uvm/indexChanged")
-        params = {"textDocument": {"uri": driver.as_uri()}}
+        params = at(driver, '"alu_agent_config"')
+        if method == "codeLens":
+            params.pop("position")
         before = c.request("textDocument/" + method, params)
         expected = deepcopy(before)
-        for lens in expected:
+        if method == "hover":
+            old, new = ("alu_driver.svh:14", "alu_driver.svh:15") if path == driver else \
+                       ("alu_env.svh:16", "alu_env.svh:17")
+            expected["contents"]["value"] = expected["contents"]["value"].replace(old, new)
             if path == driver:
-                for pos in lens["range"].values():
+                for pos in expected["range"].values():
                     pos["line"] += 1
-            elif lens["command"]["command"] == "uvm.revealLocation":
-                lens["command"]["title"] = lens["command"]["title"].replace(":16", ":17")
-                target = lens["command"]["arguments"][0]
-                target["line"] += 1
-                target["endLine"] += 1
+        else:
+            for lens in expected:
+                if path == driver:
+                    for pos in lens["range"].values():
+                        pos["line"] += 1
+                elif lens["command"]["command"] == "uvm.revealLocation":
+                    lens["command"]["title"] = lens["command"]["title"].replace(":16", ":17")
+                    target = lens["command"]["arguments"][0]
+                    target["line"] += 1
+                    target["endLine"] += 1
         doc.change("// moved\n" + doc.text)
+        if path == driver and "position" in params:
+            params["position"]["line"] += 1
         assert c.request("textDocument/" + method, params) == expected
     finally:
         c.close()
@@ -375,3 +387,65 @@ def test_config_lenses_refresh_after_index_and_settings(tb, support, refresh):
         assert requests.count("workspace/codeLens/refresh") == 4 * count
     finally:
         c.close()
+
+
+@pytest.fixture(scope="module", params=["uvm_config_db", "uvm_resource_db"])
+def macro_tb(tmp_path_factory, request):
+    root = tmp_path_factory.mktemp("config-macros") / "café"
+    shutil.copytree(EXAMPLE, root)
+    db = request.param
+    context = 'this, ' if db == "uvm_config_db" else ''
+    get = "get" if db == "uvm_config_db" else "read_by_name"
+    put_call = f'{db} #(int)::set({context}"*", F, 1)'
+    get_call = f'{db} #(int)::{get}({context}"", F, value)'
+    (root / "env/config_macros.svh").write_text(
+        f'`define PUT_CONFIG(F) {put_call}\n'
+        f'`define GET_CONFIG(F) void\'({get_call})\n'
+        '`define PUT_WRAPPER(F) `PUT_CONFIG(F)\n'
+        '`define GET_WRAPPER(F) `GET_CONFIG(F)\n'
+        '`define BODY_CONFIG `PUT_CONFIG("body_field")\n'
+        f'`define CALL_CONFIG(OP,F) {db} #(int)::OP({context}"", F, value)\n')
+    path = root / "env/alu_env.svh"
+    text = '`include "config_macros.svh"\n' + path.read_text().replace("endclass", '''
+  function void macro_examples();
+    int value;
+    /* 😀 */ `PUT_CONFIG("café😀");
+    `PUT_WRAPPER("café😀");
+    GET_CALL;
+    `GET_CONFIG("café😀");
+    `GET_WRAPPER(
+      "café😀");
+    `BODY_CONFIG;
+    `CALL_CONFIG(set, "method_field");
+    `CALL_CONFIG(GET_METHOD, "method_field");
+  endfunction
+endclass'''.replace("GET_CALL", "void'(" + get_call.replace("F", '"café😀"') + ")").replace("GET_METHOD", get))
+    path.write_bytes(text.replace("\n", "\r\n").encode())
+    c = start(root, capabilities=CAPABILITIES, clientCommands=COMMANDS)
+    yield c, path
+    c.close()
+
+
+@pytest.mark.parametrize("occurrence", [0, 1, 3, 4])
+def test_config_hover_on_macro_argument(macro_tb, occurrence):
+    c, path = macro_tb
+    result = c.request("textDocument/hover", at(path, '"café😀"', 2, occurrence))
+    assert result is not None
+    assert result["contents"]["value"] == hover(c, path, '"café😀"', 2, 2)
+    assert result["range"] == literal_location(path, "café😀", occurrence)["range"]
+
+
+def test_config_hover_does_not_claim_macro_generated_tokens(macro_tb):
+    c, path = macro_tb
+    for needle in ("`BODY_CONFIG", "`PUT_CONFIG", "`PUT_WRAPPER"):
+        assert "**config_db" not in hover(c, path, needle, 2)
+
+
+def test_config_hover_on_macro_method_argument(macro_tb):
+    c, path = macro_tb
+    for occurrence in (0, 1):
+        params = at(path, "`CALL_CONFIG(", len("`CALL_CONFIG("), occurrence)
+        result = c.request("textDocument/hover", params)
+        assert result["contents"]["value"] == hover(c, path, '"method_field"', 2, occurrence)
+        assert result["range"] == {"start": params["position"],
+                                   "end": at(path, ', "method_field"', occurrence=occurrence)["position"]}

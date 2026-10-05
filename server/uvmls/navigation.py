@@ -405,7 +405,7 @@ class Navigator:
             if not call.field_literal:
                 continue
             for rng in (call.field_range, call.method_range if method else None):
-                if rng and (rng.line, rng.col) <= (line, col) < (rng.end_line, rng.end_col):
+                if rng and rng.path == path and (rng.line, rng.col) <= (line, col) < (rng.end_line, rng.end_col):
                     return report.by_field[call.field_name], entry, rng
         return None
 

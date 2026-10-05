@@ -513,6 +513,13 @@ class Extractor:
         r = tok.range
         return self.make_range(r.start, r.end)[0]
 
+    def spelled_range(self, tok) -> Range | None:
+        """Navigation can use source-spelled macro arguments as well as ordinary tokens."""
+        if tok is None:
+            return None
+        rng, generated = self.tok_range(tok)
+        return None if generated else rng
+
     def macro_call(self, loc) -> tuple[str | None, object | None]:
         """(name, range) of the outermost macro call whose expansion holds `loc`."""
         sm = self.sm
@@ -1124,8 +1131,8 @@ class Extractor:
                     field_literal=field_lit is not None, value=value, owner=ctx.owner,
                     method=ctx.method, conditional=ctx.conditional, range=r,
                     optional=op == "get" and self.goes_on_without(node),
-                    field_range=self.plain_range(unwrap(field_arg).literal) if field_lit is not None else None,
-                    method_range=self.plain_range(name_token(segs[-1].node))))
+                    field_range=self.spelled_range(unwrap(field_arg).literal) if field_lit is not None else None,
+                    method_range=self.spelled_range(name_token(segs[-1].node))))
             return
 
         # Factory overrides

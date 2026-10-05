@@ -689,7 +689,9 @@ def type_definition(ls: UvmLanguageServer, params: T.TypeDefinitionParams):
 
 
 @server.feature(T.TEXT_DOCUMENT_HOVER)
-def hover(ls: UvmLanguageServer, params: T.HoverParams):
+async def hover(ls: UvmLanguageServer, params: T.HoverParams):
+    if not await ls.fresh():
+        return None
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
         config = ls.nav.config_db_hover(path, params.position.line, _indexed_column(ls, path, params.position))
