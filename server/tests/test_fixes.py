@@ -1495,6 +1495,39 @@ def test_lint_leaves_out_ignored_findings(tmp_path):
     assert lines_of(w, "create-no-parent") == [11, 15, 16, 17, 18, 19, 20, 21] and w.ignores == {}
 
 
+def test_ignore_directive_on_line_zero_with_bom(tmp_path):
+    text = '// uvm-lint: ignore unknown-base\nclass my_test extends base_test;\nendclass\n'
+    w = index(tmp_path, {'t.sv': b'\xef\xbb\xbf' + text.encode()})
+    path = str(tmp_path / 't.sv')
+    assert w.ignores == {path: {1: ['unknown-base']}}
+    assert lines_of(w, 'unknown-base') == []
+
+
+def test_define_on_line_zero_with_bom(tmp_path):
+    w = index(tmp_path, {'m.svh': b'\xef\xbb\xbf`define M 1\n', 't.sv': '`include "m.svh"\n'})
+    assert [m.range.line for m in w.macros_by_name.get('M', [])] == [0]
+
+
+def test_ignore_quick_fix_survives_saving_and_closing_bom_file(tmp_path):
+    from uvmls.fixes import ignore_fixes
+    text = 'class my_test extends base_test; // smoke test\nendclass\n'
+    w = index(tmp_path, {'t.sv': b'\xef\xbb\xbf' + text.encode()})
+    path = str(tmp_path / 't.sv')
+    w.update_document(path, text)
+    [d] = findings(w, 'unknown-base')
+    ctx = Context(w, FileTexts({path: (text, 1)}), Client(), path)
+    [fix] = ignore_fixes(ctx, d)
+    after = apply(text, fix.changes)
+    assert after.startswith('// uvm-lint: ignore unknown-base\n')
+    w.update_document(path, after)
+    assert not findings(w, 'unknown-base')
+    (tmp_path / 't.sv').write_bytes(b'\xef\xbb\xbf' + after.encode())
+    w.update_document(path, None)
+    assert not findings(w, 'unknown-base')
+    w.reindex_all()
+    assert not findings(w, 'unknown-base')
+
+
 def test_ignore_directives_in_an_editor_and_in_a_shared_header(tmp_path):
     # A header two roots include: its directives count once whichever root it is read from, and
     # those in an editor's unsaved text count until it is closed.
