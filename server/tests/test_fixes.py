@@ -349,6 +349,34 @@ def test_register_not_offered(tmp_path, cfg_text):
     assert offered(w, d) == []
 
 
+@pytest.mark.parametrize("check", ["lint", "fix", "fix-all"])
+def test_register_does_not_duplicate_an_unknown_macro(tmp_path, check):
+    from uvmls.fixes import fix_all
+    text = 'import uvm_pkg::*;\n`include "uvm_macros.svh"\n' + COMPONENT
+    unregistered = text.replace("  `uvm_component_utils(drv)\n", "")
+    w = index(tmp_path, {"t.sv": unregistered}, bundled=True)
+    stale = findings(w, "create-unregistered")[0]
+    [control] = offered(w, stale)
+    assert control.preferred and control.safe
+    path = str(tmp_path / "t.sv")
+    hidden = text.replace("`uvm_component_utils(drv)", "`project_component_utils(drv)")
+    (tmp_path / "t.sv").write_text(hidden)
+    w.reindex_all()
+    assert slang_findings(w, "UnknownDirective")
+    if check == "lint":
+        assert findings(w, "create-unregistered") == []
+    elif check == "fix":
+        assert offered(w, stale) == []
+    else:
+        ctx = Context(w, FileTexts(), Client(roots=[str(tmp_path)]), path)
+        assert fix_all(ctx, [stale]) == ([], [])
+        assert all_fixed(w, path) == ([], [])
+    # Restoring the missing definition must leave just one registration, which compiles.
+    (tmp_path / "t.sv").write_text('`define project_component_utils(T) `uvm_component_utils(T)\n' + hidden)
+    w.reindex_all()
+    assert not findings(w, "create-unregistered") and user_errors(w) == []
+
+
 def test_no_finding_for_a_class_that_is_not_a_uvm_object(tmp_path):
     # Usually the `ifndef UVM branch of a class, taken for want of a define the build sets.
     w = index(tmp_path, {"env.sv": ENV.replace("\n", '\n`include "cfg.svh"\n', 1),

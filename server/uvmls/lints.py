@@ -239,6 +239,21 @@ def skipped_super(ws: Workspace, cls, name: str):
     return None
 
 
+def unknown_macro_lines(ws: Workspace) -> dict[str, list[int]]:
+    """Lines whose meaning a macro nobody defines hides."""
+    out: dict[str, list[int]] = {}
+    for d in ws.user_diagnostics():
+        if d.code == "UnknownDirective":
+            bisect.insort(out.setdefault(d.range.path, []), d.range.line)
+    return out
+
+
+def hides_macro(unknown: dict[str, list[int]], cls) -> bool:
+    lines = unknown.get(cls.path, ())
+    i = bisect.bisect_left(lines, cls.decl_range.line)
+    return i < len(lines) and lines[i] <= cls.decl_range.end_line
+
+
 def lint(ws: Workspace) -> dict[str, list[Diag]]:
     out: dict[str, list[Diag]] = {}
 
@@ -275,19 +290,14 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
                 "warning", "config-db-type-mismatch", field=row["field"], at=[r.line, r.col])
 
     no_parent = "error" if _parent_required(ws) else "warning"
-    unknown_macros: dict[str, list[int]] = {}  # lines whose meaning a macro nobody defines hides
-    for d in ws.user_diagnostics():
-        if d.code == "UnknownDirective":
-            bisect.insort(unknown_macros.setdefault(d.range.path, []), d.range.line)
+    unknown_macros = unknown_macro_lines(ws)
     # Parameterized classes registered by name: which of their specializations the code names.
     specs = specializations(ws, {c.name: c for c in ws.classes if not c.library and c.params and
                                  UTILS_RE.match(c.registration_macro or "") and "_param" not in c.registration_macro})
     for cls in ws.classes:
         if cls.library:
             continue
-        lines = unknown_macros.get(cls.path, ())
-        i = bisect.bisect_left(lines, cls.decl_range.line)
-        problem = ctor_problem(ws, cls) if not (i < len(lines) and lines[i] <= cls.decl_range.end_line) else None
+        problem = ctor_problem(ws, cls) if not hides_macro(unknown_macros, cls) else None
         if problem:
             ctor = next((m for m in cls.methods if m.name == "new"), None)
             add(ctor.range if ctor else cls.range, problem[1], "error", "factory-ctor", cls=cls.qualname)
@@ -343,6 +353,8 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
                 add(cr.range, f"{target.name} is a virtual class and cannot be created", "error",
                     "create-virtual", cls=cls.qualname, at=at, target=target.qualname)
             elif target.registration is None and ws.role(target) not in ("class", "interface"):
+                if hides_macro(unknown_macros, target):
+                    continue  # the unknown macro may register it
                 # (A class not known to be a uvm_object, such as one whose `ifdef UVM branch is
                 # not taken, is not something a macro can register.)
                 macro = "`uvm_component_utils" if ws.is_component(target) else "`uvm_object_utils"

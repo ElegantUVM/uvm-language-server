@@ -16,8 +16,8 @@ import re
 from dataclasses import dataclass, field
 
 from .lints import (
-    UTILS_RE, body_of, ctor_call_problem, ctor_problem, misregistered, near_misses, new_target,
-    param_problem, skipped_super, swapped_macro,
+    UTILS_RE, body_of, ctor_call_problem, ctor_problem, hides_macro, misregistered, near_misses, new_target,
+    param_problem, skipped_super, swapped_macro, unknown_macro_lines,
 )
 from .elab import SOURCE as ELAB_SOURCE
 from .indexer import EOL_RE, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
@@ -328,6 +328,8 @@ def _create_unregistered(ctx: Context, d) -> list[Fix]:
     if t is None or t.library or t.is_virtual or t.registration is not None:
         return []
     if ws.role(t) in ("class", "interface"):  # not known to be a uvm_object
+        return []
+    if hides_macro(unknown_macro_lines(ws), t):
         return []
     macro = ("uvm_component" if ws.is_component(t) else "uvm_object") + ("_param_utils" if t.params else "_utils")
     arg = t.name + (" #(" + ", ".join(p.name for p in t.params) + ")" if t.params else "")
