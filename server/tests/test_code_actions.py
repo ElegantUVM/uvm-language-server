@@ -555,3 +555,65 @@ def test_initialize_validates_client_commands(commands, expected):
     initialize(ls, T.InitializeParams(capabilities=T.ClientCapabilities(), initialization_options={
         'settings': {'elaboration': 'off'}, 'clientCommands': commands}))
     assert ls.client_commands == expected
+
+
+@pytest.mark.skipif(os.environ.get('UVMLS_PERF') != '1', reason='set UVMLS_PERF=1 for the generated project budgets')
+def test_large_project_code_action_budgets(tmp_path):
+    import asyncio
+    import time
+
+    from lsprotocol import types as T
+    from tools.gen_big import generate
+    from uvmls.documents import Workspace as LspWorkspace
+    from uvmls.lints import lint
+    from uvmls.server import UvmLanguageServer, code_action, lsp_diagnostic
+
+    async def run():
+        filelist = generate(tmp_path)
+        ls = UvmLanguageServer()
+        ls.workspace_roots = [str(tmp_path)]
+        ls.settings = {'filelists': [str(filelist)], 'useBundledUvm': False, 'elaboration': 'off'}
+        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol.client_capabilities = T.ClientCapabilities()
+        ls.client_commands = frozenset({'uvm.addIncludeDir'})
+        ls.ws.configure(ls.config())
+        assert len(ls.ws.classes) == 2000
+        ls.published = lint(ls.ws)
+        for d in ls.ws.user_diagnostics():
+            ls.published.setdefault(d.range.path, []).append(d)
+        ls.diag_texts = dict(ls.ws.texts)
+        path = tmp_path / 'bench.sv'
+        ds = [lsp_diagnostic(d) for d in ls.published[str(path)]]
+        parents = [d for d in ds if d.code == 'create-no-parent']
+        configs = [d for d in ds if d.code == 'config-db-no-set']
+        includes = [d for d in ds if d.code == 'CouldNotOpenIncludeFile']
+        assert len(parents) == len(configs) == 20 and len(includes) == 1
+        shapes = [
+            ('empty', [], None, 1),
+            ('one fix', parents[:1], None, 10),
+            ('config fix', configs[:1], None, 10),
+            ('20 config fixes', configs, None, 50),
+            ('source.fixAll', [], [T.CodeActionKind.SourceFixAll], 25),
+            ('cold include', includes, None, 25),
+        ]
+        for name, incoming, only, target in shapes:
+            samples = []
+            for _ in range(20):
+                if name == 'cold include':
+                    ls.ws._include_candidates = None
+                params = T.CodeActionParams(T.TextDocumentIdentifier(path.as_uri()),
+                                             incoming[0].range if incoming else T.Range(T.Position(0, 0), T.Position(0, 0)),
+                                             T.CodeActionContext(incoming, only=only))
+                start = time.perf_counter()
+                actions = await code_action(ls, params)
+                samples.append((time.perf_counter() - start) * 1000)
+                if name == 'empty':
+                    assert actions is None
+                else:
+                    assert actions
+                if name == 'source.fixAll':
+                    assert len(actions) == 1 and len(actions[0].diagnostics) == 20
+            p95 = sorted(samples)[18]
+            print(f'{name}: p95 {p95:.2f} ms (target {target} ms)')
+            assert p95 < target
+    asyncio.run(run())

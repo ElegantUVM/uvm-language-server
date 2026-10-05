@@ -133,6 +133,7 @@ class Workspace:
         self.overrides: dict[str, str] = {}
         self.version = 0
         self.last_index_seconds = 0.0
+        self._include_candidates: tuple[tuple, dict[str, list[str]]] | None = None
         self._clear_maps()
 
     # -- building ------------------------------------------------------------
@@ -163,6 +164,7 @@ class Workspace:
 
     def reindex_all(self):
         with self.lock:
+            self._include_candidates = None
             t0 = time.time()
             self.sources = build_source_set(self.config)
             s = self.sources

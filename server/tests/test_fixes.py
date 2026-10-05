@@ -1893,3 +1893,21 @@ def test_config_db_type_fix_compiles(tmp_path):
     assert user_errors(w)  # the value argument is an inout alu_agent_config
     fix_once(w, "config-db-type-mismatch")
     assert unchanged(tmp_path) and user_errors(w) == []
+
+
+def test_registration_fix_does_not_edit_a_library_target(tmp_path):
+    text = '''import uvm_pkg::*;
+class item extends uvm_object;
+endclass
+class env extends uvm_env;
+  item obj;
+  function void build_phase(uvm_phase phase);
+    obj = item::type_id::create("obj");
+  endfunction
+endclass
+'''
+    ws = index(tmp_path, {'t.sv': text})
+    [d] = findings(ws, 'create-unregistered')
+    assert offered(ws, d)
+    ws.class_by_qual['item'].library = True
+    assert offered(ws, d, disabled_support=True) == []

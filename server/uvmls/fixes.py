@@ -757,7 +757,13 @@ def include_dirs_for(ws, name: str, near: str) -> list[str]:
         return []
     tail = os.sep + os.path.normpath(name)
     base = os.path.basename(tail)
-    files = discover_files(ws.config.workspace_roots, ws.config.exclude, match=lambda fn: fn == base)
+    key = tuple(ws.config.workspace_roots), tuple(ws.config.exclude)
+    if ws._include_candidates is None or ws._include_candidates[0] != key:
+        by_name: dict[str, list[str]] = {}
+        for path in discover_files(ws.config.workspace_roots, ws.config.exclude, match=lambda fn: True):
+            by_name.setdefault(os.path.basename(path), []).append(path)
+        ws._include_candidates = key, by_name
+    files = ws._include_candidates[1].get(base, ())
     have = set(ws.sources.include_dirs) if ws.sources else set()
     dirs = [d for d in dict.fromkeys(f[:-len(tail)] for f in files if f.endswith(tail)) if d not in have]
     return sorted(dirs, key=lambda d: (-len(os.path.commonpath([d, near])), len(d), d))
