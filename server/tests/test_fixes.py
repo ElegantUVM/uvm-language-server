@@ -1047,6 +1047,8 @@ def test_phase_no_super_through_an_intermediate_class(tmp_path):
                                      .replace("  uvm_env m_env;", "  int n;")})
     [d] = findings(w, "phase-no-super")
     assert d.message.endswith("the base class's build_phase, which gets 'cfg' from uvm_config_db, never runs")
+    [fix] = offered(w, d)
+    assert fix.title == 'Call super.build_phase(phase) first' and fix.preferred
 
 
 @pytest.mark.parametrize("override", [
@@ -1086,6 +1088,55 @@ endclass
     where = 'after the factory overrides' if overrides else 'first'
     assert fix.title == f'Call super.build_phase(phase) {where}'
     assert fix.preferred and not fix.safe
+
+
+@pytest.mark.parametrize('phase', ['build_phase', 'connect_phase'])
+@pytest.mark.parametrize('forwarding', [None, '', '    depth += 1;\n'])
+def test_phase_no_super_withholds_when_base_reads_config(tmp_path, phase, forwarding):
+    text = """`include "uvm_macros.svh"
+import uvm_pkg::*;
+class base_test extends uvm_test;
+  int depth;
+  function new(string name="base", uvm_component parent=null);
+    super.new(name, parent);
+  endfunction
+  function void build_phase(uvm_phase phase);
+    if (!uvm_config_db #(int)::get(this, "", "depth", depth))
+      `uvm_fatal("NO_DEPTH", "depth must be set before calling base build_phase")
+  endfunction
+endclass
+class derived_test extends base_test;
+  function new(string name="derived", uvm_component parent=null);
+    super.new(name, parent);
+  endfunction
+  function void build_phase(uvm_phase phase);
+    uvm_config_db #(int)::set(this, "", "depth", 42);
+  endfunction
+endclass
+module top;
+  initial begin
+    derived_test t = new();
+    t.build_phase(null);
+  end
+endmodule
+"""
+    if forwarding is not None:
+        text = text.replace('class derived_test extends base_test;', """class mid_test extends base_test;
+  function new(string name="mid", uvm_component parent=null);
+    super.new(name, parent);
+  endfunction
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+""" + forwarding + """  endfunction
+endclass
+class derived_test extends mid_test;""")
+    text = text.replace('build_phase', phase)
+    w = index(tmp_path, {'t.sv': text}, bundled=True)
+    assert user_errors(w) == []
+    [d] = findings(w, 'phase-no-super')
+    assert d.data['cls'] == 'derived_test'
+    # Calling the base first makes its required get run before the sole setter.
+    assert offered(w, d) == []
 
 
 @pytest.mark.parametrize('body', [

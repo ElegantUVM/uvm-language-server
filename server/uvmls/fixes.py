@@ -550,7 +550,7 @@ def _utils_param(ctx: Context, d) -> list[Fix]:
 
 def _phase_no_super(ctx: Context, d) -> list[Fix]:
     """A phase method that skips its base's: call super's first, or after leading factory overrides
-    that must precede the base's creates. Config_db sets can follow the base's phase."""
+    that must precede the base's creates, unless configuration dependencies make ordering unclear."""
     ws, data = ctx.ws, d.data or {}
     cls, name = ws.class_by_qual.get(data.get("cls")), data.get("method")
     skipped = cls and skipped_super(ws, cls, name)
@@ -559,6 +559,11 @@ def _phase_no_super(ctx: Context, d) -> list[Fix]:
         return []
     call = f"super.{name}({meth.args[0].name});"
     calls = ws.calls_of(cls)
+    if any(c.method == name and c.op == "set" for c in calls.config_db) and \
+            any(c.method == name and c.op != "set" for c in ws.calls_in_chain(skipped[0]).config_db):
+        # A base phase may read configuration supplied here. Neither putting super before the
+        # sets nor moving it past other work is a known-correct ordering.
+        return []
     marks = [c.range for c in calls.overrides if c.method == name]
     marks = [r for r in marks if r.path == meth.range.path and meth.decl_range.contains(r.line, r.col)]
     ft = ctx.files.get(meth.range.path)
