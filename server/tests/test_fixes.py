@@ -443,7 +443,7 @@ def test_utils_mismatch_swaps_object_and_component(tmp_path, old, new, title):
         title = ("Change `uvm_object_utils_begin to `uvm_component_utils_begin and "
                  "`uvm_object_utils_end to `uvm_component_utils_end")
     w, fix = round_trip(tmp_path, {"t.sv": DRV}, {"t.sv": planted}, "utils-mismatch")
-    assert (fix.title, fix.preferred, fix.safe) == (title, True, True)
+    assert (fix.title, fix.preferred, fix.safe) == (title, "item" in old, "item" in old)
 
 
 def test_utils_mismatch_names_the_macro(tmp_path):
@@ -482,7 +482,51 @@ def test_utils_mismatch_is_not_safe_when_a_create_has_no_parent(tmp_path):
     w = index(tmp_path, {"t.sv": text.replace("`uvm_component_utils_begin(drv)", "`uvm_object_utils_begin(drv)")})
     [d] = findings(w, "utils-mismatch")
     [fix] = offered(w, d)
-    assert fix.preferred and not fix.safe  # as a component, that create() would stop compiling
+    assert not fix.preferred and not fix.safe  # as a component, that create() would stop compiling
+
+
+@pytest.mark.parametrize('scope', [
+    'module top; drv d; initial d = drv::type_id::create("d"); endmodule',
+    'module top; function void f(); drv d = drv::type_id::create("d"); endfunction endmodule',
+    'package p; function void f(); drv d = drv::type_id::create("d"); endfunction endpackage',
+    'interface top; drv d; initial d = drv::type_id::create("d"); endinterface',
+    'program top; drv d; initial d = drv::type_id::create("d"); endprogram',
+    'function void f(); drv d = drv::type_id::create("d"); endfunction',
+])
+def test_utils_mismatch_outside_class_creates_are_not_automatic(tmp_path, scope):
+    text = """import uvm_pkg::*;
+class drv extends uvm_driver;
+  `uvm_object_utils(drv)
+  function new(string name = "drv", uvm_component parent = null);
+    super.new(name, parent);
+  endfunction
+endclass
+""" + scope + '\n'
+    w = index(tmp_path, {'t.sv': text})
+    [d] = findings(w, 'utils-mismatch')
+    [fix] = offered(w, d)
+    assert not fix.safe and not fix.preferred
+    assert all_fixed(w, d.range.path, 'utils-mismatch') == ([], [])
+
+
+def test_utils_mismatch_fix_all_preserves_module_create_compilation(tmp_path):
+    text = """`include "uvm_macros.svh"
+import uvm_pkg::*;
+class drv extends uvm_driver;
+  `uvm_object_utils(drv)
+  function new(string name = "drv", uvm_component parent = null);
+    super.new(name, parent);
+  endfunction
+endclass
+module top;
+  drv d;
+  initial d = drv::type_id::create("d");
+endmodule
+"""
+    w = index(tmp_path, {'t.sv': text}, bundled=True)
+    assert user_errors(w) == []
+    [d] = findings(w, 'utils-mismatch')
+    assert all_fixed(w, d.range.path, 'utils-mismatch') == ([], [])
 
 
 # -- factory-ctor ----------------------------------------------------------------------

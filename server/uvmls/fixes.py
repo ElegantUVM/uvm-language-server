@@ -364,22 +364,6 @@ def masked_body(ws, ft: FileText, cls) -> tuple[int, str] | None:
     return span[0], masked
 
 
-def creates_of(ws, cls) -> list:
-    """Every factory create() of a class, anywhere in the user's code."""
-    out = []
-    for c in ws.classes:
-        if c.library:
-            continue
-        for cr in ws.calls_of(c).creates:
-            if cr.kind != "factory" or cr.type is None or \
-                    (cr.type.name != cls.name and cr.type.name not in ws.typedefs_by_name):
-                continue
-            spec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, c)
-            if spec is not None and spec.cls is cls:
-                out.append(cr)
-    return out
-
-
 def _utils_mismatch(ctx: Context, d) -> list[Fix]:
     """A component registered with `uvm_object_utils, or the reverse: swap object and component in the
     macro's name (and in the matching _end)."""
@@ -405,9 +389,10 @@ def _utils_mismatch(ctx: Context, d) -> list[Fix]:
         if m.group(1) != end_new:
             changes.append(TextChange(ft.path, body[0] + m.start(1), body[0] + m.end(1), end_new))
             title += f" and `{m.group(1)} to `{end_new}"
-    # As a component, its create() needs a parent: a create() without one stops compiling.
-    safe = kind == "object" or all(cr.nargs >= 2 for cr in creates_of(ws, cls))
-    return [Fix(title, changes, preferred=True, safe=safe)]
+    # As a component, create() needs a parent. Calls outside classes are not indexed,
+    # so the swap cannot be applied automatically even when all known calls pass one.
+    safe = kind == "object"
+    return [Fix(title, changes, preferred=safe, safe=safe)]
 
 
 def _factory_ctor(ctx: Context, d) -> list[Fix]:
