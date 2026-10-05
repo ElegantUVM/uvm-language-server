@@ -1048,6 +1048,10 @@ class Extractor:
             self.on_call(node, ctx, sink)
         elif k == K.AssignmentExpression:
             self.on_assign(node, ctx, sink)
+        elif k == K.NamedArgument:
+            rng, _ = self.tok_range(node.name)
+            if rng is not None:
+                self.out.named_argument_labels.add(rng)
         elif k == K.DataDeclaration:
             text = pretty(node)
             for d in nodes(node.declarators):

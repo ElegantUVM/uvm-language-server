@@ -233,6 +233,9 @@ class Workspace:
             else:
                 for name, ranges in idx.identifiers.items():
                     for rng in ranges:
+                        # Named labels belong to the callee's formals, not the caller's members.
+                        if rng in idx.named_argument_labels:
+                            continue
                         if rng not in seen_ids:
                             seen_ids.add(rng)
                             self.identifiers_by_file.setdefault(rng.path, []).append((name, rng))

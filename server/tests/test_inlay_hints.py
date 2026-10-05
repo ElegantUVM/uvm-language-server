@@ -308,6 +308,47 @@ def test_bound_user_members_and_shadowing(members_tb):
         c.close()
 
 
+@pytest.mark.parametrize("bundled", [True, False])
+def test_named_arguments_only_hint_actual_members(tb, tmp_path, bundled):
+    root = tmp_path / "alu_tb"
+    shutil.copytree(tb, root)
+    path = root / "agent/alu_driver.svh"
+    text = path.read_text() + '''
+class hint_arguments extends uvm_driver #(alu_seq_item);
+  function void consume(alu_seq_item req = null, alu_seq_item rsp = null); endfunction
+  function void use_members();
+    consume(.req(null));
+    consume(.req(req));
+    consume(.req(this.req), .rsp(rsp));
+    consume(. /* formal */ req(req));
+    consume(.
+      req(null));
+    consume(.
+      req(req));
+  endfunction
+endclass
+'''
+    path.write_text(text)
+    c = start(root, capabilities=CAPABILITIES, settings=settings(root, useBundledUvm=bundled))
+    try:
+        lines = text.splitlines()
+        first = lines.index("class hint_arguments extends uvm_driver #(alu_seq_item);")
+        found = hints(c, path, start=(first, 0))
+        expected = []
+        for line, source in enumerate(lines[first:], first):
+            if source in ("    consume(.req(req));", "    consume(. /* formal */ req(req));", "      req(req));"):
+                expected.append({"line": line, "character": source.rindex("req") + 3})
+            elif source == "    consume(.req(this.req), .rsp(rsp));":
+                expected.extend({"line": line, "character": source.rindex(name) + 3} for name in ("req", "rsp"))
+        assert [h["position"] for h in found] == expected
+        assert [label(h) for h in found] == [": alu_seq_item"] * 5
+        for line, source in enumerate(lines):
+            if "null));" in source:
+                assert hints(c, path, start=(line, 0), end=(line + 1, 0)) == []
+    finally:
+        c.close()
+
+
 def test_bound_member_unicode_and_edits(tb):
     c = start(tb, capabilities=CAPABILITIES)
     try:
