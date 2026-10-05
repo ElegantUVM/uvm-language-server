@@ -21,9 +21,10 @@ from .lints import (
 )
 from .elab import SOURCE as ELAB_SOURCE
 from .indexer import EOL_RE, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
-from .model import Range
+from .model import ClassInfo, Range
 from .project import discover_files, is_bundled, parse_filelist
 from .views import canonical_type, config_db_report, mismatched
+from .workspace import BUILTIN_TYPES
 
 log = logging.getLogger("uvmls")
 
@@ -585,6 +586,15 @@ INTEGRAL_RE = re.compile(r"^(bit|logic|reg|int|integer|byte|shortint|longint|tim
 CHAIN_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
 
 
+def scope_independent_type(ws, text: str) -> bool:
+    """A builtin with literal dimensions, or a global virtual interface without arguments."""
+    if text in BUILTIN_TYPES or (INTEGRAL_RE.fullmatch(text) and
+                                set(IDENT_RE.findall(text)) <= BUILTIN_TYPES | {"signed", "unsigned"}):
+        return True
+    m = re.fullmatch(r"virtual\s+(?:interface\s+)?([A-Za-z_]\w*)(?:\s*\.\s*[A-Za-z_]\w*)?", text)
+    return bool(m and ws.find_unit(m.group(1), "interface"))
+
+
 def _config_db_get(ctx: Context, d):
     """(report, field row, get entry, file text, call span, masked call, argument spans) for the get a
     config_db finding is about, or None when the index or the text no longer has it."""
@@ -640,7 +650,7 @@ def _config_db_type_mismatch(ctx: Context, d) -> list[Fix]:
     fixes = show_config_db(ctx, row["field"])
     if g not in mismatched(row):
         return []
-    want, written = row["sets"][0]["canon"], row["sets"][0]["type"]
+    want = row["sets"][0]["canon"]
     a, b = args[3 if g["db"] == "uvm_config_db" else 2]
     var = ft.text[span[0] + a:span[0] + b].strip()
     nav = ctx.nav
@@ -653,8 +663,17 @@ def _config_db_type_mismatch(ctx: Context, d) -> list[Fix]:
     target = next((t for t in hits if hasattr(t.obj, "type_text")), None)
     if target is None:
         return fixes
-    owner = target.owner if hasattr(target.owner, "params") else None
+    owner = target.owner if isinstance(target.owner, ClassInfo) else None
     same = canonical_type(ctx.ws, target.obj.type_text, owner) == want
+    declared = " ".join(target.obj.type_text.split())
+    getter = ctx.ws.class_by_qual.get(g["owner"])
+    candidates = [e["type"] for e in row["sets"]] + ([declared] if same else [])
+    # The value's own declaration supplies a spelling only in the class that declares it.
+    # In particular, a.b may be declared with a typedef private to a's class.
+    written = next((t for t in candidates if scope_independent_type(ctx.ws, t) or
+                    (same and owner is not None and owner is getter and t == declared)), None)
+    if written is None:
+        return fixes
     if not same and not (INTEGRAL_RE.match(written) and INTEGRAL_RE.match(g["type"])):
         return fixes  # a class handle is an inout argument: another type would not compile
     db = re.search(rf"\b{g['db']}\s*#\s*\(", masked)
