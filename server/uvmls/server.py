@@ -887,7 +887,8 @@ def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], 
     ft = files.get(path)
     now = ft.text if ft else None
     out = []
-    per_code: dict[str, T.CodeAction | None] = {}
+    per_code: dict[str, tuple[T.CodeAction | None, list[Diag]]] = {}
+    emitted: set[str] = set()
     order = sorted(incoming, key=lambda d: (d.severity or 4, d.range.start.line, d.range.start.character))
     for d in order:
         finding = current_finding(d, published, then, now)
@@ -898,11 +899,14 @@ def code_actions(ls: UvmLanguageServer, uri: str, incoming: list[T.Diagnostic], 
         if finding.code in fixes.SAFE_CODES and finding.source == "uvm":
             if finding.code not in per_code:
                 changes, fixed = fixes.fix_all(ctx, published, finding.code)
-                per_code[finding.code] = make.action(fixes.Fix(
+                action = make.action(fixes.Fix(
                     f"Fix all {len(fixed)} '{finding.code}' problems in this file", changes),
                     [lsp_diagnostic(x) for x in fixed]) if len(fixed) >= 2 else None
-            if per_code[finding.code] is not None:
-                out.append(per_code[finding.code])
+                per_code[finding.code] = action, fixed
+            action, fixed = per_code[finding.code]
+            if action is not None and finding.code not in emitted and any(x is finding for x in fixed):
+                out.append(action)
+                emitted.add(finding.code)
         for fix in fixes.ignore_fixes(ctx, finding):
             out.append(make.action(fix, [d]))
     if fix_all:

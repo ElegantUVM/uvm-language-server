@@ -493,3 +493,49 @@ def test_document_lines_preserve_non_lsp_separators():
     from uvmls.documents import TextDocument
     doc = TextDocument('file:///t.sv', source='a\fb\r\nc\rd\n')
     assert doc.lines == ('a\fb\r\n', 'c\r', 'd\n')
+
+
+def test_per_code_fix_all_is_emitted_once_for_a_selection(client, tb):
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    try:
+        doc.change(original.replace('create("m_driver", this)', 'create("m_driver")')
+                   .replace('create("m_sequencer", this)', 'create("m_sequencer")'))
+        ds = doc.diagnostics(lambda ds: len(ds) == 2)
+        acts = client.request('textDocument/codeAction', {
+            'textDocument': {'uri': doc.uri},
+            'range': {'start': ds[0]['range']['start'], 'end': ds[-1]['range']['end']},
+            'context': {'diagnostics': ds}})
+        bulk = [a for a in acts if a['title'].startswith('Fix all')]
+        assert len(bulk) == 1
+        assert applied(doc.text, edits_for(bulk[0], doc.uri, doc.version)) == original
+        individual = [a for a in acts if a['title'] == "Pass 'this' as the parent"]
+        assert len(individual) == 2
+        assert {a['diagnostics'][0]['range']['start']['line'] for a in individual} == {
+            d['range']['start']['line'] for d in ds}
+    finally:
+        doc.change(original)
+        doc.close()
+
+
+def test_per_code_fix_all_only_attaches_to_findings_it_fixes(client, tb):
+    doc = Doc(client, agent(tb))
+    original = doc.text
+    helper = '''  static function alu_monitor make_mon();
+    return alu_monitor::type_id::create("mon");
+  endfunction
+'''
+    try:
+        doc.change(original.replace('create("m_driver", this)', 'create("m_driver")')
+                   .replace('create("m_sequencer", this)', 'create("m_sequencer")')
+                   .replace('endclass', helper + 'endclass'))
+        ds = doc.diagnostics(lambda ds: len(ds) == 3)
+        assert [a['title'] for a in doc.actions(ds[-1:])] == [
+            'Pass null as the parent', IGNORE.format('create-no-parent')]
+        for d in ds[:2]:
+            [bulk] = [a for a in doc.actions([d]) if a['title'].startswith('Fix all')]
+            assert len(bulk['diagnostics']) == 2
+        assert len([a for a in doc.actions(ds) if a['title'].startswith('Fix all')]) == 1
+    finally:
+        doc.change(original)
+        doc.close()
