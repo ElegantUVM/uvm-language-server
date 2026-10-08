@@ -19,7 +19,7 @@ from pygls.capabilities import get_capability
 from pygls.lsp.server import LanguageServer
 from pygls.uris import from_fs_path
 
-from . import __version__, elab, fixes, formatting, indexer
+from . import __version__, elab, fixes, formatting, indexer, signatures
 from .documents import Workspace as LspWorkspace
 from .lints import lint
 from .model import Diag, Range, utf8_prefix
@@ -551,6 +551,9 @@ def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
         if isinstance(commands, list) else frozenset()
     if get_capability(params.capabilities, "text_document.inlay_hint") is not None:
         ls.feature(T.TEXT_DOCUMENT_INLAY_HINT, T.InlayHintOptions(resolve_provider=False))(inlay_hint)
+    if get_capability(params.capabilities, "text_document.signature_help") is not None:
+        ls.feature(T.TEXT_DOCUMENT_SIGNATURE_HELP, T.SignatureHelpOptions(
+            trigger_characters=["(", ","], retrigger_characters=[")"]))(signature_help)
     if get_capability(params.capabilities, "text_document.formatting") is not None:
         ls.feature(T.TEXT_DOCUMENT_FORMATTING)(document_formatting)
     if get_capability(params.capabilities, "text_document.range_formatting") is not None:
@@ -1014,6 +1017,37 @@ def _code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
                     title="$(list-tree) show topology", command="uvm.showTopology",
                     arguments=[{"test": sym.name}])))
     return lenses
+
+
+async def signature_help(ls: UvmLanguageServer, params: T.SignatureHelpParams):
+    if not await ls.fresh():
+        return None
+    key = (params.text_document.uri, params.position.line, params.position.character)
+    if key in ls.ws._signature_cache:
+        return ls.ws._signature_cache[key]
+    version, documents = ls.ws.version, ls.documents
+    revisions = {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}
+    result = await asyncio.get_running_loop().run_in_executor(None, _compute_signature, ls, params)
+    if version != ls.ws.version or documents != ls.documents or ls.pending or \
+            revisions != {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
+        return None
+    ls.ws._signature_cache[key] = result
+    return result
+
+
+def _compute_signature(ls: UvmLanguageServer, params: T.SignatureHelpParams):
+    path = uri_to_path(params.text_document.uri)
+    with ls.ws.lock:
+        found = signatures.signature(ls.nav, path, params.position.line,
+                                     _indexed_column(ls, path, params.position))
+        if found is None:
+            return None
+        _, _, label, formals, active = found
+        sig = {"label": label, "parameters": [{"label": f} for f in formals]}
+        result = {"signatures": [sig], "activeSignature": 0}
+        if formals:
+            result["activeParameter"] = active
+        return result
 
 
 INLAY_CACHE_SIZE = 64

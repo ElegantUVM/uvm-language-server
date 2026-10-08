@@ -622,7 +622,7 @@ def test_large_project_code_action_budgets(tmp_path):
     from tools.gen_big import generate
     from uvmls.documents import Workspace as LspWorkspace
     from uvmls.lints import lint
-    from uvmls.server import UvmLanguageServer, code_action, code_lens, inlay_hint, lsp_diagnostic
+    from uvmls.server import UvmLanguageServer, code_action, code_lens, inlay_hint, lsp_diagnostic, signature_help
 
     async def run():
         filelist = generate(tmp_path, classes=2400)
@@ -705,4 +705,22 @@ def test_large_project_code_action_budgets(tmp_path):
             p95 = sorted(samples)[18]
             print(f'{name}: p95 {p95:.2f} ms (target 50 ms)')
             assert p95 < 50
+        source = driver.read_text()
+        # The generated child also has its own constructor; use a typed direct call in shim mode.
+        source = source.replace("super.new(", "node_0000::new(")
+        ls.ws.update_document(str(driver), source)
+        offset = source.index("node_0000::new(") + len("node_0000::new(")
+        prefix = source[:offset]
+        params = T.SignatureHelpParams(T.TextDocumentIdentifier(driver.as_uri()),
+                                       T.Position(prefix.count("\n"), len(prefix.rsplit("\n", 1)[-1])))
+        await signature_help(ls, params)
+        samples = []
+        for _ in range(20):
+            start = time.perf_counter()
+            help = await signature_help(ls, params)
+            samples.append((time.perf_counter() - start) * 1000)
+            assert help and len(help['signatures'][0]['parameters']) == 2
+        p95 = sorted(samples)[18]
+        print(f'signature help: p95 {p95:.2f} ms (target 50 ms)')
+        assert p95 < 50
     asyncio.run(run())

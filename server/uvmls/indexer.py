@@ -19,7 +19,7 @@ from pyslang import syntax as S
 
 from . import naturaldocs
 from .model import (
-    ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex,
+    CallSite, ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex,
     Instance, MacroDef, Method, OutOfBlockMethod, OverrideCall, Param, Range,
     SeqStart, TypeRef, Typedef, Variable,
 )
@@ -101,6 +101,23 @@ def mask(text: str) -> str:
             return '"' + NOT_EOL_RE.sub(" ", m.group("body")) + m.group("close")
         return NOT_EOL_RE.sub(" ", m.group(0))
     return MASK_RE.sub(blank, text)
+
+
+def argument_spans(masked: str, start: int, end: int) -> list[tuple[int, int]]:
+    """Split an argument interval at top-level commas, preserving empty slots."""
+    args, begin, depth = [], start, 0
+    for i in range(start, end):
+        c = masked[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append((begin, i))
+            begin = i + 1
+    if args or masked[begin:end].strip():
+        args.append((begin, end))
+    return args
 
 
 @dataclass(frozen=True)
@@ -946,11 +963,22 @@ class Extractor:
         kind = "task" if proto.keyword.kind == TK.TaskKeyword else "function"
         ret = compact(proto.returnType) if proto.returnType is not None else ""
         args = []
+        dtype, direction = None, ""
         if proto.portList is not None:
             for port in nodes(proto.portList.ports):
                 if port.kind == K.FunctionPort and port.declarator is not None:
-                    v = self.variable(port.declarator, "argument", port.dataType, compact(port), [])
+                    if port.direction.rawText:
+                        direction = compact(port.constKeyword) + " " + compact(port.direction)
+                        direction = direction.strip()
+                        dtype = port.dataType
+                    elif port.dataType is not None:
+                        dtype = port.dataType
+                    v = self.variable(port.declarator, "argument", dtype, compact(port), [])
                     if v:
+                        v.direction = direction
+                        v.dimensions = compact(port.declarator.dimensions)
+                        if not v.type_text:
+                            v.type_text = "logic"
                         init = port.declarator.initializer
                         if init is not None and init.expr is not None:
                             v.default = compact(init.expr)
@@ -980,6 +1008,8 @@ class Extractor:
                     for d in nodes(st.declarators):
                         v = self.variable(d, "argument", getattr(st.header, "dataType", None), compact(st), [])
                         if v:
+                            v.direction = compact(st.header.direction)
+                            v.dimensions = compact(d.dimensions)
                             meth.args.append(v)
         if not self.library and not self.in_library(meth.range.path):
             ctx = BodyCtx(owner, meth.name)
@@ -1045,7 +1075,10 @@ class Extractor:
         if k in LOOP_KINDS:
             ctx = replace(ctx, in_loop=True)
         elif k == K.InvocationExpression:
+            self.invocation(node, node.left, node.arguments)
             self.on_call(node, ctx, sink)
+        elif k == K.NewClassExpression:
+            self.invocation(node, node.scopedNew, node.argList)
         elif k == K.AssignmentExpression:
             self.on_assign(node, ctx, sink)
         elif k == K.NamedArgument:
@@ -1061,6 +1094,37 @@ class Extractor:
         for c in node:
             if isinstance(c, Node):
                 self.walk(c, ctx, sink)
+
+    def invocation(self, node, head, arguments):
+        if arguments is None or arguments.openParen.isMissing:
+            return
+        tokens = list(iter_tokens(head))
+        if not tokens or any(t.isMissing or self.sm.isMacroLoc(t.location) for t in tokens):
+            return
+        opening = self.plain_range(arguments.openParen)
+        closing = None if arguments.closeParen.isMissing else self.plain_range(arguments.closeParen)
+        rng = self.node_range(head)
+        # Missing delimiters may be recovered only within their enclosing syntax statement.
+        parent = node
+        while parent.parent is not None and parent.kind not in FUNC_DECLS and \
+                not parent.kind.name.endswith("Statement"):
+            parent = parent.parent
+        boundary = self.node_range(parent)
+        if opening is None or rng is None or boundary is None or rng.path != opening.path:
+            return
+        segs = [(s.name, s.args, s.sep) for s in flatten_name(head)]
+        call = CallSite(rng, segs, opening, closing, boundary, self.assignment_target(node))
+        for arg in arguments.parameters:
+            if isinstance(arg, Token):
+                comma = self.plain_range(arg)
+                if arg.kind == TK.Comma and comma is not None:
+                    call.commas.append(comma)
+            else:
+                span = self.node_range(arg)
+                if span is not None:
+                    call.arguments.append(span)
+                call.names.append(arg.name.valueText if arg.kind == K.NamedArgument else None)
+        self.out.invocations.append(call)
 
     def assignment_target(self, node) -> str | None:
         p = node.parent

@@ -224,3 +224,34 @@ def test_fix_data_of_parse_diagnostics(tmp_path):
     assert [(d.code, d.data) for d in idx.diagnostics] == [
         ("CouldNotOpenIncludeFile", {"include": "sub/missing_hdr.svh"}),
         ("TypoKeyword", {"from": "intial", "to": "initial"})]
+
+
+def test_invocation_spans_and_formal_metadata(tmp_path):
+    from test_fixes import index
+
+    text = '''`define GENERATED f(1)
+class C;
+ function void f(input int a, b, output bit [3:0] v[], const ref string s="x,y"); endfunction
+ function void run();
+   f(1, 2);
+   `GENERATED
+   // f(3)
+`ifdef ABSENT
+   f(4);
+`endif
+   f(
+ endfunction
+endclass
+'''
+    ws = index(tmp_path, {"t.sv": text})
+    path = str(tmp_path / 't.sv')
+    calls = ws.invocations_by_file[path]
+    assert len(calls) == 2
+    assert calls[0].segments == [('f', [], '')]
+    assert calls[0].closing is not None and calls[1].closing is None
+    args = ws.classes[0].methods[0].args
+    assert [(a.direction, a.type_text, a.dimensions, a.default) for a in args] == [
+        ('input', 'int', '', None), ('input', 'int', '', None),
+        ('output', 'bit[3:0]', '[]', None), ('const ref', 'string', '', '"x,y"')]
+    ws.update_document(path, text.replace('f(1, 2);', ''))
+    assert len(ws.invocations_by_file[path]) == 1

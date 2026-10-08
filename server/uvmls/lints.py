@@ -209,20 +209,9 @@ def new_target(ws: Workspace, cls, cr):
     m = NEW_TARGET_RE.match(cr.target or "")
     if cr.kind != "new" or cr.nargs != 2 or not (m or cr.type):
         return None
-    inherited = False
-    if cr.type is not None:  # X::new(...)
-        spec, written = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls), cr.type.text
-    else:
-        body = body_of(ws, cls, cr.method)
-        var = next((v for v in body.args + body.locals if v.name == m.group(1)), None) if body else None
-        if var is not None:
-            spec = ws.resolve_spec(var.type.name, var.type.scope, var.type.args, cls) if var.type else None
-        else:
-            hit = ws.find_member(cls, m.group(1))
-            var = hit[1] if hit and isinstance(hit[1], Variable) else None
-            spec = ws.member_type_spec(*hit) if var is not None else None
-            inherited = hit is not None and hit[0] is not cls
-        written = var.type_text if var is not None else ""
+    from .navigation import Navigator
+    spec, written, inherited = Navigator(ws).new_target_type(
+        cr.range.path, cr.range.line, cr.range.col, cr.target, cr.type)
     t = spec.cls if spec is not None else None
     if t is None or t.library or t is cls or t.registration != "component" or not written:
         return None

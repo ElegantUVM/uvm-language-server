@@ -63,6 +63,8 @@ class Variable:
     qualifiers: list[str] = field(default_factory=list)
     generated: bool = False  # produced by a macro expansion (e.g. p_sequencer)
     doc: str = ""
+    direction: str = ""  # explicit or inherited formal direction
+    dimensions: str = ""  # unpacked formal dimensions
     default: str | None = None  # an argument or parameter's default value
 
 
@@ -122,6 +124,21 @@ class CreateCall:
     in_loop: bool
     range: Range
     nargs: int = 0
+
+
+@dataclass
+class CallSite:
+    """Source-spelled invocation context; declarations still own the signature."""
+
+    head: Range
+    segments: list[tuple[str, list[str], str]]
+    opening: Range
+    closing: Range | None
+    boundary: Range
+    target: str | None = None  # assignment target of a bare new
+    arguments: list[Range] = field(default_factory=list)
+    commas: list[Range] = field(default_factory=list)
+    names: list[str | None] = field(default_factory=list)
 
 
 @dataclass
@@ -310,6 +327,7 @@ class FileIndex:
     diagnostics: list[Diag] = field(default_factory=list)
     includes: dict[str, list[tuple[str, Range]]] = field(default_factory=dict)
     identifiers: dict[str, list[Range]] = field(default_factory=dict)
+    invocations: list[CallSite] = field(default_factory=list)
     named_argument_labels: set[Range] = field(default_factory=set)
     ignores: dict[str, dict[int, list[str]]] = field(default_factory=dict)  # file -> line -> lint codes ignored there
     library: bool = False

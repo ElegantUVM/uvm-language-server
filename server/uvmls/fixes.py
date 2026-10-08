@@ -20,7 +20,7 @@ from .lints import (
     param_problem, registration_for, skipped_super, swapped_macro, unknown_macro_lines,
 )
 from .elab import SOURCE as ELAB_SOURCE
-from .indexer import EOL_RE, FIX_DATA, IGNORE_RE, MASK_RE, NOT_EOL_RE, ignore_codes, ignore_directives, mask
+from .indexer import EOL_RE, FIX_DATA, IGNORE_RE, MASK_RE, NOT_EOL_RE, argument_spans, ignore_codes, ignore_directives, mask
 from .model import ClassInfo, Method, Range, Variable
 from .project import directory_stamp, discover_files, is_bundled
 from .views import canonical_type, config_db_report, mismatched
@@ -246,19 +246,7 @@ def call_args(masked: str) -> tuple[int, list[tuple[int, int]]] | None:
                 break
     if start is None or masked[start] != "(":
         return None
-    args, begin, depth = [], start + 1, 0
-    for i in range(start + 1, close):
-        c = masked[i]
-        if c in "([{":
-            depth += 1
-        elif c in ")]}":
-            depth -= 1
-        elif c == "," and depth == 0:
-            args.append((begin, i))
-            begin = i + 1
-    if args or masked[begin:close].strip():
-        args.append((begin, close))
-    return start, args
+    return start, argument_spans(masked, start + 1, close)
 
 
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")

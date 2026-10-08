@@ -6,14 +6,14 @@ from __future__ import annotations
 import os
 import re
 from bisect import bisect_left, bisect_right
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from . import naturaldocs
 from .indexer import SHIM_FILE
 from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable, utf8_prefix
 from .uvm import builtin_params
 from .views import config_db_report, mismatched, norm_type
-from .workspace import Spec, Workspace
+from .workspace import Spec, Workspace, bind_params, substitute_params
 
 WORD = re.compile(r"[A-Za-z0-9_$]")
 # What the utils and field macros generate in a user class; other generated methods are API
@@ -38,6 +38,7 @@ class CursorExpr:
     is_macro: bool
     start: int
     end: int
+    args: list[list[str]] = field(default_factory=list)
 
 
 def expr_at(line: str, col: int) -> CursorExpr | None:
@@ -113,7 +114,7 @@ class Navigator:
         ce = expr_at(line_of(text, line), col)
         return self.resolve_expr(path, line, col, ce)
 
-    def resolve_expr(self, path: str, line: int, col: int, ce: CursorExpr | None) -> list[Target]:
+    def resolve_expr(self, path: str, line: int, col: int, ce: CursorExpr | None, strict: bool = False) -> list[Target]:
         if ce is None:
             return []
         ws = self.ws
@@ -126,14 +127,19 @@ class Navigator:
             return found
         cls, meth, unit = ws.enclosing(path, line, col)
         segs, seps = ce.segments, ce.seps
-        current = self.resolve_first(segs[0], cls, meth, unit, scoped=bool(seps) and seps[0] == "::")
-        for i in range(1, len(segs)):
-            if not current:
-                return self.global_member_search(segs[i]) if i == len(segs) - 1 else []
-            current = self.step(current[0], segs[i], seps[i - 1], cls)
+        current = self.resolve_first(segs[0], cls, meth, unit, scoped=bool(seps) and seps[0] == "::", strict=strict)
+        for i in range(len(segs)):
+            if i:
+                if strict and len(current) != 1:
+                    return []
+                if not current:
+                    return self.global_member_search(segs[i]) if i == len(segs) - 1 else []
+                current = self.step(current[0], segs[i], seps[i - 1], cls, strict=strict)
+            if ce.args and ce.args[i] and len(current) == 1 and current[0].spec is not None:
+                current[0].spec = replace(current[0].spec, args=ce.args[i])
         return current
 
-    def resolve_first(self, name: str, cls, meth, unit, scoped: bool) -> list[Target]:
+    def resolve_first(self, name: str, cls, meth, unit, scoped: bool, strict: bool = False) -> list[Target]:
         ws = self.ws
         if name == "this" and cls is not None:
             return [Target(cls, spec=Spec(cls.name, cls))]
@@ -158,6 +164,11 @@ class Navigator:
                     return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
         package = cls.package if cls else (unit.name if unit and unit.kind == "package" else None)
         imports = list(cls.imports) if cls else (list(unit.imports) if unit else [])
+        if strict:
+            candidates = ws.classes_by_name.get(name, []) or ws.typedefs_by_name.get(name, [])
+            visible = [c for c in candidates if c.package == package] or [c for c in candidates if c.package in imports]
+            if len(visible or candidates) > 1:
+                return []
         found = ws.find_class(name, package, imports)
         if found is not None:
             return [Target(found, spec=Spec(found.name, found))]
@@ -177,7 +188,7 @@ class Navigator:
         # Items of packages in scope, then of any package.
         scopes = [package] + imports if package else imports
         ordered = [ws.find_unit(p, "package") for p in scopes] + \
-                  [u for u in ws.units if u.kind == "package"]
+                  ([u for u in ws.units if u.kind == "package"] if not strict else [])
         for u in ordered:
             if u is None:
                 continue
@@ -202,7 +213,7 @@ class Navigator:
                 out.append(cur)
         return out
 
-    def type_of(self, t: Target) -> Spec | None:
+    def type_of(self, t: Target, strict: bool = False) -> Spec | None:
         ws = self.ws
         if t.spec is not None and isinstance(t.obj, (ClassInfo, Typedef, str)):
             return t.spec
@@ -211,11 +222,25 @@ class Navigator:
             if t.obj.type is None:
                 return None
             if t.bindings and t.obj.type.name in t.bindings:
-                return ws.resolve_type_text(t.bindings[t.obj.type.name], ctx)
-            return ws.resolve_spec(t.obj.type.name, t.obj.type.scope, t.obj.type.args, ctx)
+                return ws.resolve_type_text(t.bindings[t.obj.type.name], ctx, strict=strict)
+            return ws.resolve_type_text(substitute_params(t.obj.type.text, t.bindings or {}), ctx, strict=strict)
         if t.owner is not None and isinstance(t.obj, (Method, Typedef, str)):
             return ws.member_type_spec(t.owner, t.obj, t.bindings or {})
         return None
+
+    def new_target_type(self, path, line, col, target, type_ref=None):
+        """The assigned type, its written spelling and whether it came from a base."""
+        cls, _, _ = self.ws.enclosing(path, line, col)
+        if type_ref is not None:
+            return self.ws.resolve_type_text(type_ref.text, cls), type_ref.text, False
+        if not target:
+            return None, "", False
+        text = re.sub(r"\[[^\]]*\]", "", target)
+        targets = self.resolve_expr(path, line, col, expr_at(text, len(text)), strict=True)
+        if len(targets) != 1 or not isinstance(targets[0].obj, Variable):
+            return None, "", False
+        t = targets[0]
+        return self.type_of(t, strict=True), t.obj.type_text, isinstance(t.owner, ClassInfo) and t.owner is not cls
 
     def bound_member_hints(self, path: str, start_line: int = 0,
                            end_line: int | None = None) -> list[tuple[Range, str, str]]:
@@ -287,7 +312,7 @@ class Navigator:
             cache[hint[0].line].append(hint)
         return [hint for line in line_numbers for hint in cache[line]]
 
-    def step(self, t: Target, name: str, sep: str, ctx_cls) -> list[Target]:
+    def step(self, t: Target, name: str, sep: str, ctx_cls, strict: bool = False) -> list[Target]:
         ws = self.ws
         if isinstance(t.obj, DesignUnit) and t.obj.kind == "package":
             pkg = t.obj
@@ -312,11 +337,12 @@ class Navigator:
             return self._unit_member(t.obj, name)
         if isinstance(t.obj, Variable) and t.obj.kind in ("clocking", "modport"):
             return self._unit_member(t.owner, name) if isinstance(t.owner, DesignUnit) else []
-        spec = self.type_of(t)
+        spec = self.type_of(t, strict=strict)
         if spec is None:
-            return self.global_member_search(name)
+            return [] if strict else self.global_member_search(name)
         if spec.cls is not None:
-            hit = ws.find_member(spec.cls, name)
+            bindings = bind_params([(p.name, p.default) for p in spec.cls.params], spec.args, {})
+            hit = ws.find_member(spec.cls, name, bindings)
             if hit is not None:
                 return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
             return []
@@ -325,7 +351,6 @@ class Navigator:
             from .uvm import BUILTIN_MEMBERS, builtin_params
             mt = BUILTIN_MEMBERS.get(entry_name, {}).get(name)
             if mt is not None:
-                from .workspace import bind_params
                 bindings = bind_params(builtin_params(spec.name), spec.args, {})
                 return [Target(mt, owner=entry_name, bindings=bindings, note=name)]
         return []
