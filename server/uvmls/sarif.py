@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from . import __version__
-from .model import Diag
+from .model import Diag, Range, utf8_prefix
 
 
 INFORMATION_URI = "https://example.invalid/uvmls"
@@ -41,11 +41,12 @@ def _column(lines: list[str], line: int, col: int) -> int:
     if not 0 <= line < len(lines):
         return col + 1
     # slang counts UTF-8 bytes; SARIF consumers use the run's declared character units.
-    prefix = lines[line].encode("utf-8")[:col].decode("utf-8", errors="replace")
-    return len(prefix.encode("utf-16-le")) // 2 + 1
+    return len(utf8_prefix(lines[line], col).encode("utf-16-le")) // 2 + 1
 
 
-def build_log(root: str | Path, diagnostics: list[Diag]) -> dict:
+def build_log(root: str | Path, diagnostics: list[Diag], fallback: str | None = None) -> dict:
+    """`fallback` locates diagnostics without a file (global elaboration failures): code scanning
+    rejects results without a location. Pass the filelist that produced them."""
     root = Path(root).resolve()
     rules, results, texts = {}, [], {}
     for d in diagnostics:
@@ -60,9 +61,10 @@ def build_log(root: str | Path, diagnostics: list[Diag]) -> dict:
         rule["properties"]["tags"] = sorted(set(rule["properties"]["tags"]) | {d.source})
         result = {"ruleId": d.code, "level": level, "message": {"text": d.message}}
         span = d.range
-        # Some elaboration failures are global; a made-up source location would mislead a reader.
-        if span.path:
-            path = Path(span.path).resolve()
+        # Some elaboration failures are global: point at the filelist's start, not a made-up source line.
+        located = span.path or fallback
+        if located:
+            path = Path(located).resolve()
             relative = Path(os.path.relpath(path, root)).as_posix()
             if path.is_relative_to(root):
                 artifact = {"uri": quote(relative), "uriBaseId": "SRCROOT"}
@@ -75,12 +77,17 @@ def build_log(root: str | Path, diagnostics: list[Diag]) -> dict:
                 except OSError:
                     texts[path] = []
             lines = texts[path]
+            if not span.path:
+                span = Range(located, 0, 0, 0, 0)
             region = {"startLine": span.line + 1, "startColumn": _column(lines, span.line, span.col)}
             if (span.end_line, span.end_col) > (span.line, span.col):
                 region.update(endLine=span.end_line + 1, endColumn=_column(lines, span.end_line, span.end_col))
             result["locations"] = [{"physicalLocation": {"artifactLocation": artifact, "region": region}}]
             line = lines[span.line] if 0 <= span.line < len(lines) else ""
-            identity = json.dumps([relative, d.code, " ".join(line.split())], ensure_ascii=False)
+            identity = [relative, d.code, " ".join(line.split())]
+            if not d.range.path:  # every global failure sits on the filelist's first line
+                identity.append(d.message)
+            identity = json.dumps(identity, ensure_ascii=False)
             result["partialFingerprints"] = {"primaryLocationLineHash": hashlib.sha256(identity.encode("utf-8")).hexdigest()}
         results.append(result)
     ordered = sorted(rules)
@@ -96,8 +103,8 @@ def build_log(root: str | Path, diagnostics: list[Diag]) -> dict:
     }]}
 
 
-def write_log(destination: str, root: str, diagnostics: list[Diag]) -> None:
-    text = json.dumps(build_log(root, diagnostics), indent=2, ensure_ascii=False) + "\n"
+def write_log(destination: str, root: str, diagnostics: list[Diag], fallback: str | None = None) -> None:
+    text = json.dumps(build_log(root, diagnostics, fallback), indent=2, ensure_ascii=False) + "\n"
     if destination == "-":
         sys.stdout.write(text)
     else:

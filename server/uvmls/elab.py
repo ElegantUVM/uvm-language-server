@@ -33,7 +33,7 @@ SEVERITY = {ps.DiagnosticSeverity.Error: "error", ps.DiagnosticSeverity.Fatal: "
             ps.DiagnosticSeverity.Warning: "warning"}
 NOTE_RE = re.compile(r"^(.+?):(\d+):(\d+): note: (.*)$")
 HEADER_EXTENSIONS = (".svh", ".vh", ".svi")
-MAX_PER_FILE = 100  # diagnostics listed per file, and in all; the counts include the rest
+MAX_PER_FILE = 100  # diagnostics listed per file, and in all, unless the request says listAll; the counts include the rest
 MAX_LISTED = 1000
 
 
@@ -234,6 +234,16 @@ def _with_uvm_macros(d, loc: _Locator, include_dirs: list[str]):
     return trees if prelude else None
 
 
+def displayed(diags: list[dict]) -> tuple[list[dict], int]:
+    """The diagnostics a listAll result would have listed (sorted by file), and how many more."""
+    out, per_file = [], Counter()
+    for d in diags:
+        if len(out) < MAX_LISTED and per_file[d["file"]] < MAX_PER_FILE:
+            per_file[d["file"]] += 1
+            out.append(d)
+    return out, len(diags) - len(out)
+
+
 def _counts(diags: list[dict], library: dict[str, int], omitted: int = 0) -> dict:
     sev = [d["severity"] for d in diags]
     return {"errors": sev.count("error"), "warnings": sev.count("warning"), "infos": sev.count("info"),
@@ -386,7 +396,7 @@ def _elaborate(req: dict) -> dict:
     found.sort(key=lambda x: (x[0]["file"] or "", x[0]["line"], x[0]["col"], x[0]["code"], x[0]["message"]))
     out, per_file = [], Counter()
     for item, diag, sev, related in found:  # the first ones of each file, up to the limits
-        if len(out) < MAX_LISTED and per_file[item["file"]] < MAX_PER_FILE:
+        if req.get("listAll") or (len(out) < MAX_LISTED and per_file[item["file"]] < MAX_PER_FILE):
             per_file[item["file"]] += 1
             if diag is not None:
                 item["related"] = notes.of(diag, sev) + related

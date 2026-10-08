@@ -246,3 +246,56 @@ def test_filesystem_root_keeps_the_file_uri_authority(tmp_path):
     root = Path(tmp_path.anchor)
     run = build_log(root, [])["runs"][0]
     assert run["originalUriBaseIds"]["SRCROOT"]["uri"] == root.as_uri()
+
+
+def test_global_elab_failure_points_at_the_filelist(tmp_path):
+    from uvmls.sarif import build_log
+
+    filelist = tmp_path / "tb.f"
+    filelist.write_text("top.sv\n")
+    diags = [Diag(Range("", 0, 0, 0, 0), "no top module", "error", "NoTopModules", "slang-elab")]
+    assert "locations" not in build_log(tmp_path, diags)["runs"][0]["results"][0]
+    [result] = check_log(build_log(tmp_path, diags, fallback=str(filelist)))["results"]
+    [location] = result["locations"]
+    assert location["physicalLocation"]["artifactLocation"] == {"uri": "tb.f", "uriBaseId": "SRCROOT"}
+    assert location["physicalLocation"]["region"] == {"startLine": 1, "startColumn": 1}
+    assert result["message"]["text"] == "no top module"
+
+
+def test_elab_sarif_lists_past_the_display_limits(tmp_path, capsys, monkeypatch):
+    from uvmls import elab
+
+    monkeypatch.delenv("UVM_HOME", raising=False)
+    monkeypatch.setattr(elab, "MAX_PER_FILE", 2)
+    body = "".join(f"  initial $display(missing_{i});\n" for i in range(5))
+    (tmp_path / "top.sv").write_text(f"module top;\n{body}endmodule\n", encoding="utf-8")
+    code, out = invoke(capsys, ["elab", str(tmp_path), "--sarif", "-"])
+    assert code == 1
+    [run] = json.loads(out.out)["runs"]
+    assert sum("missing_" in r["message"]["text"] for r in run["results"]) == 5
+
+
+def test_elab_console_keeps_its_limits_beside_a_full_sarif(tmp_path, capsys, monkeypatch):
+    from uvmls import elab
+
+    monkeypatch.delenv("UVM_HOME", raising=False)
+    monkeypatch.setattr(elab, "MAX_PER_FILE", 2)
+    body = "".join(f"  initial $display(missing_{i});\n" for i in range(5))
+    (tmp_path / "top.sv").write_text(f"module top;\n{body}endmodule\n", encoding="utf-8")
+    code, out = invoke(capsys, ["elab", str(tmp_path), "--sarif", str(tmp_path / "out.sarif"), "--json"])
+    assert code == 1
+    result = json.loads(out.out)
+    assert len([d for d in result["diagnostics"] if "missing_" in d["message"]]) <= 2
+    assert result["counts"]["omitted"] >= 3
+    run = json.loads((tmp_path / "out.sarif").read_text())["runs"][0]
+    assert sum("missing_" in r["message"]["text"] for r in run["results"]) == 5
+
+
+def test_global_failures_get_distinct_fingerprints(tmp_path):
+    from uvmls.sarif import build_log
+
+    filelist = tmp_path / "tb.f"
+    filelist.write_text("top.sv\n")
+    diags = [Diag(Range("", 0, 0, 0, 0), msg, "error", "NoTopModules", "slang-elab") for msg in ("a", "b")]
+    results = build_log(tmp_path, diags, fallback=str(filelist))["runs"][0]["results"]
+    assert results[0]["partialFingerprints"] != results[1]["partialFingerprints"]

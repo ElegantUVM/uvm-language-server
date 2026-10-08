@@ -18,7 +18,7 @@ import json
 import os
 import sys
 
-from .elab import elaborate, request_for, skip_reason, uvm_label
+from .elab import displayed, elaborate, request_for, skip_reason, uvm_label
 from .lints import lint
 from .model import Diag, Range
 from .project import ProjectConfig, build_source_set
@@ -66,11 +66,16 @@ def _elab(ws: Workspace, args) -> int:
             write_log(args.sarif, args.dir, [])
         print(f"elaboration skipped: {reason}", file=sys.stderr)
         return 2
-    result = elaborate(request_for(ws, tops=args.top))
+    request = request_for(ws, tops=args.top)
+    request["listAll"] = bool(args.sarif)  # a code-scanning report must not drop findings past the display limits
+    result = elaborate(request)
     if args.sarif:
         write_log(args.sarif, args.dir, [Diag(
             Range(d["file"] or "", d["line"], d["col"], d["endLine"], d["endCol"]),
-            d["message"], d["severity"], d["code"], "slang-elab") for d in result["diagnostics"]])
+            d["message"], d["severity"], d["code"], "slang-elab") for d in result["diagnostics"]],
+            fallback=args.filelist[0] if args.filelist else None)
+        listed, more = displayed(result["diagnostics"])  # the console and --json keep their limits
+        result = {**result, "diagnostics": listed, "counts": {**result["counts"], "omitted": result["counts"]["omitted"] + more}}
     out = sys.stderr if args.sarif == "-" else sys.stdout
     if args.json and args.sarif != "-":
         print(json.dumps(result, indent=1))
