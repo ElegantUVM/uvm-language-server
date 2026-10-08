@@ -661,3 +661,45 @@ endclass
         signature(help_at(doc, receiver + '::go('), ['int secret_arg'])
     finally:
         pkg.close()
+
+
+@pytest.mark.parametrize('closing', [');', ''])
+@pytest.mark.parametrize('before,disabled,after,needle,active', [
+    ('', '.b(2),', '.a(1)', '.a(', 0),
+    ('.c(3)', ', .b(2)', ', .a(1)', '.a(', 0),
+    ('1', ', 2', ', 3', ', 3', 1),
+    ('.c(3)', '; endfunction /* , .b(2) */ "x,y"', ', .a(1)', '.a(', 0),
+])
+def test_inactive_arguments(doc, closing, before, disabled, after, needle, active):
+    call = 'f(' + before + '\n`ifdef NEVER_DEFINED\n' + disabled + '\n`endif\n' + after + closing
+    doc.change('''class C;
+ function void f(int a = 0, int b = 0, int c = 0); endfunction
+ function void test();
+ CALL
+ endfunction
+endclass
+'''.replace('CALL', call))
+    assert help_at(doc, '\n' + disabled) is None
+    signature(help_at(doc, needle), ['int a = 0', 'int b = 0', 'int c = 0'], active)
+    if before == '.c(3)':
+        signature(help_at(doc, '.c('), ['int a = 0', 'int b = 0', 'int c = 0'], 2)
+
+
+@pytest.mark.parametrize('directive', [
+    '`ifndef NEVER_DEFINED\n, .a(1)\n`else\n, .b(2)\n`endif',
+    '`ifdef NEVER_DEFINED\n, .b(2)\n`elsif NEVER_DEFINED_EITHER\n, .b(3)\n`else\n, .a(1)\n`endif',
+    '`ifdef NEVER_DEFINED\n`ifdef NESTED\n, .b(2)\n`endif\n`else\n, .a(1)\n`endif',
+    '`define UNUSED , .b(2)\n, .a(1)',
+])
+def test_directives_within_arguments(doc, directive):
+    doc.change(('''class C;
+ function void f(int a = 0, int b = 0, int c = 0); endfunction
+ function void test();
+ /*😀é*/ f(.c(3)
+ DIRECTIVE
+ );
+ endfunction
+endclass
+'''.replace('DIRECTIVE', directive)).replace('\n', '\r\n'))
+    assert help_at(doc, '.b(') is None
+    signature(help_at(doc, '.a('), ['int a = 0', 'int b = 0', 'int c = 0'])

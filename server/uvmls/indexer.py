@@ -1448,7 +1448,18 @@ class Extractor:
         sm = self.sm
         seen = set()
         for tok in iter_tokens(self.tree.root, self.structural_pair):
-            if self.library or tok.kind != TK.Identifier:
+            if self.library:
+                continue
+            for trivia in tok.trivia:
+                if trivia.kind != P.TriviaKind.Directive:
+                    continue
+                sr = trivia.syntax().sourceRange
+                if sr.start.buffer != sr.end.buffer or sm.isMacroLoc(sr.start) or sm.isMacroLoc(sr.end):
+                    continue
+                rng, _ = self.make_range(sr.start, sr.end)
+                if rng is not None and not self.in_library(rng.path):
+                    self.out.directives.append(rng)
+            if tok.kind != TK.Identifier:
                 continue
             loc = tok.location
             if sm.isMacroLoc(loc):

@@ -152,6 +152,7 @@ class Workspace:
         self._bound_member_hints: dict = {}
         self.creates_by_file: dict[str, list[CreateCall]] = {}
         self.invocations_by_file: dict = {}
+        self.directives_by_file: dict = {}
         self._signature_texts: dict = {}
         self._signature_cache: dict = {}
         self._highlight_cache: dict = {}
@@ -246,6 +247,7 @@ class Workspace:
         seen_decl: set[tuple[str, int, str]] = set()
         seen_ids: set[Range] = set()
         seen_calls: set[Range] = set()
+        seen_directives: set[Range] = set()
         seen_structures = set()
         for idx in self.indices.values():
             self.texts.update(idx.texts)
@@ -257,6 +259,10 @@ class Workspace:
                 if call.opening not in seen_calls:
                     seen_calls.add(call.opening)
                     self.invocations_by_file.setdefault(call.head.path, []).append(call)
+            for rng in idx.directives:
+                if rng not in seen_directives:
+                    seen_directives.add(rng)
+                    self.directives_by_file.setdefault(rng.path, []).append(rng)
             if idx.library:
                 self.library_files |= idx.files
             else:

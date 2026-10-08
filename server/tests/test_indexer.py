@@ -298,3 +298,31 @@ endclass
         ('output', 'bit[3:0]', '[]', None), ('const ref', 'string', '', '"x,y"')]
     ws.update_document(path, text.replace('f(1, 2);', ''))
     assert len(ws.invocations_by_file[path]) == 1
+
+
+def test_directive_ranges_across_includes_and_edits(tmp_path):
+    from test_fixes import index
+    from uvmls.fixes import FileText
+    from uvmls.signatures import call_at
+
+    text = '''class C;
+ function void f(int a = 0, int b = 0, int c = 0); endfunction
+ function void run();
+   f(.c(3)
+`ifdef ABSENT
+   , .b(2)
+`endif
+   , .a(1));
+ endfunction
+endclass
+'''
+    ws = index(tmp_path, {'one.sv': '`include "body.svh"', 'two.sv': '`include "body.svh"', 'body.svh': text})
+    path = str(tmp_path / 'body.svh')
+    ft = FileText(path, text)
+    assert [text[slice(*ft.span(r))] for r in ws.directives_by_file[path]] == [
+        '`ifdef ABSENT\n   , .b(2)\n', '`endif']
+    assert call_at(ws, path, 5, 8) is None
+    assert call_at(ws, path, 7, 8)[1:] == (1, 'a')
+    ws.update_document(path, text.replace('`ifdef ABSENT', '`ifndef ABSENT'))
+    assert call_at(ws, path, 5, 8)[1:] == (1, 'b')
+    assert call_at(ws, path, 7, 8)[1:] == (2, 'a')
