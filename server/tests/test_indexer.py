@@ -104,6 +104,17 @@ def test_escaped_identifier_ranges(tmp_path):
     assert idx.identifiers["foo.bar"] == [Range(str(path), 1, 6, 1, 14), Range(str(path), 2, 21, 2, 29)]
 
 
+def test_ranges_are_compact():
+    import copy
+
+    from uvmls.model import Range
+
+    # A 2,000-class package holds over 100,000 ranges: no per-instance dict.
+    r = Range("p", 1, 2, 3, 4)
+    assert not hasattr(r, "__dict__")
+    assert copy.deepcopy(r) == r and hash(copy.copy(r)) == hash(r)
+
+
 @pytest.mark.parametrize("eol", [b"\n", b"\r\n", b"\r"])
 @pytest.mark.parametrize("prefix", ["/* 😀 */ ".encode(), b"// \xe9\n", b"\xef\xbb\xbf"])
 def test_line_directive_ranges(tmp_path, eol, prefix):

@@ -15,7 +15,7 @@ def utf8_prefix(line: str, col: int) -> str:
     return line.encode("utf-8")[:col].decode("utf-8", errors="replace")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Range:
     """A span in a file. Lines and columns are 0-based, like LSP."""
 
