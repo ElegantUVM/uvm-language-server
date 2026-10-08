@@ -23,7 +23,7 @@ import pyslang as ps
 from pyslang import analysis, ast, driver
 from pyslang import syntax as S
 
-from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro, fix_data, slang_text
+from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro, fix_data, physical_position, slang_text
 from .project import BUNDLED_UVM, SourceSet, norm
 
 log = logging.getLogger("uvmls")
@@ -118,6 +118,11 @@ class _Locator:
         self.library = [os.path.realpath(p) for p in req.get("library") or []]
         self._paths: dict[int, str | None] = {}
         self._in_library: dict[str, bool] = {}
+        self._line_starts: dict = {}
+
+    def position(self, loc) -> tuple[int, int]:
+        """Where the index puts a location: in its file's lines, not `line directive ones."""
+        return physical_position(self.sm, loc, self._line_starts)
 
     def as_given(self, path: str) -> str:
         if path in self.files:
@@ -178,8 +183,7 @@ class _Locator:
                     break
         if end.buffer != start.buffer or end.offset < start.offset:
             end = start
-        return (path, sm.getLineNumber(start) - 1, sm.getColumnNumber(start) - 1,
-                sm.getLineNumber(end) - 1, sm.getColumnNumber(end) - 1)
+        return (path, *self.position(start), *self.position(end))
 
 
 class _Notes:
@@ -344,8 +348,8 @@ def _given_types(diag, loc: _Locator) -> list[dict]:
         at, _ = loc.file_loc(t.location)
         path = loc.path(at.buffer)
         if path and not loc.is_library(path):
-            out.append({"file": path, "line": loc.sm.getLineNumber(at) - 1,
-                        "col": loc.sm.getColumnNumber(at) - 1, "message": f"{m.name} = {t}"})
+            line, col = loc.position(at)
+            out.append({"file": path, "line": line, "col": col, "message": f"{m.name} = {t}"})
     return out
 
 

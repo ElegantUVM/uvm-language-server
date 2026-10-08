@@ -377,6 +377,25 @@ def clean_doc(comments: list[str]) -> str:
     return "\n".join(lines)
 
 
+def physical_position(sm, loc, line_starts: dict) -> tuple[int, int]:
+    """(line, byte column) of a location in its buffer, unaffected by `line directives: editor
+    ranges use buffer coordinates. `line_starts` caches each buffer's line table."""
+    bid = loc.buffer.id
+    if bid not in line_starts:
+        try:
+            text = sm.getSourceText(loc.buffer)
+            raw = text.encode("utf-8") if "`line" in text else None
+        except UnicodeDecodeError as e:
+            raw = e.object if b"`line" in e.object else None
+        # Without a `line directive, slang's (cached) line numbers are the physical ones.
+        line_starts[bid] = None if raw is None else [0] + [m.end() for m in re.finditer(rb"\r\n|\r|\n", raw)]
+    starts = line_starts[bid]
+    if starts is None:
+        return sm.getLineNumber(loc) - 1, sm.getColumnNumber(loc) - 1
+    line = bisect.bisect_right(starts, loc.offset) - 1
+    return line, loc.offset - starts[line]
+
+
 def _raw_length(trivia) -> int:
     """Length in bytes of a piece of trivia as it is in the file."""
     try:
@@ -523,22 +542,7 @@ class Extractor:
         return sm.getFullyExpandedLoc(loc), True
 
     def physical_position(self, loc) -> tuple[int, int]:
-        """Editor ranges use buffer coordinates, unaffected by `line directives."""
-        bid = loc.buffer.id
-        if bid not in self._line_starts:
-            try:
-                text = self.sm.getSourceText(loc.buffer)
-                raw = text.encode("utf-8") if "`line" in text else None
-            except UnicodeDecodeError as e:
-                raw = e.object if b"`line" in e.object else None
-            # Without a `line directive, slang's (cached) line numbers are the physical ones.
-            self._line_starts[bid] = None if raw is None else \
-                [0] + [m.end() for m in re.finditer(rb"\r\n|\r|\n", raw)]
-        starts = self._line_starts[bid]
-        if starts is None:
-            return self.sm.getLineNumber(loc) - 1, self.sm.getColumnNumber(loc) - 1
-        line = bisect.bisect_right(starts, loc.offset) - 1
-        return line, loc.offset - starts[line]
+        return physical_position(self.sm, loc, self._line_starts)
 
     def make_range(self, start, end=None) -> tuple[Range | None, bool]:
         start, gen = self.file_loc(start)

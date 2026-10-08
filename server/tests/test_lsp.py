@@ -285,15 +285,17 @@ def test_elaboration_on_save(client):
     client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
 
 
-def test_parse_errors_are_published_once(client):
+@pytest.mark.parametrize("prefix", ["", '`line 200 "generated.tpl" 0\n'])
+def test_parse_errors_are_published_once(client, prefix):
     # Elaboration reports parse errors too; only the index's copy is published. The index
     # adds a hint to an include it cannot find, so its message differs from slang-elab's.
+    # Both put them on the file's own lines, whatever a `line directive says.
     path = os.path.join(EXAMPLE, "agent/alu_driver.svh")
     with open(path) as f:
         text = f.read()
     u = uri("agent/alu_driver.svh")
-    line = text[:text.index("m_cfg.vif;")].count("\n")
-    broken = text.replace("// Drives alu_seq_items onto the pin interface.", '`include "no_such_file.svh"')
+    line = text[:text.index("m_cfg.vif;")].count("\n") + prefix.count("\n")
+    broken = prefix + text.replace("// Drives alu_seq_items onto the pin interface.", '`include "no_such_file.svh"')
     broken = broken.replace("m_cfg.vif;", "m_cfg.vif")
     client.forget("textDocument/publishDiagnostics")
     client.notify("textDocument/didOpen", {"textDocument": {
@@ -308,7 +310,7 @@ def test_parse_errors_are_published_once(client):
                        if m["method"] == "textDocument/publishDiagnostics" and m["params"]["uri"] == u]
     diags = sorted(msg["params"]["diagnostics"], key=lambda d: d["range"]["start"]["line"])
     assert [(d["range"]["start"]["line"], d["code"], d["source"], d["severity"]) for d in diags] == \
-        [(0, "CouldNotOpenIncludeFile", "slang", 1), (line, "ExpectedToken", "slang", 1)]
+        [(prefix.count("\n"), "CouldNotOpenIncludeFile", "slang", 1), (line, "ExpectedToken", "slang", 1)]
     assert "uvm.includeDirs" in diags[0]["message"]  # the index's copy, an error as slang has it
 
     client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},

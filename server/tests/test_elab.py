@@ -68,6 +68,17 @@ def test_unsaved_root_file(bundled_ws):
         [(top, line, col, "UndeclaredIdentifier")]
 
 
+def test_line_directives_do_not_move_diagnostics(bundled_ws):
+    # The index places ranges in the file's own lines; elaboration must agree, or one error is
+    # published twice, once past the end of the file.
+    top = os.path.join(EXAMPLE, "tb", "tb_top.sv")
+    text = edited(top, "rst_n = 1;", "rst_n = no_such_signal;")
+    r = elaborate(request_for(bundled_ws, {top: '`line 500 "generated.tpl" 0\n' + text}))
+    _, line, col, _ = position("tb/tb_top.sv", "rst_n = 1;", len("rst_n = "))
+    assert [(d["file"], d["line"], d["col"], d["endLine"], d["code"]) for d in r["diagnostics"]] == \
+        [(top, line + 1, col, line + 1, "UndeclaredIdentifier")]
+
+
 def test_workspace_and_library_behind_symlinks(tmp_path):
     # slang resolves symlinks; unsaved text must still apply, diagnostics keep the paths the
     # editor uses, and the UVM library is still recognised.
