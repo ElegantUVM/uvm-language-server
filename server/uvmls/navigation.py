@@ -223,7 +223,7 @@ class Navigator:
                 return ws.resolve_type_text(t.bindings[t.obj.type.name], ctx, strict=strict)
             return ws.resolve_type_text(substitute_params(t.obj.type.text, t.bindings or {}), ctx, strict=strict)
         if t.owner is not None and isinstance(t.obj, (Method, Typedef, str)):
-            return ws.member_type_spec(t.owner, t.obj, t.bindings or {})
+            return ws.member_type_spec(t.owner, t.obj, t.bindings or {}, strict=strict)
         return None
 
     def new_target_type(self, path, line, col, target, type_ref=None):

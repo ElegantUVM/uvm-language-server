@@ -544,26 +544,26 @@ class Workspace:
                     return entry.spec.name, t, entry.bindings
         return None
 
-    def member_type_spec(self, owner, member, bindings: dict[str, str]) -> Spec | None:
+    def member_type_spec(self, owner, member, bindings: dict[str, str], strict: bool = False) -> Spec | None:
         ctx = owner if isinstance(owner, ClassInfo) else None
         if isinstance(member, Variable):
             if member.type is None:
                 return None
             name = bindings.get(member.type.name)
             if name is not None:
-                return self.resolve_type_text(name, ctx)
-            return self.resolve_type_text(substitute_params(member.type.text, bindings), ctx)
+                return self.resolve_type_text(name, ctx, strict=strict)
+            return self.resolve_type_text(substitute_params(member.type.text, bindings), ctx, strict=strict)
         if isinstance(member, Method):
             parsed = parse_type_text(member.return_type)
             if parsed:
-                return self.resolve_type_text(bindings.get(parsed[1], member.return_type), ctx)
+                return self.resolve_type_text(bindings.get(parsed[1], member.return_type), ctx, strict=strict)
             return None
         if isinstance(member, Typedef) and member.target is not None:
-            return self.resolve_type_text(substitute_params(member.target_text, bindings), ctx)
+            return self.resolve_type_text(substitute_params(member.target_text, bindings), ctx, strict=strict)
         if isinstance(member, str):  # built-in member type text
             parsed = parse_type_text(member)
             if parsed:
-                return self.resolve_type_text(bindings.get(parsed[1], member), ctx)
+                return self.resolve_type_text(bindings.get(parsed[1], member), ctx, strict=strict)
         return None
 
     def calls_of(self, cls: ClassInfo) -> CallSet:

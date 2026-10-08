@@ -27,6 +27,36 @@ def test_expr_at():
     assert e.segments == ["my_env", "type_id", "create"] and e.seps == ["::", "::"]
 
 
+def test_strict_member_typedef_preserves_navigation_fallback(tmp_path):
+    from test_fixes import index
+
+    text = '''package first;
+class box; static function void go(int a); endfunction endclass
+endpackage
+package second;
+class box; static function void go(string b); endfunction endclass
+endpackage
+package calls;
+import first::*;
+import second::*;
+class caller;
+ typedef box alias_t;
+ function void test(); alias_t::go(1); endfunction
+endclass
+endpackage
+'''
+    ws = index(tmp_path, {'t.sv': text})
+    nav = Navigator(ws)
+    path = str(tmp_path / 't.sv')
+    line = next(i for i, s in enumerate(text.splitlines()) if 'alias_t::go' in s)
+    col = text.splitlines()[line].index('go(')
+    ce = expr_at(text.splitlines()[line], col)
+    assert nav.resolve_expr(path, line, col, ce, strict=True) == []
+    [target] = nav.resolve_expr(path, line, col, ce)
+    assert target.owner.package == 'first'
+    assert 'go' in nav.hover(path, line, col, text)
+
+
 def test_member_through_config_object(ws):
     assert defs(ws, "agent/alu_driver.svh", "m_cfg.idle_cycles", 6) == ["agent/alu_agent_config.svh:8"]
 

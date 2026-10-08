@@ -586,3 +586,47 @@ class child extends base #(byte);''')
     doc.change(text.replace('CALL', 'public_t::f("x");'))
     signature(help_at(doc, 'public_t::f('), ['input string a', 'input string b', 'output bit[3:0] bits[]',
                                            'const ref string text = "T,a"'])
+
+
+@pytest.mark.parametrize('factory', [False, True])
+def test_ambiguous_class_local_typedef(client, tb, doc, factory):
+    pkg = Doc(client, os.path.join(tb, 'agent', 'alu_pkg.sv'))
+    try:
+        pkg.change('''`include "uvm_macros.svh"
+package first;
+import uvm_pkg::*;
+class box extends uvm_object;
+ `uvm_object_utils(box)
+ static function void go(int first_arg); endfunction
+endclass
+endpackage
+package second;
+import uvm_pkg::*;
+class box extends uvm_component;
+ `uvm_component_utils(box)
+ static function void go(string second_arg); endfunction
+endclass
+endpackage
+package calls;
+import first::*;
+import second::*;
+`include "alu_driver.svh"
+endpackage
+''')
+        call = 'alias_t::type_id::create("x");' if factory else 'alias_t::go(1);'
+        doc.change('''class caller;
+ typedef box alias_t;
+ function void test(); CALL endfunction
+endclass
+'''.replace('CALL', call))
+        needle = call.split('(')[0] + '('
+        assert help_at(doc, needle) is None
+        doc.change(doc.text.replace('typedef box', 'typedef first::box'))
+        formals = ['string name = ""', 'uvm_component parent = null', 'string contxt = ""'] if factory else \
+            ['int first_arg']
+        signature(help_at(doc, needle), formals)
+        pkg.change(pkg.text.replace('import second::*;', ''))
+        doc.change(doc.text.replace('typedef first::box', 'typedef box'))
+        signature(help_at(doc, needle), formals)
+    finally:
+        pkg.close()
