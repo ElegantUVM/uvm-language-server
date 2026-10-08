@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import signal
 from dataclasses import dataclass
 
 from .fixes import EOL_RE
 from .project import expand_path, norm
 
 TIMEOUT = 5.0
+CLEANUP_TIMEOUT = 1.0
 
 
 @dataclass(frozen=True)
@@ -57,11 +59,29 @@ def normalize(source: str, output: bytes) -> str:
 
 
 def kill(proc):
-    if proc.returncode is None:
-        try:
+    try:
+        if os.name == "posix":
+            # A wrapper can exit while its descendants still own the output pipes.
+            os.killpg(proc.pid, signal.SIGKILL)
+        elif proc.returncode is None:
             proc.kill()
-        except ProcessLookupError:
-            pass
+    except ProcessLookupError:
+        pass
+
+
+async def reap(proc, communication):
+    kill(proc)
+    waiters = [proc.wait()]
+    if communication is not None:
+        waiters.append(communication)
+    try:
+        results = await asyncio.wait_for(asyncio.gather(*waiters), CLEANUP_TIMEOUT)
+        return results[1][1] if communication is not None else b""
+    except asyncio.TimeoutError:
+        # Detached descendants can escape the group. Process has no public pipe-close API;
+        # closing its transport releases our pipes and leaves child reaping to the watcher.
+        proc._transport.close()
+        return b""
 
 
 class Formatter:
@@ -110,10 +130,12 @@ class Formatter:
         task = asyncio.current_task()
         self.tasks.add(task)
         proc, communication = None, None
+        timed_out = False
         # Shield startup so cancellation cannot lose a child created before the await resumes.
         spawn = asyncio.ensure_future(asyncio.create_subprocess_exec(
             *argv, cwd=os.path.dirname(path), stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE))
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            start_new_session=os.name == "posix"))
         try:
             proc = await asyncio.shield(spawn)
             self.processes.add(proc)
@@ -121,9 +143,7 @@ class Formatter:
             try:
                 out, err = await asyncio.wait_for(asyncio.shield(communication), TIMEOUT)
             except asyncio.TimeoutError:
-                kill(proc)
-                _, err = await communication
-                self.failure(binary, "took longer than 5 s and was stopped", err)
+                timed_out = True
                 return None
             if proc.returncode:
                 self.failure(binary, f"exited with status {proc.returncode}", err)
@@ -151,11 +171,10 @@ class Formatter:
                     except OSError:
                         pass
                 if proc is not None:
-                    kill(proc)
-                    await proc.wait()
+                    err = await reap(proc, communication)
                     self.processes.discard(proc)
-                if communication is not None:
-                    await communication
+                    if timed_out:
+                        self.failure(binary, "took longer than 5 s and was stopped", err)
             finally:
                 self.tasks.discard(task)
                 self.cleaning.discard(task)

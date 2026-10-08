@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -26,12 +27,16 @@ class Formatter:
         self.set()
         self.path.write_text(
             f"#!{sys._base_executable}\n"
-            "import json, os, pathlib, sys, time\n"
+            "import json, os, pathlib, subprocess, sys, time\n"
             f"cfg = json.loads(pathlib.Path({str(self.control)!r}).read_text())\n"
             "source = sys.stdin.buffer.read()\n"
+            "child = None\n"
+            "if cfg.get('child'):\n"
+            "    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(8)'],\n"
+            "        start_new_session=cfg.get('detached', False))\n"
             f"pathlib.Path({str(self.record)!r}).write_text(json.dumps({{\n"
             "    'argv': sys.argv[1:], 'stdin': source.decode('utf-8'),\n"
-            "    'cwd': os.getcwd(), 'pid': os.getpid()}))\n"
+            "    'cwd': os.getcwd(), 'pid': os.getpid(), 'child': child.pid if child else None}))\n"
             "sys.stderr.write(cfg.get('stderr', ''))\n"
             "sys.stderr.flush()\n"
             "time.sleep(cfg.get('delay', 0))\n"
@@ -115,13 +120,19 @@ def response(c, rid):
             c.notifications.append(msg)
 
 
-def dead(pid):
+def dead(pid, reaped=True):
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return
+        if not reaped:
+            try:
+                if Path(f"/proc/{pid}/stat").read_text().split(")", 1)[1].split()[0] == "Z":
+                    return  # Orphaned descendants are reaped by the system, not the server.
+            except OSError:
+                pass
         time.sleep(0.01)
     pytest.fail(f"formatter child {pid} is still alive or unreaped")
 
@@ -269,6 +280,42 @@ def test_shutdown_cleans_up(clients, fake, tmp_path):
     pid = fake.called()["pid"]
     c.close()
     dead(pid)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")
+@pytest.mark.parametrize("ranged", [False, True])
+@pytest.mark.parametrize("detached", [False, True])
+@pytest.mark.parametrize("action", ["timeout", "cancel", "shutdown", "parent_exit"])
+def test_descendants_cannot_hold_formatter_pipes(clients, fake, tmp_path, ranged, detached, action):
+    fake.set(child=True, detached=detached, delay=0 if action == "parent_exit" else 8,
+             stderr="descendant holds pipes")
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path)
+    start = time.monotonic()
+    rid = pending(doc, "textDocument/rangeFormatting", range=selection((0, 0), (1, 0))) if ranged else pending(doc)
+    record = fake.called()
+    try:
+        if action == "cancel":
+            start = time.monotonic()
+            c.notify("$/cancelRequest", {"id": rid})
+            assert response(c, rid)["error"]["code"] == -32800
+        elif action == "shutdown":
+            start = time.monotonic()
+            c.close()
+        else:
+            assert response(c, rid)["result"] == []
+            c.wait_for("window/logMessage", lambda m: "5 s" in m["params"]["message"])
+        assert time.monotonic() - start < (7 if action in ("timeout", "parent_exit") else 2.5)
+        dead(record["pid"])
+        if not detached:
+            dead(record["child"], reaped=False)
+        assert Path(doc.path).read_text() == doc.text
+    finally:
+        for pid in (record["pid"], record["child"]):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 @pytest.mark.parametrize("change", ["edit", "close", "reopen", "settings"])
