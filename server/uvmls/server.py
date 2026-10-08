@@ -777,15 +777,22 @@ async def _off_loop(fn, *args):
     return await asyncio.get_running_loop().run_in_executor(REQUEST_POOL, fn, *args)
 
 
+def _indexed_lines(ls: UvmLanguageServer, path: str) -> list[str]:
+    if path not in ls.ws.texts and path not in ls.ws.lines:
+        # Library sources are not kept as edit anchors: read the one being shown.
+        ls.ws.lines[path] = fixes.EOL_RE.split(_text(ls, path_to_uri(path)))
+    return ls.ws.lines_of(path)
+
+
 def _indexed_column(ls: UvmLanguageServer, path: str, pos: T.Position) -> int:
-    lines = ls.ws.lines_of(path)
+    lines = _indexed_lines(ls, path)
     decoded = ls.workspace.position_codec.position_from_client_units(lines, pos)
     return len(lines[pos.line][:decoded.character].encode("utf-8")) if pos.line < len(lines) else 0
 
 
 def _indexed_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
     # slang columns are UTF-8 bytes; editor positions use the negotiated encoding.
-    lines = ls.ws.lines_of(rng.path)
+    lines = _indexed_lines(ls, rng.path)
 
     def position(line, col):
         prefix = utf8_prefix(lines[line], col) if line < len(lines) else ""

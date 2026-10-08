@@ -632,6 +632,11 @@ class Navigator:
         return out
 
     def document_highlights(self, path, line, col) -> list[Range]:
+        pairs = [p for p in self.ws.structures_by_file.get(path, ())
+                 if any((r.line, r.col) <= (line, col) < (r.end_line, r.end_col) for r in (p.opening, p.closing))]
+        if pairs:
+            pair = min(pairs, key=lambda p: (p.closing.line - p.opening.line, p.closing.col - p.opening.col))
+            return [pair.opening, pair.closing]
         for idx in self.ws.indices.values():
             if path not in idx.files:
                 continue

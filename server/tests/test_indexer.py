@@ -94,6 +94,29 @@ def test_structural_pairs_are_plain_source_tokens(tmp_path):
     assert idx.structures == []
 
 
+def test_generated_structural_endpoints(tmp_path):
+    path = tmp_path / "structure.sv"
+    source = '''`define START class
+`define FINISH endclass
+`START c;
+  int value;
+endclass
+class d;
+  int value;
+`FINISH
+class e;
+`ifdef NEVER_DEFINED
+endclass
+`endif
+  int value;
+endclass
+'''
+    path.write_text(source)
+    idx = Indexer([], {}, use_shim=True).parse(str(path))
+    [pair] = idx.structures
+    assert (pair.opening.line, pair.closing.line) == (8, 13)
+
+
 def test_syntax_errors_are_reported(tmp_path):
     f = tmp_path / "bad.sv"
     f.write_text("class c;\n  int x = ;\nendclass\n")
