@@ -164,17 +164,12 @@ class Navigator:
                     return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
         package = cls.package if cls else (unit.name if unit and unit.kind == "package" else None)
         imports = list(cls.imports) if cls else (list(unit.imports) if unit else [])
-        if strict:
-            candidates = ws.classes_by_name.get(name, []) or ws.typedefs_by_name.get(name, [])
-            visible = [c for c in candidates if c.package == package] or [c for c in candidates if c.package in imports]
-            if len(visible or candidates) > 1:
-                return []
-        found = ws.find_class(name, package, imports)
+        found = ws.find_class(name, package, imports, strict=strict)
         if found is not None:
             return [Target(found, spec=Spec(found.name, found))]
-        td = ws.find_typedef(name, package, cls.name if cls else None, imports)
+        td = ws.find_typedef(name, package, cls.name if cls else None, imports, strict=strict)
         if td is not None:
-            spec = ws.resolve_spec(name, ctx=cls)
+            spec = ws.resolve_spec(name, ctx=cls, strict=strict)
             return [Target(td, spec=spec)]
         for u in ws.units_by_name.get(name, []):
             return [Target(u)]
@@ -189,15 +184,18 @@ class Navigator:
         scopes = [package] + imports if package else imports
         ordered = [ws.find_unit(p, "package") for p in scopes] + \
                   ([u for u in ws.units if u.kind == "package"] if not strict else [])
+        matches = []
         for u in ordered:
             if u is None:
                 continue
-            for v in u.variables:
-                if v.name == name:
-                    return [Target(v, owner=u)]
-            for m in u.methods:
-                if m.name == name:
-                    return [Target(m, owner=u)]
+            for member in [*u.variables, *u.methods]:
+                if member.name == name:
+                    if not strict:
+                        return [Target(member, owner=u)]
+                    if not any(t.obj is member for t in matches):
+                        matches.append(Target(member, owner=u))
+        if matches:
+            return matches if len(matches) == 1 else []
         if name.startswith("uvm_"):
             spec = ws.resolve_spec(name)
             if spec is not None:

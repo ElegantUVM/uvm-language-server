@@ -847,6 +847,8 @@ class Extractor:
                     if v:
                         v.doc = self.doc_of(item, v.name)
                         cls.properties.append(v)
+                    if not self.library and not self.in_library(cls.path):
+                        self.walk(d.initializer, BodyCtx(cls.name, ""), Sink())
             elif dk == K.TypedefDeclaration:
                 self.class_typedef(cls, decl, package)
             elif dk == K.ParameterDeclarationStatement:
@@ -1106,7 +1108,7 @@ class Extractor:
         rng = self.node_range(head)
         # Missing delimiters may be recovered only within their enclosing syntax statement.
         parent = node
-        while parent.parent is not None and parent.kind not in FUNC_DECLS and \
+        while parent.parent is not None and parent.kind not in (*FUNC_DECLS, K.DataDeclaration) and \
                 not parent.kind.name.endswith("Statement"):
             parent = parent.parent
         boundary = self.node_range(parent)

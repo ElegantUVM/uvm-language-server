@@ -136,7 +136,6 @@ def test_methods_and_constructors(doc, call, needle, formals, active):
     ("`ifdef NEVER_DEFINED\npublic_api(1);\n`endif", "public_api("),
     ("`define FAKE public_api(1)\n", "public_api("),
     ("if (1) begin end", "if ("),
-    ("public_api(.count(1));", ".count("),
 ])
 def test_no_guess(doc, call, needle):
     doc.change(SOURCE.replace("CALL", call))
@@ -453,3 +452,137 @@ endclass
               'function uvm_component create_component(string name, uvm_component parent)')
     signature(help_at(doc, 'obj.create_object('), ['string name = ""'], 0,
               'function uvm_object create_object(string name = "")')
+
+
+@pytest.mark.parametrize('arguments,needle,active', [
+    ('.text("x"), .a(1), .bits(\'{1,2}), .b(3)', '.text(', 3),
+    ('.text("x"), .a(1), .bits(\'{1,2}), .b(3)', '.a(', 0),
+    ('.text("x"), .a(1), .bits(\'{1,2}), .b(3)', '.bits(', 2),
+    ('.text("x"), .a(1), .bits(\'{1,2}), .b(3)', '.b(', 1),
+    ('.text("x"), .a(inner(1, 2))', 'inner(1, 2)', 0),
+    ('.text("x"), .a(inner(1, 2))', 'inner(1,', 'inner'),
+    (',,3', '    f(,,', 2),
+    (',,', '    f(,,', 2),
+    ('.text("a,\\\"b")', '.text("a,', 3),
+    ('.bits()', '.bits(', 2),
+])
+def test_named_and_empty_arguments(doc, arguments, needle, active):
+    doc.change(SOURCE.replace('CALL', 'f(' + arguments + ');'))
+    if active == 'inner':
+        signature(help_at(doc, needle), ['int a', 'int b'], 1)
+    else:
+        signature(help_at(doc, needle), ['input byte a', 'input byte b', 'output bit[3:0] bits[]',
+                                        'const ref string text = "T,a"'], active)
+
+
+@pytest.mark.parametrize('call,needle', [
+    ('f(.unknown(1));', '.unknown('),
+    ('f(.te', '.te'),
+    ('f(.text', '.text'),
+    ('f(.', '    f(.'),
+    ('f(.text("x"), .un(2));', '.un('),
+])
+def test_unknown_and_partial_named_arguments(doc, call, needle):
+    doc.change(SOURCE.replace('CALL', call))
+    assert help_at(doc, needle) is None
+
+
+def test_factory_named_arguments_and_incomplete_multiline(client, tb):
+    d = Doc(client, os.path.join(tb, 'agent/alu_agent.svh'))
+    original = d.text
+    formals = ['string name', 'uvm_component parent', 'string contxt = ""']
+    try:
+        d.change(original.replace('create("m_driver", this)', 'create(.parent(this), .name("m_driver"))'))
+        signature(help_at(d, '.parent(th'), formals, 1)
+        signature(help_at(d, '.parent(this)'), formals, 1)
+        signature(help_at(d, '.name("m_'), formals, 0)
+        d.change(original.replace('create("m_driver", this)', 'create(\n $sformatf("m,%0d", 1),\n this,\n'))
+        signature(help_at(d, '$sformatf("m,%0d", 1),'), formals, 1)
+        signature(help_at(d, '\n this,\n'), formals, 2)
+        d.change(original.replace('create("m_driver", this)', 'create(.contxt('))
+        signature(help_at(d, '.contxt('), formals, 2)
+    finally:
+        d.close()
+
+
+def test_named_declaration_change_in_another_buffer(client, tb):
+    caller = Doc(client, os.path.join(tb, 'agent/alu_agent.svh'))
+    declaration = Doc(client, os.path.join(tb, 'agent/alu_driver.svh'))
+    try:
+        caller.change(caller.text.replace('m_driver    = alu_driver::type_id::create("m_driver", this);',
+                                         'm_driver.drive_item(.item(null));'))
+        signature(help_at(caller, '.item('), ['alu_seq_item item'])
+        declaration.change(declaration.text.replace('drive_item(alu_seq_item item)', 'drive_item(alu_seq_item changed)'))
+        assert help_at(caller, '.item(') is None
+        declaration.close()
+        signature(help_at(caller, '.item('), ['alu_seq_item item'])
+    finally:
+        caller.close()
+
+
+def test_ambiguous_typedef_receiver_and_imported_function(client, tb, doc):
+    pkg = Doc(client, os.path.join(tb, 'agent', 'alu_pkg.sv'))
+    pkg.change('''package first;
+class box; function void go(int a); endfunction endclass
+typedef box alias_t;
+function void shared(int a); endfunction
+endpackage
+package second;
+class box; function void go(string b); endfunction endclass
+typedef box alias_t;
+function void shared(string b); endfunction
+endpackage
+package calls;
+import first::*;
+import second::*;
+`include "alu_driver.svh"
+endpackage
+''')
+    try:
+        doc.change('''class caller;
+ alias_t value;
+ function void test(); value.go(1); shared(1); endfunction
+endclass
+''')
+        assert help_at(doc, 'value.go(') is None
+        assert help_at(doc, 'shared(') is None
+    finally:
+        pkg.close()
+
+
+def test_property_initializer_and_named_constructor(doc):
+    doc.change('''class built;
+ function new(string name = "x", int count = 2); endfunction
+endclass
+class caller;
+ built prop = new(.count(3), .name("p"));
+endclass
+''')
+    signature(help_at(doc, '.count('), ['string name = "x"', 'int count = 2'], 1)
+    signature(help_at(doc, '.name('), ['string name = "x"', 'int count = 2'], 0)
+
+
+def test_typed_direct_new_in_alu_extern_body(doc):
+    doc.change(doc.text.replace('task alu_driver::run_phase(uvm_phase phase);',
+                               'task alu_driver::run_phase(uvm_phase phase);\n'
+                               '  alu_driver d;\n  d = new("d", this);'))
+    signature(help_at(doc, 'd = new("d",'), ['string name', 'uvm_component parent'], 1,
+              'function new(string name, uvm_component parent)')
+
+
+@pytest.mark.parametrize('call,needle', [('public_api("typing', '    public_api("typing'),
+                                        ('public_api(', '    public_api(')])
+def test_unfinished_call_keeps_enclosing_context(doc, call, needle):
+    doc.change(SOURCE.replace('CALL', call))
+    signature(help_at(doc, needle), ['int count = 7'])
+
+
+def test_public_typedef_is_not_ambiguous_with_another_class_member(doc):
+    text = SOURCE.replace('class child extends base #(byte);', '''typedef base #(string) public_t;
+class unrelated;
+ typedef base #(int) public_t;
+endclass
+class child extends base #(byte);''')
+    doc.change(text.replace('CALL', 'public_t::f("x");'))
+    signature(help_at(doc, 'public_t::f('), ['input string a', 'input string b', 'output bit[3:0] bits[]',
+                                           'const ref string text = "T,a"'])

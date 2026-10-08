@@ -354,10 +354,17 @@ class Workspace:
         return (user or cands)[0]
 
     def find_typedef(self, name: str, package: str | None = None, owner_class: str | None = None,
-                     imports: list[str] | tuple = ()) -> Typedef | None:
+                     imports: list[str] | tuple = (), strict: bool = False) -> Typedef | None:
         cands = self.typedefs_by_name.get(name)
         if not cands:
             return None
+        if strict:
+            owned = [t for t in cands if t.owner_class == owner_class and t.package == package] if owner_class else []
+            public = [t for t in cands if t.owner_class is None]
+            visible = owned or [t for t in public if t.package == package] or [t for t in public if t.package in imports]
+            if not visible and len(public) == 1:
+                visible = public
+            return visible[0] if len(visible) == 1 else None
         if owner_class:
             for t in cands:
                 if t.owner_class == owner_class:
@@ -390,8 +397,8 @@ class Workspace:
         result: Spec | None = None
         if scope and scope in self.class_by_qual or (scope and self.classes_by_name.get(scope)):
             # Class-scoped typedef such as outer::inner_t.
-            owner = self.find_class(scope, package, imports)
-            td = self.find_typedef(name, owner_class=owner.name) if owner else None
+            owner = self.class_by_qual.get(scope) or self.find_class(scope, package, imports, strict=strict)
+            td = self.find_typedef(name, owner.package, owner.name, strict=strict) if owner else None
             if td and td.target:
                 result = self._spec_from_typedef(td, ctx, depth, strict)
         if result is None:
@@ -400,7 +407,9 @@ class Workspace:
                 result = Spec(name=cls.name, cls=cls, args=args)
         if result is None:
             td = self.find_typedef(name, scope or package, ctx.name if ctx else None,
-                                   [scope] if scope else imports)
+                                   [scope] if scope else imports, strict=strict)
+            if strict and scope and td and td.package != scope and td.owner_class != scope:
+                td = None
             if td is not None and td.target is not None:
                 result = self._spec_from_typedef(td, ctx, depth, strict)
         if result is None and name in BUILTIN_CLASSES:
