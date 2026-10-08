@@ -162,3 +162,25 @@ def test_config_db_type_mismatch_needs_one_type_set(tmp_path):
     [d] = [d for ds in lint(w).values() for d in ds if d.code == "config-db-type-mismatch"]
     assert d.message == "'vif' is set as dut_vif but read as virtual other_if; uvm_config_db matches on the " \
                         "exact type, so this get will fail"
+
+
+def test_topology_callers_get_their_own_copy(any_ws):
+    first = topology(any_ws)
+    first["root"]["children"].clear()
+    assert topology(any_ws)["root"]["children"]
+
+
+def test_failed_effective_type_build_is_not_cached(any_ws, monkeypatch):
+    import pytest
+    from uvmls import views
+
+    any_ws._effective_type_cache.clear()
+    calls = any_ws.calls_in_chain
+
+    def broken(cls):
+        raise RuntimeError("resolution bug")
+    monkeypatch.setattr(any_ws, "calls_in_chain", broken)
+    with pytest.raises(RuntimeError):
+        views.effective_type(any_ws)
+    monkeypatch.setattr(any_ws, "calls_in_chain", calls)
+    assert topology(any_ws)["root"]["children"]

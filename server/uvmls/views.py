@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import fnmatch
 import re
 from collections import deque
@@ -282,16 +283,20 @@ class EffectiveTypes(dict):
 
 
 def topology(ws: Workspace, test: str | None = None) -> dict:
-    return effective_type(ws, test).topology
+    return copy.deepcopy(effective_type(ws, test).topology)  # callers must not edit the cached one
 
 
 def effective_type(ws: Workspace, test: str | None = None) -> EffectiveTypes:
     key = test or ""
-    if key in ws._effective_type_cache:
-        return ws._effective_type_cache[key]
+    if key not in ws._effective_type_cache:
+        # Cached only once complete: a build that raises is retried, not remembered half done.
+        ws._effective_type_cache[key] = _build_effective_type(ws, test)
+    return ws._effective_type_cache[key]
+
+
+def _build_effective_type(ws: Workspace, test: str | None) -> EffectiveTypes:
     info = list_tests(ws)
     result = EffectiveTypes(info)
-    ws._effective_type_cache[key] = result
     name = test or info["default"]
     root_cls = ws.find_class(name) if name else None
     if root_cls is None:
