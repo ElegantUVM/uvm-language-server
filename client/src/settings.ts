@@ -17,6 +17,7 @@ export function serverSettings(): Record<string, unknown> {
     useBundledUvm: cfg.get("useBundledUvm"),
     exclude: cfg.get("exclude"),
     lint: { enabled: cfg.get("lint.enabled") },
+    formatter: { enabled: cfg.get("formatter.enabled"), path: cfg.get("formatter.path") },
     codeLens: { configDb: cfg.get("codeLens.configDb") },
     inlayHints: cfg.get("inlayHints"),
     "inlayHints.test": cfg.get("inlayHintsTest"),

@@ -144,3 +144,26 @@ test("the selected test and hint switch survive configuration changes independen
   assert.equal(c.settings().inlayHints, true);
   assert.equal(c.settings()["inlayHints.test"], "alu_random_test");
 });
+
+test("formatter defaults coexist in the configuration tree", () => {
+  const { contributes } = require("../package.json");
+  const properties = contributes.configuration.properties;
+  assert.equal(properties["uvm.formatter"], undefined);
+  assert.equal(properties["uvm.formatter.enabled"].type, "boolean");
+  assert.equal(properties["uvm.formatter.path"].type, "string");
+  const value = configured().settings();
+  assert.equal(value.formatter.enabled, true);
+  assert.equal(value.formatter.path, "");
+});
+
+test("formatter path and switch are forwarded unchanged after configuration changes", () => {
+  const c = configured({ "uvm.formatter.path": "${workspaceFolder}/tools with spaces/format;$BIN" });
+  assert.equal(c.settings().formatter.path, "${workspaceFolder}/tools with spaces/format;$BIN");
+  assert.equal(c.settings().formatter.enabled, true);
+  c.values.formatter.enabled = false;
+  c.values.formatter.path = "~/another formatter";
+  assert.equal(c.settings().formatter.enabled, false);
+  assert.equal(c.settings().formatter.path, "~/another formatter");
+  c.values.formatter.enabled = true;
+  assert.equal(c.settings().formatter.enabled, true);
+});

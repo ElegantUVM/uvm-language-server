@@ -26,6 +26,21 @@ Verible uses the editor's tab size but emits spaces even when `insertSpaces` is 
 
 Format Selection expands to complete touched lines. An end at the start of a later line excludes that line; an empty selection formats its containing line. Verible receives the whole buffer with `--lines=L-H`. If it changes any text outside those lines, the server returns no edits and explains why in the output channel. Versions that reject `--lines` also leave the buffer unchanged.
 
+`uvm.formatter.enabled` defaults to true; turning it off returns no edits and runs no process. Formatter settings take effect on the next request without reindexing or elaboration. When other formatting extensions are installed, choose this extension with VS Code settings:
+
+```json
+{
+  "[systemverilog]": {
+    "editor.defaultFormatter": "uvmls.uvm-language-server"
+  },
+  "[verilog]": {
+    "editor.defaultFormatter": "uvmls.uvm-language-server"
+  }
+}
+```
+
+Use the standard **Format Document** and **Format Selection** commands. Enable `editor.formatOnSave` separately if wanted; the extension does not change it or choose the default formatter for you.
+
 ## UVM lint and quick fixes
 
 The Problems panel and `uvmls lint` use these codes:

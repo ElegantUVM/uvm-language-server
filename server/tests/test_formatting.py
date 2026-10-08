@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 
 from test_code_actions import Doc, applied
 from test_lsp import Client
+from conftest import EXAMPLE
 from uvmls.project import BUNDLED_UVM
 
 CAPABILITIES = {"textDocument": {"formatting": {}, "rangeFormatting": {}}}
@@ -61,10 +63,10 @@ def fake(tmp_path):
 def clients():
     opened = []
 
-    def start(root, formatter=None, capabilities=CAPABILITIES, initialize_index=False):
+    def start(root, formatter=None, capabilities=CAPABILITIES, initialize_index=False, **settings):
         c = Client()
         opened.append(c)
-        c.settings = {"elaboration": "off", "useBundledUvm": False}
+        c.settings = {"elaboration": "off", "useBundledUvm": False, **settings}
         if formatter is not None:
             c.settings["formatter"] = formatter
         params = {"processId": None, "capabilities": capabilities,
@@ -177,10 +179,14 @@ def test_empty_or_unsupported_endings_do_not_spawn(clients, fake, tmp_path, text
 
 
 @pytest.mark.parametrize("path_setting", ["", "verible-verilog-format", "./verible-verilog-format",
-                                         "${workspaceFolder}/verible-verilog-format", "$FORMATTER_BIN", "~/verible-verilog-format"])
+                                         "${workspaceFolder}/verible-verilog-format", "$FORMATTER_BIN",
+                                         "$REL_FORMATTER_BIN", "~/verible-verilog-format"])
 def test_discovery_and_expansion(clients, fake, tmp_path, monkeypatch, path_setting):
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("FORMATTER_BIN", str(fake.path))
+    monkeypatch.setenv("REL_FORMATTER_BIN", "./verible-verilog-format")
+    if path_setting == "$REL_FORMATTER_BIN":
+        monkeypatch.setenv("PATH", "")
     if path_setting.startswith("~/"):
         path_setting = "~/" + os.path.relpath(fake.path, os.path.expanduser("~"))
     c = clients(tmp_path, {"path": path_setting})
@@ -443,3 +449,123 @@ def test_range_utf8_units(clients, fake, tmp_path):
     [edit] = format_range(doc, (0, 7), (0, 7))
     assert edit["range"] == selection((0, 0), (0, len(doc.text.encode("utf-8"))))
     assert edit["newText"] == "// 😀 good"
+
+
+def configure(c, **settings):
+    c.settings = {**c.settings, **settings}
+    c.notify("workspace/didChangeConfiguration", {"settings": {"uvm": c.settings}})
+
+
+@pytest.mark.parametrize("mode", ["off", "onSave"])
+def test_formatter_settings_do_not_index_or_elaborate(clients, fake, tmp_path, mode):
+    (tmp_path / "t.sv").write_text("// BAD\n")
+    c = clients(tmp_path, {"path": str(fake.path)}, initialize_index=True, elaboration=mode)
+    if mode != "off":
+        c.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] != "running")
+    doc = Doc(c, str(tmp_path / "t.sv"))
+    c.wait_for("uvm/indexChanged")
+    c.request("uvm/stats", {})
+    c.forget("uvm/indexChanged", "uvm/elaborationStatus", "window/logMessage")
+    for cfg in [{"enabled": False, "path": str(fake.path)}, {"enabled": False, "path": "/missing"}]:
+        configure(c, formatter=cfg)
+        assert format_doc(doc) == format_range(doc, (0, 0), (1, 0)) == []
+        assert not fake.record.exists()
+        assert not any(m["method"] == "window/logMessage" for m in c.notifications)
+    configure(c, formatter={"enabled": True, "path": "/missing"})
+    assert format_doc(doc) == []
+    configure(c, formatter={"enabled": True, "path": str(fake.path)})
+    assert applied(doc.text, format_doc(doc)) == "// good\n"
+    for method in ("uvm/indexChanged", "uvm/elaborationStatus"):
+        with pytest.raises(TimeoutError):
+            c.wait_for(method, timeout=0.35)
+    configure(c, defines={"CHANGED": "1"}, formatter={"enabled": False})
+    c.wait_for("uvm/indexChanged")
+
+
+def test_settings_change_back_during_range_discards_result(clients, fake, tmp_path):
+    fake.set(delay=0.5)
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path)
+    rid = pending(doc, "textDocument/rangeFormatting", range=selection((0, 0), (1, 0)))
+    fake.called()
+    configure(c, formatter={"path": str(fake.path), "enabled": False})
+    configure(c, formatter={"path": str(fake.path)})
+    assert response(c, rid)["result"] == []
+
+
+def test_disabled_initialization_does_not_log_or_spawn(clients, fake, tmp_path):
+    c = clients(tmp_path, {"enabled": False, "path": str(fake.path)})
+    doc = document(c, tmp_path)
+    assert format_doc(doc) == format_range(doc, (0, 0), (1, 0)) == []
+    assert not fake.record.exists()
+    assert not any(m["method"] == "window/logMessage" for m in c.notifications)
+
+
+def test_unopened_disk_changes_during_run(clients, fake, tmp_path):
+    fake.set(delay=0.5)
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path)
+    doc.close()
+    rid = pending(doc)
+    fake.called()
+    Path(doc.path).write_text("// newer\n")
+    assert response(c, rid)["result"] == []
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-8"])
+def test_alu_unsaved_document_and_selection(clients, fake, tmp_path, encoding):
+    root = tmp_path / "alu_tb"
+    shutil.copytree(EXAMPLE, root)
+    c = clients(root, {"path": str(fake.path)},
+                {**CAPABILITIES, "general": {"positionEncodings": [encoding]}},
+                initialize_index=True, filelists=[str(root / "alu_tb.f")], useBundledUvm=True)
+    doc = Doc(c, str(root / "agent" / "alu_agent.svh"))
+    disk = Path(doc.path).read_bytes()
+    line = next(line for line in doc.text.splitlines() if "m_driver    =" in line)
+    wanted = "/*😀*/" + line
+    changed = wanted.replace("    =", "          =")
+    original = doc.text
+    doc.change(original.replace(line, changed))
+    expected = original.replace(line, wanted)
+    fake.set(output=expected)
+    edits = format_doc(doc)
+    assert applied(doc.text, edits) == expected
+    n = doc.text[:doc.text.index(changed)].count("\n")
+    units = len(changed[:changed.index("m_driver")].encode(encoding + ("-le" if encoding == "utf-16" else "")))
+    units //= 2 if encoding == "utf-16" else 1
+    [edit] = format_range(doc, (n, units), (n + 1, 0))
+    assert edit["range"] == selection((n, 0), (n + 1, 0))
+    assert applied(doc.text, [edit]) == expected
+    assert fake.called()["stdin"] == doc.text
+    assert "--lines=" + str(n + 1) + "-" + str(n + 1) in fake.called()["argv"]
+    assert Path(doc.path).read_bytes() == disk
+
+
+@pytest.mark.parametrize("ranged", [False, True])
+@pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
+def test_real_verible_matches_direct_invocation(clients, tmp_path, ranged, ending):
+    binary = shutil.which("verible-verilog-format")
+    if binary is None:
+        pytest.skip("real verible-verilog-format is unavailable; recording fixtures do not prove Verible parity")
+    source = "module t;\n  initial begin\n    a=  1;\n    b = 2;\n  end\nendmodule\n"
+    source = source.replace("\n", "\r\n") if ending == "\r\n" else source if ending else source.rstrip("\n")
+    c = clients(tmp_path, {"path": binary})
+    doc = document(c, tmp_path, source)
+    argv = [binary, "--failsafe_success=false", "--indentation_spaces=2"]
+    if ranged:
+        argv.append("--lines=3-3")
+    direct = subprocess.run([*argv, "-"], input=source.encode("utf-8"), cwd=tmp_path,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, check=True)
+    expected = direct.stdout.decode("utf-8").replace("\r\n", "\n")
+    if ending:
+        if not expected.endswith("\n"):
+            expected += "\n"
+    else:
+        expected = expected.rstrip("\n")
+    if ending == "\r\n":
+        expected = expected.replace("\n", "\r\n")
+    edits = format_range(doc, (2, 3), (3, 0)) if ranged else format_doc(doc)
+    assert applied(doc.text, edits) == expected
+    doc.change(expected)
+    assert (format_range(doc, (2, 3), (3, 0)) if ranged else format_doc(doc)) == []
+    assert Path(doc.path).read_bytes() == source.encode("utf-8")

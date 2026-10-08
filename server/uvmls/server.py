@@ -594,9 +594,12 @@ async def did_change_configuration(ls: UvmLanguageServer, params: T.DidChangeCon
         old, ls.settings = ls.settings, settings
         if formatting.Settings.from_settings(old) != formatting.Settings.from_settings(settings):
             ls.formatter_version += 1
+        if _without(old, "formatter") == _without(settings, "formatter"):
+            return
         if ls.elab_mode == "off":
             ls.clear_elaboration()
-        if _without(old, "elaboration", *VIEW_SETTINGS) != _without(settings, "elaboration", *VIEW_SETTINGS):
+        unindexed = ("elaboration", "formatter", *VIEW_SETTINGS)
+        if _without(old, *unindexed) != _without(settings, *unindexed):
             await ls.full_index()  # elaborates afterwards unless it is off, and refreshes the views
             return
         if was_off and ls.elab_mode != "off":

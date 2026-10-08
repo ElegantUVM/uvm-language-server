@@ -31,13 +31,13 @@ def executable(path: str, roots: list[str]) -> str | None:
         found = shutil.which("verible-verilog-format")
         return norm(found) if found else None
     expanded = expand_path(path, roots, relative=False)
-    # Keep ./foo a path even though normpath removes its directory component.
-    if not os.path.dirname(path) and not os.path.dirname(expanded):
+    # Classify before normalization removes ./, including in expanded variables.
+    if not os.path.dirname(expanded):
         found = shutil.which(expanded)
         return norm(found) if found else None
     if not os.path.isabs(expanded) and not roots:
         return None
-    expanded = expand_path(path, roots)
+    expanded = os.path.normpath(expand_path(path, roots))
     return expanded if os.path.isfile(expanded) and os.access(expanded, os.X_OK) else None
 
 

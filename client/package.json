@@ -210,6 +210,16 @@
           "default": true,
           "description": "Show config_db set/get cross-references above calls."
         },
+        "uvm.formatter.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable Format Document and Format Selection with an optional local Verible executable. Verible emits spaces using the editor's tab size. This does not change `#editor.formatOnSave#` or the default formatter."
+        },
+        "uvm.formatter.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path or executable name for verible-verilog-format on the server's machine. Empty: search the server's PATH. Supports ~, environment variables and ${workspaceFolder}; relative paths use the first workspace root. This is one executable, not a shell command. An invalid explicit path does not fall back to PATH."
+        },
         "uvm.inlayHints": {
           "type": "boolean",
           "default": true,

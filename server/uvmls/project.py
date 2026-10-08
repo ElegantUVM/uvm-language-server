@@ -43,7 +43,7 @@ def expand_path(p: str, workspace_roots: list[str], relative: bool = True) -> st
         p = p.replace("${workspaceFolder}", workspace_roots[0])
         if relative and not os.path.isabs(p):
             p = os.path.join(workspace_roots[0], p)
-    return os.path.normpath(p)
+    return p
 
 
 @dataclass
@@ -62,7 +62,7 @@ class ProjectConfig:
         s = settings or {}
 
         def expand(p: str) -> str:
-            return expand_path(p, workspace_roots)
+            return os.path.normpath(expand_path(p, workspace_roots))
 
         defines = {}
         raw_defines = s.get("defines") or {}
