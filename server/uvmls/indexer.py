@@ -710,7 +710,31 @@ class Extractor:
             self.out.structures_pending = True  # walked when one of its files first needs them
         else:
             self.collect_source_ranges()
+            self.drop_repeated_inclusions()
         return self.out
+
+    def drop_repeated_inclusions(self):
+        """A header included twice without a guard is walked once per inclusion, at the same
+        ranges: keep one of each of its records."""
+        seen_paths, repeated = set(), set()
+        for p in self._paths.values():
+            if p in seen_paths:
+                repeated.add(p)
+            seen_paths.add(p)
+        repeated.discard(None)
+        if not repeated:
+            return
+        for name, key_of in (("structures", lambda s: s.opening), ("invocations", lambda c: c.opening),
+                             ("directives", lambda r: r)):
+            kept, seen = [], set()
+            for record in getattr(self.out, name):
+                key = key_of(record)
+                if key.path in repeated:
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                kept.append(record)
+            setattr(self.out, name, kept)
 
     def unit_member(self, m, package: str | None, imports: list[str], unit: DesignUnit | None,
                     before=()):

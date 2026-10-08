@@ -150,6 +150,28 @@ def test_lf_cr_is_two_line_breaks(tmp_path):
     assert sorted(text[slice(*ft.span(p.closing))] for p in idx.structures) == ["endclass", "endfunction"]
 
 
+def test_header_included_twice_in_one_root(tmp_path):
+    # No include guard: slang reads the header once per inclusion, at the same ranges.
+    (tmp_path / "common.svh").write_text('''class c;
+  function void f(int a, int b);
+    if (a) begin
+    end
+  endfunction
+  function void g(); f(1, 2); endfunction
+endclass
+`ifdef FOO
+typedef int t_foo;
+`endif
+''')
+    root = tmp_path / "top.sv"
+    root.write_text('package p1;\n`include "common.svh"\nendpackage\npackage p2;\n`include "common.svh"\nendpackage\n')
+    idx = Indexer([str(tmp_path)], {}, use_shim=True).parse(str(root))
+    header = str(tmp_path / "common.svh")
+    assert len([p for p in idx.structures if p.opening.path == header]) == 4
+    assert len([c for c in idx.invocations if c.opening.path == header]) == 1
+    assert len([r for r in idx.directives if r.path == header]) == 2
+
+
 def test_generated_structural_endpoints(tmp_path):
     path = tmp_path / "structure.sv"
     source = '''`define START class
