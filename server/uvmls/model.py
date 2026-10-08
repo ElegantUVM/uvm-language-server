@@ -312,6 +312,12 @@ class Diag:
     data: dict | None = None  # what a quick fix needs; sent to the client with the diagnostic
 
 
+@dataclass(frozen=True)
+class StructuralPair:
+    opening: Range
+    closing: Range
+
+
 @dataclass
 class FileIndex:
     """Everything extracted from one root file and the files it includes."""
@@ -327,6 +333,7 @@ class FileIndex:
     diagnostics: list[Diag] = field(default_factory=list)
     includes: dict[str, list[tuple[str, Range]]] = field(default_factory=dict)
     identifiers: dict[str, list[Range]] = field(default_factory=dict)
+    structures: list[StructuralPair] = field(default_factory=list)
     invocations: list[CallSite] = field(default_factory=list)
     named_argument_labels: set[Range] = field(default_factory=set)
     ignores: dict[str, dict[int, list[str]]] = field(default_factory=dict)  # file -> line -> lint codes ignored there

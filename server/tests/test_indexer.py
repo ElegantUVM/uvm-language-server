@@ -74,6 +74,26 @@ def test_unsaved_buffer_override(tmp_path):
     assert [c.name for c in idx.classes] == ["b"]
 
 
+def test_structural_pairs_are_plain_source_tokens(tmp_path):
+    from dataclasses import asdict
+    from test_folding_range import SOURCE
+
+    path = tmp_path / "structure.sv"
+    path.write_text(SOURCE)
+    idx = Indexer([], {}, use_shim=True).parse(str(path))
+    lines = SOURCE.splitlines()
+    found = []
+    for pair in idx.structures:
+        a, b = pair.opening, pair.closing
+        assert a.path == b.path == str(path)
+        assert asdict(pair)["opening"]["path"] == str(path)
+        found.append((lines[a.line][a.col:a.end_col], lines[b.line][b.col:b.end_col]))
+    assert sorted(found) == sorted([("class", "endclass"), ("function", "endfunction"),
+        ("function", "endfunction")] + [("begin", "end")] * 5)
+    idx = Indexer([], {}, use_shim=True).parse(str(path), {str(path): "class c;\n int value;\n"})
+    assert idx.structures == []
+
+
 def test_syntax_errors_are_reported(tmp_path):
     f = tmp_path / "bad.sv"
     f.write_text("class c;\n  int x = ;\nendclass\n")

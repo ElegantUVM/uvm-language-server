@@ -641,6 +641,19 @@ class Navigator:
                     return self.occurrences(name, path)
         return []
 
+    def folding_ranges(self, path) -> list[tuple[int, int]]:
+        intervals = {(p.opening.line, p.closing.line - 1) for p in self.ws.structures_by_file.get(path, ())
+                     if p.closing.line - 1 > p.opening.line}
+        out, ends = [], []
+        for start, end in sorted(intervals, key=lambda p: (p[0], -p[1])):
+            while ends and start > ends[-1]:
+                ends.pop()
+            if ends and end > ends[-1]:
+                continue  # Different preprocessing roots can disagree about nesting.
+            out.append((start, end))
+            ends.append(end)
+        return out
+
     # -- completion ------------------------------------------------------------
 
     def completions(self, path, line, col, text) -> list[dict]:

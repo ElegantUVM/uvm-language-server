@@ -560,6 +560,8 @@ def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
         ls.feature(T.TEXT_DOCUMENT_RANGE_FORMATTING)(range_formatting)
     if get_capability(params.capabilities, "text_document.document_highlight") is not None:
         ls.feature(T.TEXT_DOCUMENT_DOCUMENT_HIGHLIGHT)(document_highlight)
+    if get_capability(params.capabilities, "text_document.folding_range") is not None:
+        ls.feature(T.TEXT_DOCUMENT_FOLDING_RANGE)(folding_range)
 
 
 @server.feature(T.INITIALIZED)
@@ -873,6 +875,29 @@ def _compute_document_highlight(ls: UvmLanguageServer, params: T.DocumentHighlig
     with ls.ws.lock:
         ranges = ls.nav.document_highlights(path, params.position.line, _indexed_column(ls, path, params.position))
         return [T.DocumentHighlight(_indexed_range(ls, r), T.DocumentHighlightKind.Text) for r in ranges]
+
+
+async def folding_range(ls: UvmLanguageServer, params: T.FoldingRangeParams):
+    if not await ls.fresh():
+        return []
+    limit = get_capability(ls.client_capabilities, "text_document.folding_range.range_limit")
+    key = (params.text_document.uri, limit)
+    if key in ls.ws._folding_cache:
+        return ls.ws._folding_cache[key]
+    version, documents = ls.ws.version, ls.documents
+    revisions = {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}
+    result = await asyncio.get_running_loop().run_in_executor(None, _compute_folding_range, ls, params, limit)
+    if version != ls.ws.version or documents != ls.documents or ls.pending or \
+            revisions != {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
+        return []
+    ls.ws._folding_cache[key] = result
+    return result
+
+
+def _compute_folding_range(ls: UvmLanguageServer, params: T.FoldingRangeParams, limit):
+    path = uri_to_path(params.text_document.uri)
+    with ls.ws.lock:
+        return [T.FoldingRange(a, b) for a, b in ls.nav.folding_ranges(path)[:limit]]
 
 
 @server.feature(T.TEXT_DOCUMENT_COMPLETION,

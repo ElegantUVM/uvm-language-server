@@ -155,6 +155,8 @@ class Workspace:
         self._signature_texts: dict = {}
         self._signature_cache: dict = {}
         self._highlight_cache: dict = {}
+        self._folding_cache: dict = {}
+        self.structures_by_file: dict = {}
         self.identifiers_by_file: dict[str, list[tuple[str, Range]]] = {}
         self.texts: dict[str, str] = {}
         self.lines: dict[str, list[str]] = {}
@@ -244,8 +246,13 @@ class Workspace:
         seen_decl: set[tuple[str, int, str]] = set()
         seen_ids: set[Range] = set()
         seen_calls: set[Range] = set()
+        seen_structures = set()
         for idx in self.indices.values():
             self.texts.update(idx.texts)
+            for pair in idx.structures:
+                if pair not in seen_structures:
+                    seen_structures.add(pair)
+                    self.structures_by_file.setdefault(pair.opening.path, []).append(pair)
             for call in idx.invocations:
                 if call.opening not in seen_calls:
                     seen_calls.add(call.opening)

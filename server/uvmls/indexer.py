@@ -21,7 +21,7 @@ from . import naturaldocs
 from .model import (
     CallSite, ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex,
     Instance, MacroDef, Method, OutOfBlockMethod, OverrideCall, Param, Range,
-    SeqStart, TypeRef, Typedef, Variable,
+    SeqStart, StructuralPair, TypeRef, Typedef, Variable,
 )
 
 K = S.SyntaxKind
@@ -198,7 +198,7 @@ def _uses_unknown_uvm_macro(tree) -> bool:
 # Token / text helpers
 
 
-def iter_tokens(node):
+def iter_tokens(node, visit=None):
     """All tokens under a node, in source order."""
     stack = [node]
     while stack:
@@ -208,6 +208,8 @@ def iter_tokens(node):
         if isinstance(n, Token):
             yield n
             continue
+        if visit is not None and isinstance(n, Node):
+            visit(n)
         children = [c for c in n]
         stack.extend(reversed(children))
 
@@ -660,8 +662,7 @@ class Extractor:
         self.collect_diagnostics()
         self.collect_includes()
         self.collect_macros()
-        if not self.library:
-            self.collect_identifiers()
+        self.collect_source_ranges()
         return self.out
 
     def unit_member(self, m, package: str | None, imports: list[str], unit: DesignUnit | None,
@@ -1426,12 +1427,28 @@ class Extractor:
         if lines:
             self.out.ignores[path] = lines
 
-    def collect_identifiers(self):
+    def structural_pair(self, node):
+        if node.kind == K.ClassDeclaration:
+            opening, closing = node.classKeyword, node.endClass
+        elif node.kind in FUNC_DECLS:
+            opening, closing = node.prototype.keyword, node.end
+        elif node.kind in (K.SequentialBlockStatement, K.GenerateBlock):
+            opening, closing = node.begin, node.end
+        else:
+            return
+        if opening.isMissing or closing.isMissing:
+            return
+        a, b = self.plain_range(opening), self.plain_range(closing)
+        if a is not None and b is not None and a.path == b.path and \
+                (a.end_line, a.end_col) <= (b.line, b.col):
+            self.out.structures.append(StructuralPair(a, b))
+
+    def collect_source_ranges(self):
         ids = self.out.identifiers
         sm = self.sm
         seen = set()
-        for tok in iter_tokens(self.tree.root):
-            if tok.kind != TK.Identifier:
+        for tok in iter_tokens(self.tree.root, self.structural_pair):
+            if self.library or tok.kind != TK.Identifier:
                 continue
             loc = tok.location
             if sm.isMacroLoc(loc):

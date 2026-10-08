@@ -623,7 +623,7 @@ def test_large_project_code_action_budgets(tmp_path):
     from uvmls.documents import Workspace as LspWorkspace
     from uvmls.lints import lint
     from uvmls.server import UvmLanguageServer, code_action, code_lens, inlay_hint, lsp_diagnostic, signature_help
-    from uvmls.server import document_highlight
+    from uvmls.server import document_highlight, folding_range
 
     async def run():
         filelist = generate(tmp_path, classes=2400)
@@ -734,5 +734,16 @@ def test_large_project_code_action_budgets(tmp_path):
             assert len(result) == 2
         p95 = sorted(samples)[18]
         print(f'document highlights: p95 {p95:.2f} ms (target 50 ms)')
+        assert p95 < 50
+        params = T.FoldingRangeParams(T.TextDocumentIdentifier(driver.as_uri()))
+        await folding_range(ls, params)
+        samples = []
+        for _ in range(20):
+            start = time.perf_counter()
+            result = await folding_range(ls, params)
+            samples.append((time.perf_counter() - start) * 1000)
+            assert len(result) == 3
+        p95 = sorted(samples)[18]
+        print(f'folding ranges: p95 {p95:.2f} ms (target 50 ms)')
         assert p95 < 50
     asyncio.run(run())
