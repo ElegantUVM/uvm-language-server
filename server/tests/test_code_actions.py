@@ -623,6 +623,7 @@ def test_large_project_code_action_budgets(tmp_path):
     from uvmls.documents import Workspace as LspWorkspace
     from uvmls.lints import lint
     from uvmls.server import UvmLanguageServer, code_action, code_lens, inlay_hint, lsp_diagnostic, signature_help
+    from uvmls.server import document_highlight
 
     async def run():
         filelist = generate(tmp_path, classes=2400)
@@ -722,5 +723,16 @@ def test_large_project_code_action_budgets(tmp_path):
             assert help and len(help['signatures'][0]['parameters']) == 2
         p95 = sorted(samples)[18]
         print(f'signature help: p95 {p95:.2f} ms (target 50 ms)')
+        assert p95 < 50
+        params = T.DocumentHighlightParams(T.TextDocumentIdentifier(driver.as_uri()), T.Position(3, 7))
+        await document_highlight(ls, params)
+        samples = []
+        for _ in range(20):
+            start = time.perf_counter()
+            result = await document_highlight(ls, params)
+            samples.append((time.perf_counter() - start) * 1000)
+            assert len(result) == 2
+        p95 = sorted(samples)[18]
+        print(f'document highlights: p95 {p95:.2f} ms (target 50 ms)')
         assert p95 < 50
     asyncio.run(run())

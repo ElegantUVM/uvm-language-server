@@ -558,6 +558,8 @@ def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
         ls.feature(T.TEXT_DOCUMENT_FORMATTING)(document_formatting)
     if get_capability(params.capabilities, "text_document.range_formatting") is not None:
         ls.feature(T.TEXT_DOCUMENT_RANGE_FORMATTING)(range_formatting)
+    if get_capability(params.capabilities, "text_document.document_highlight") is not None:
+        ls.feature(T.TEXT_DOCUMENT_DOCUMENT_HIGHLIGHT)(document_highlight)
 
 
 @server.feature(T.INITIALIZED)
@@ -848,6 +850,29 @@ def references(ls: UvmLanguageServer, params: T.ReferenceParams):
                                    _text(ls, params.text_document.uri),
                                    params.context.include_declaration)
     return [location(r) for r in ranges]
+
+
+async def document_highlight(ls: UvmLanguageServer, params: T.DocumentHighlightParams):
+    if not await ls.fresh():
+        return []
+    key = (params.text_document.uri, params.position.line, params.position.character)
+    if key in ls.ws._highlight_cache:
+        return ls.ws._highlight_cache[key]
+    version, documents = ls.ws.version, ls.documents
+    revisions = {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}
+    result = await asyncio.get_running_loop().run_in_executor(None, _compute_document_highlight, ls, params)
+    if version != ls.ws.version or documents != ls.documents or ls.pending or \
+            revisions != {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
+        return []
+    ls.ws._highlight_cache[key] = result
+    return result
+
+
+def _compute_document_highlight(ls: UvmLanguageServer, params: T.DocumentHighlightParams):
+    path = uri_to_path(params.text_document.uri)
+    with ls.ws.lock:
+        ranges = ls.nav.document_highlights(path, params.position.line, _indexed_column(ls, path, params.position))
+        return [T.DocumentHighlight(_indexed_range(ls, r), T.DocumentHighlightKind.Text) for r in ranges]
 
 
 @server.feature(T.TEXT_DOCUMENT_COMPLETION,

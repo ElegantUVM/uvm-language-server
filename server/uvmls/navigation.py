@@ -609,19 +609,37 @@ class Navigator:
         ce = expr_at(line_of(text, line), col)
         if ce is None:
             return []
+        out = self.occurrences(ce.word)
+        if not include_decl:
+            decls = {(r.path, r.line, r.col) for r in self.definition(path, line, col, text)}
+            out = [r for r in out if (r.path, r.line, r.col) not in decls]
+        return out
+
+    def occurrences(self, name, path=None) -> list[Range]:
         out: list[Range] = []
         seen = set()
         for idx in self.ws.indices.values():
-            for r in idx.identifiers.get(ce.word, []):
+            if path is not None and path not in idx.files:
+                continue
+            for r in idx.identifiers.get(name, []):
+                if path is not None and r.path != path:
+                    continue
                 key = (r.path, r.line, r.col)
                 if key not in seen:
                     seen.add(key)
                     out.append(r)
-        if not include_decl:
-            decls = {(r.path, r.line, r.col) for r in self.definition(path, line, col, text)}
-            out = [r for r in out if (r.path, r.line, r.col) not in decls]
         out.sort(key=lambda r: (r.path, r.line, r.col))
         return out
+
+    def document_highlights(self, path, line, col) -> list[Range]:
+        for idx in self.ws.indices.values():
+            if path not in idx.files:
+                continue
+            for name, ranges in idx.identifiers.items():
+                if any(r.path == path and (r.line, r.col) <= (line, col) < (r.end_line, r.end_col)
+                       for r in ranges):
+                    return self.occurrences(name, path)
+        return []
 
     # -- completion ------------------------------------------------------------
 

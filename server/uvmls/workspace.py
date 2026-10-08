@@ -154,6 +154,7 @@ class Workspace:
         self.invocations_by_file: dict = {}
         self._signature_texts: dict = {}
         self._signature_cache: dict = {}
+        self._highlight_cache: dict = {}
         self.identifiers_by_file: dict[str, list[tuple[str, Range]]] = {}
         self.texts: dict[str, str] = {}
         self.lines: dict[str, list[str]] = {}
