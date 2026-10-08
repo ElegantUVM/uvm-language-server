@@ -10,6 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+def utf8_prefix(line: str, col: int) -> str:
+    """The text before UTF-8 byte column `col` (slang's unit), never splitting a character."""
+    return line.encode("utf-8")[:col].decode("utf-8", errors="replace")
+
+
 @dataclass(frozen=True)
 class Range:
     """A span in a file. Lines and columns are 0-based, like LSP."""

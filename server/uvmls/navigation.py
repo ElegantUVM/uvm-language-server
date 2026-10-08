@@ -9,8 +9,8 @@ from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
 from . import naturaldocs
-from .indexer import EOL_RE, SHIM_FILE
-from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable
+from .indexer import SHIM_FILE
+from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable, utf8_prefix
 from .uvm import builtin_params
 from .views import config_db_report, mismatched, norm_type
 from .workspace import Spec, Workspace
@@ -231,16 +231,14 @@ class Navigator:
         if not missing:
             return [hint for line in line_numbers for hint in cache[line]]
         hints, seen, chains = [], set(), {}
-        if path not in ws.lines:
-            ws.lines[path] = EOL_RE.split(ws.texts.get(path, ""))
-        lines = ws.lines[path]
+        lines = ws.lines_of(path)
         for name, rng in identifiers:
             if rng.line not in missing:
                 continue
             cls, _, _ = ws.enclosing(path, rng.line, rng.col)
             if cls is None or cls.library or cls.base is None or rng.line >= len(lines):
                 continue
-            col = len(lines[rng.line].encode("utf-8")[:rng.col].decode("utf-8", errors="replace"))
+            col = len(utf8_prefix(lines[rng.line], rng.col))
             expr = expr_at(lines[rng.line], col)
             if expr is None or expr.is_macro or expr.segments not in ([name], ["this", name], ["super", name]):
                 continue

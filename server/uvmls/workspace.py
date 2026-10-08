@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from .indexer import Indexer
+from .indexer import EOL_RE, Indexer
 from .model import (
     ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex, MacroDef,
     Method, OverrideCall, Range, SeqStart, Typedef, TypeRef, Variable,
@@ -205,6 +205,12 @@ class Workspace:
                     self.ephemeral.add(path)
             self._rebuild()
             self.last_index_seconds = time.time() - t0
+
+    def lines_of(self, path: str) -> list[str]:
+        """The indexed text of `path` split as slang counts lines (cached until the next rebuild)."""
+        if path not in self.lines:
+            self.lines[path] = EOL_RE.split(self.texts.get(path, ""))
+        return self.lines[path]
 
     def roots_for(self, path: str) -> list[str]:
         return [r for r, idx in self.indices.items() if path in idx.files]
