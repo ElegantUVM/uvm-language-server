@@ -374,6 +374,40 @@ endclass
     assert call_at(ws, path, 7, 8)[1:] == (2, 'a')
 
 
+def test_branch_directives_end_at_the_next_directive(tmp_path):
+    from test_fixes import index
+    from uvmls.fixes import FileText
+
+    # pyslang 12 ends a skipped branch at the next directive, 11 after its last token: both must
+    # give the same inactive text, or a line's end counts as active on one of them.
+    text = '''module m;
+initial begin
+  f(1,
+`ifdef A
+      2,
+      // trailing
+
+  `elsif B
+   9, /* block */
+`else
+`ifndef C
+   5,
+`endif
+   7,
+`endif
+`ifdef NEVER
+`endif
+      3);
+end
+endmodule
+'''
+    ws = index(tmp_path, {'t.sv': text})
+    path = str(tmp_path / 't.sv')
+    ft = FileText(path, text)
+    assert [text[slice(*ft.span(r))] for r in ws.directives_by_file[path]] == [
+        '`ifdef A\n      2,\n      // trailing\n\n  ', '`elsif B\n   9, /* block */\n', '`else\n',
+        '`ifndef C', '`endif', '`endif', '`ifdef NEVER\n', '`endif']
+
 def test_indexing_leaves_library_text_alone(tmp_path):
     from unittest.mock import patch
 
