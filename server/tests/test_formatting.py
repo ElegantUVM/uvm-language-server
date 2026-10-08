@@ -302,11 +302,15 @@ def test_descendants_cannot_hold_formatter_pipes(clients, fake, tmp_path, ranged
             assert response(c, rid)["error"]["code"] == -32800
         elif action == "shutdown":
             start = time.monotonic()
-            c.close()
+            c.request("shutdown", None)
+            c.notify("exit", None)
         else:
             assert response(c, rid)["result"] == []
             c.wait_for("window/logMessage", lambda m: "5 s" in m["params"]["message"])
         assert time.monotonic() - start < (7 if action in ("timeout", "parent_exit") else 2.5)
+        if action == "shutdown":
+            # Well before the descendant's 8 s; how long the interpreter takes to exit depends on load.
+            c.proc.wait(timeout=5)
         dead(record["pid"])
         if not detached:
             dead(record["child"], reaped=False)
