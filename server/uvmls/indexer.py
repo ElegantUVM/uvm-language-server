@@ -1478,4 +1478,5 @@ class Extractor:
             seen.add(key)
             line, col = sm.getLineNumber(loc) - 1, sm.getColumnNumber(loc) - 1
             name = tok.valueText
-            ids.setdefault(name, []).append(Range(path, line, col, line, col + len(name)))
+            width = tok.range.end.offset - tok.range.start.offset
+            ids.setdefault(name, []).append(Range(path, line, col, line, col + width))

@@ -94,6 +94,15 @@ def test_structural_pairs_are_plain_source_tokens(tmp_path):
     assert idx.structures == []
 
 
+def test_escaped_identifier_ranges(tmp_path):
+    from uvmls.model import Range
+
+    path = tmp_path / "escaped.sv"
+    path.write_text('class c;\n  int \\foo.bar ;\n  function void f(); \\foo.bar = 1; endfunction\nendclass\n')
+    idx = Indexer([], {}, use_shim=True).parse(str(path))
+    assert idx.identifiers["foo.bar"] == [Range(str(path), 1, 6, 1, 14), Range(str(path), 2, 21, 2, 29)]
+
+
 def test_generated_structural_endpoints(tmp_path):
     path = tmp_path / "structure.sv"
     source = '''`define START class

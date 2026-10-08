@@ -137,6 +137,31 @@ def test_position_encoding_crlf(tb, encoding):
         c.close()
 
 
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-8"])
+@pytest.mark.parametrize("offset", [0, 7])
+def test_escaped_identifiers(tmp_path, encoding, offset):
+    text = ('`define USE(x) x = x;\nclass c;\n  int \\foo.bar ;\n'
+            '  function void f();\n    /* 😀 */ \\foo.bar = 1;\n'
+            '    `USE(\\foo.bar )\n  endfunction\nendclass').replace("\n", "\r\n")
+    path = tmp_path / "shared.svh"
+    path.write_bytes(text.encode())
+    for name in ("first", "second"):
+        (tmp_path / (name + ".sv")).write_text('`include "shared.svh"\n')
+    c = start(str(tmp_path), capabilities={**CAPS, "general": {"positionEncodings": [encoding]}},
+              settings={"useBundledUvm": False, "elaboration": "off"})
+    try:
+        d = Doc(c, str(path))
+        codec = "utf-16-le" if encoding == "utf-16" else "utf-8"
+        needles = [("\\foo.bar ;", 0, "\\foo.bar"), ("\\foo.bar =", 0, "\\foo.bar"),
+                   ("\\foo.bar )", 0, "\\foo.bar")]
+        expected = highlights(text, needles, codec)
+        for needle, _, word in needles:
+            assert highlight_at(d, needle, offset, codec) == expected
+            assert highlight_at(d, needle, len(word), codec) == []
+    finally:
+        c.close()
+
+
 def test_deadline_and_intervening_edit(tmp_path):
     import asyncio
     import threading
