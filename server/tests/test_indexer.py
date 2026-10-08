@@ -494,3 +494,49 @@ endclass
     assert Navigator(ws).folding_ranges(component)
     assert not lib.structures_pending and lib.structures
 
+
+
+STRUCTURES_EVERYWHERE = '''module m #(parameter N = 2) (input logic clk);
+  for (genvar i = 0; i < N; i++) begin : g
+    if (i == 0) begin : first
+      always_ff @(posedge clk) begin x <= f(i) ? 1 : 0; end
+    end
+  end
+  function automatic int f(int a = 1); begin return a + 1; end endfunction
+  initial begin
+    assert (clk) begin $display("a"); end else begin $error("b"); end
+    fork begin #1; end join_none
+    case (N) 1: begin end default: begin end endcase
+    repeat (2) begin wait (clk); end
+    if (N inside {[1:3]}) begin int y = N; y++; end
+  end
+endmodule
+class c;
+  class inner; task t(); begin end endtask endclass
+  rand int v;
+  function void post_randomize(); if (this.randomize() with {v > 1;}) begin end endfunction
+endclass
+'''
+
+
+@pytest.mark.parametrize("source", ["library", "constructs"])
+def test_library_fold_walk_skips_only_structureless_syntax(tmp_path, source):
+    from pyslang.syntax import SyntaxNode
+
+    from test_fixes import index
+    from uvmls.indexer import STRUCTURE_KINDS, Extractor
+
+    files = {"t.sv": STRUCTURES_EVERYWHERE if source == "constructs" else '`include "uvm_macros.svh"\n'}
+    ws = index(tmp_path, files, bundled=True)
+    root = next(r for r, idx in ws.indices.items() if idx.library) if source == "library" else str(tmp_path / "t.sv")
+    built = ws.indexer._tree(root, {}, True)
+    full = Extractor(*built, root, True, {}, ws.indexer.library_dirs)
+    stack = [built[0].root]
+    while stack:
+        n = stack.pop()
+        if n.kind in STRUCTURE_KINDS:
+            full.structural_pair(n)
+        stack.extend(c for c in n if isinstance(c, SyntaxNode))
+    pruned = Extractor(*built, root, True, {}, ws.indexer.library_dirs).collect_structures()
+    assert len(full.out.structures) > (1000 if source == "library" else 15)
+    assert sorted(pruned, key=repr) == sorted(full.out.structures, key=repr)

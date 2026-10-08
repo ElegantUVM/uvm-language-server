@@ -36,6 +36,11 @@ UVM_MACROS_PRELUDE = "<uvm-macros-prelude>"
 
 FUNC_DECLS = (K.FunctionDeclaration, K.TaskDeclaration)
 STRUCTURE_KINDS = (K.ClassDeclaration, *FUNC_DECLS, K.SequentialBlockStatement, K.GenerateBlock)
+# Syntax that holds none of them: a library's walk for folds skips it (most of its nodes).
+NO_STRUCTURE_KINDS = frozenset([K.ExpressionStatement, K.DataDeclaration, K.FunctionPrototype, K.ConditionalPredicate,
+                                K.ReturnStatement, K.ParameterDeclarationStatement, K.TypedefDeclaration,
+                                K.ClassPropertyDeclaration, K.ProceduralAssignStatement,
+                                *(k for k in K.__members__.values() if k.name.endswith(("Expression", "Expr")))])
 # Where a call's missing delimiters may still be recovered.
 CALL_BOUNDARY_KINDS = frozenset([*FUNC_DECLS, K.DataDeclaration,
                                  *(k for k in K.__members__.values() if k.name.endswith("Statement"))])
@@ -1528,8 +1533,11 @@ class Extractor:
         while stack:
             n = stack.pop()
             if isinstance(n, Node):
-                if n.kind in STRUCTURE_KINDS:
+                k = n.kind
+                if k in STRUCTURE_KINDS:
                     self.structural_pair(n)
+                elif k in NO_STRUCTURE_KINDS:
+                    continue
                 stack.extend(c for c in n if isinstance(c, Node))
         return self.out.structures
 
