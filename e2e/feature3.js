@@ -195,7 +195,15 @@ function at(fixture, file, needle, within = 0, occurrence = 0) {
   }
   offset += within;
   const before = text.slice(0, offset);
-  return { file, line: before.split("\n").length, col: offset - before.lastIndexOf("\n") };
+  const start = before.lastIndexOf("\n") + 1;
+  const end = text.indexOf("\n", start);
+  return { file, line: before.split("\n").length, col: offset - before.lastIndexOf("\n"),
+           lineText: text.slice(start, end < 0 ? undefined : end) };
+}
+
+// Positions are UTF-16 columns (LSP's unit); the status bar's "Col" counts a surrogate pair once.
+function shownCol(position, col = position.col) {
+  return position.lineText === undefined ? col : [...position.lineText.slice(0, col - 1)].length + 1;
 }
 
 async function eventually(description, fn, timeout = UI_TIMEOUT) {
@@ -257,14 +265,14 @@ async function goto(page, position) {
   await page.keyboard.press("Escape");
   await page.keyboard.press("Control+G");
   const input = page.locator(".quick-input-widget:visible input").first();
-  await input.fill(`${position.line}:${position.col}`);
+  await input.fill(`:${position.line}:${position.col}`);  // fill() replaces the ":" Ctrl+G types
   await input.press("Enter");
   await input.waitFor({ state: "hidden", timeout: UI_TIMEOUT });
   await eventually("go to source position", async () => {
     const status = await selection(page);
     const match = status.match(/^Ln ([\d,]+), Col ([\d,]+)$/);
     return match && Number(match[1].replace(/,/g, "")) === position.line &&
-      Number(match[2].replace(/,/g, "")) === position.col;
+      Number(match[2].replace(/,/g, "")) === shownCol(position);
   });
   await sleep(300);
 }
@@ -294,8 +302,9 @@ async function landedAt(page, position, length) {
     const selected = Number(match[3] || 0);
     assert.equal(line, position.line, status);
     // F12 may collapse the range; revealLocation selects it. Both must name the exact literal.
-    assert.ok((col === position.col && (selected === 0 || selected === length)) ||
-      (col === position.col + length && selected === length), `wrong target column/range: ${status}`);
+    const start = shownCol(position), end = shownCol(position, position.col + length);
+    assert.ok((col === start && (selected === 0 || selected === end - start)) ||
+      (col === end && selected === end - start), `wrong target column/range: ${status}`);
     return `${file}: ${status}`;
   });
 }
@@ -323,18 +332,19 @@ async function lensAbove(page, text, sourceNeedle) {
   return compact(await found.innerText());
 }
 
+// Inlay hints render as injected text: a span with a generated "dyn-rule-*" class inside the line.
+const HINTS = '.view-line span[class*="dyn-rule-"]';
+
 async function hint(page, label) {
-  const found = editor(page).locator(".inlay-hint-contents").filter({ hasText: label }).first();
+  const found = editor(page).locator(HINTS).filter({ hasText: label }).first();
   await found.waitFor({ state: "visible", timeout: FIRST_INDEX });
   return found;
 }
 
 async function setSettings(page, fixture, extra) {
   Object.assign(fixture.settings, extra);
-  await quickOpen(page, fixture, ".vscode/settings.json");
-  await page.keyboard.press("Control+A");
-  await page.keyboard.insertText(JSON.stringify(fixture.settings, null, 2) + "\n");
-  await page.keyboard.press("Control+S");
+  // Typing JSON into the editor gets auto-indented and auto-closed; VS Code watches the file instead.
+  fixture.write(".vscode/settings.json", JSON.stringify(fixture.settings, null, 2) + "\n");
   await eventually("workspace settings saved", () =>
     fixture.read(".vscode/settings.json").trim() === JSON.stringify(fixture.settings, null, 2));
   await sleep(3000);
@@ -345,11 +355,11 @@ async function absentDecorations(page, fixture, file, source, className) {
   await goto(page, at(fixture, file, className));
   // A class lens and rendered source are positive controls against an inactive server/editor.
   await lens(page, "show in graph");
-  assert.ok((await editor(page).innerText()).includes(className), "wrong editor contents");
+  assert.ok(compact(await editor(page).innerText()).includes(className), "wrong editor contents");  // Monaco renders spaces as NBSP
   await goto(page, at(fixture, file, source));
   const inspect = async () => {
     const lenses = compact((await editor(page).locator(".codelens-decoration").allTextContents()).join(" "));
-    const hints = await editor(page).locator(".inlay-hint-contents").count();
+    const hints = await editor(page).locator(HINTS).filter({ hasText: /\S/u }).count();
     assert.ok(!lenses.includes("set in ") && !lenses.includes("'alu_agent_config'") && !lenses.includes("config_db"), lenses);
     assert.equal(hints, 0, `${hints} hints remain in ${file}`);
   };
@@ -465,7 +475,7 @@ async function main() {
       await quickOpen(page, fixture, agent);
       await goto(page, create);
       const found = await hint(page, "→ my_driver");
-      const line = compact(await found.locator("xpath=ancestor::div[contains(@class, 'view-line')]").innerText());
+      const line = compact(await found.locator("xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' view-line ')]").innerText());
       assert.match(line, /create\("m_driver",\s*this\)\s*→ my_driver\s*;/);
       return line;
     });
@@ -482,7 +492,14 @@ async function main() {
     await check("C.1-factory-link", async () => {
       await quickOpen(page, fixture, agent);
       await goto(page, create);
-      await (await hint(page, "→ my_driver")).click({ modifiers: ["Control"] });
+      // Holding Ctrl re-renders the hint as a link, which detaches the element a locator click found.
+      const box = await (await hint(page, "→ my_driver")).boundingBox();
+      await page.keyboard.down("Control");
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await sleep(500);
+      await page.mouse.down();
+      await page.mouse.up();
+      await page.keyboard.up("Control");
       return landedAt(page, override, "set_type_override_by_type(alu_driver::get_type(), my_driver::get_type())".length);
     });
     await check("C.2-bound-member-hint", async () => {
@@ -547,11 +564,17 @@ async function main() {
       assert.ok(!fixture.read(env).startsWith("// unsaved"), "edit was saved unexpectedly");
       return evidence;
     });
-    // Restore through the editor so the server sees the same document as the next checks.
+    // Revert in the editor so the server sees the disk text as the next checks do (retyping the file
+    // through the editor re-indents every line).
     await quickOpen(page, fixture, env);
-    await page.keyboard.press("Control+A");
-    await page.keyboard.insertText(fixture.read(env));
-    await page.keyboard.press("Control+S");
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.locator(".quick-input-widget:visible input").first();
+    await palette.fill(">File: Revert File");
+    await sleep(1000);
+    await palette.press("Enter");
+    await palette.waitFor({ state: "hidden", timeout: UI_TIMEOUT });
+    await eventually("unsaved edit reverted", async () =>
+      !compact(await editor(page).innerText()).includes("unsaved location shift"));
 
     await check("settings-off-agent", async () => {
       need("B.1-agent-get-lens", "C.1-factory-hint");
