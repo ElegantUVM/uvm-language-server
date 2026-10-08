@@ -138,7 +138,15 @@ SCOPES = {
     'unit': {'a_tb/top.sv': PKG + 'import uvm_pkg::*;\nimport agent_pkg::*;\n`include "uvm_macros.svh"\n'
              'module top;\n' + USER.replace('USER', 'my_env') + 'endmodule\n',
              'b_tb/other.sv': 'class my_comp;\n  function new(int x, int y); endfunction\nendclass\n'},
+    # a class or typedef of a module seen from a header the module includes
+    'included': {'tb/top.sv': 'module top;\nimport uvm_pkg::*;\n`include "uvm_macros.svh"\n' +
+                 COMP.replace('NAME', 'my_comp') + '`include "env.svh"\nendmodule\n',
+                 'tb/env.svh': USER.replace('USER', 'my_env')},
+    'included_typedef': {'tb/top.sv': 'module top;\nimport uvm_pkg::*;\n`include "uvm_macros.svh"\n' +
+                         COMP.replace('NAME', 'my_comp') + 'typedef my_comp comp_t;\n`include "env.svh"\nendmodule\n',
+                         'tb/env.svh': USER.replace('USER', 'my_env').replace('my_comp c;', 'comp_t c;')},
 }
+OWNERS = {'included': 'tb/top.sv', 'included_typedef': 'tb/top.sv'}
 
 
 @pytest.mark.parametrize('case', SCOPES)
@@ -157,4 +165,4 @@ def test_create_new_and_signatures_see_the_visible_class(tmp_path, case):
             i = text.index(call) + len(call)
             line = text.count('\n', 0, i)
             target, _, got, _, _ = signature(nav, path, line, i - text.rfind('\n', 0, i) - 1)
-            assert got == label and target.owner.path == path
+            assert got == label and target.owner.path == str(tmp_path / OWNERS.get(case, name))

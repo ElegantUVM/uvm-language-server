@@ -189,6 +189,8 @@ class Workspace:
         self._spec_cache: dict = {}
         self._visible_packages: dict = {}
         self._roots_by_file: dict[str, set[str]] | None = None
+        self._include_sites: dict[str, list[Range]] | None = None
+        self._including: dict[str, DesignUnit | None] = {}
 
     def configure(self, config: ProjectConfig):
         with self.lock:
@@ -396,9 +398,23 @@ class Workspace:
         return self._visible_packages[key]
 
     def unit_at(self, rng: Range) -> DesignUnit | None:
-        """The module, interface or program around a position."""
-        return next((u for u in self.by_path.get(rng.path, ()) if isinstance(u, DesignUnit)
+        """The module, interface or program around a position, in its file or around the
+        `include that brings the file in."""
+        unit = next((u for u in self.by_path.get(rng.path, ()) if isinstance(u, DesignUnit)
                      and u.kind != "package" and u.decl_range.contains(rng.line, rng.col)), None)
+        return unit if unit is not None else self._unit_including(rng.path)
+
+    def _unit_including(self, path: str) -> DesignUnit | None:
+        if self._include_sites is None:
+            self._include_sites = {}
+            for idx in self.indices.values():
+                for sites in idx.includes.values():
+                    for target, site in sites:
+                        self._include_sites.setdefault(target, []).append(site)
+        if path not in self._including:
+            self._including[path] = None  # an include cycle ends here
+            self._including[path] = next(filter(None, map(self.unit_at, self._include_sites.get(path, ()))), None)
+        return self._including[path]
 
     def _visible(self, cands: list, package: str | None, imports, near: Range | None):
         """The one declaration of `cands` that a reference at `near`, in `package` with `imports`,
