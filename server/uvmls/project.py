@@ -37,6 +37,15 @@ IEEE_UVM_RE = re.compile(r'"Accellera:(1800\.2[^:"]*):UVM:([^"]+)"')
 GUARD_RE = re.compile(r"^[ \t]*`ifndef[ \t]+(\w+)[ \t]*\r?\n[ \t]*`define[ \t]+\1\b", re.MULTILINE)
 
 
+def expand_path(p: str, workspace_roots: list[str], relative: bool = True) -> str:
+    p = os.path.expandvars(os.path.expanduser(p))
+    if workspace_roots:
+        p = p.replace("${workspaceFolder}", workspace_roots[0])
+        if relative and not os.path.isabs(p):
+            p = os.path.join(workspace_roots[0], p)
+    return os.path.normpath(p)
+
+
 @dataclass
 class ProjectConfig:
     workspace_roots: list[str] = field(default_factory=list)
@@ -53,12 +62,7 @@ class ProjectConfig:
         s = settings or {}
 
         def expand(p: str) -> str:
-            p = os.path.expandvars(os.path.expanduser(p))
-            if workspace_roots:
-                p = p.replace("${workspaceFolder}", workspace_roots[0])
-                if not os.path.isabs(p):
-                    p = os.path.join(workspace_roots[0], p)
-            return os.path.normpath(p)
+            return expand_path(p, workspace_roots)
 
         defines = {}
         raw_defines = s.get("defines") or {}

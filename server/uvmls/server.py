@@ -19,12 +19,12 @@ from pygls.capabilities import get_capability
 from pygls.lsp.server import LanguageServer
 from pygls.uris import from_fs_path
 
-from . import __version__, elab, fixes, indexer
+from . import __version__, elab, fixes, formatting, indexer
 from .documents import Workspace as LspWorkspace
 from .lints import lint
 from .model import Diag, Range, utf8_prefix
 from .navigation import Navigator
-from .project import ProjectConfig, is_sv_file, norm
+from .project import ProjectConfig, _uvm_src_dir, is_bundled, is_sv_file, norm
 from .views import class_graph, config_db_report, effective_type, topology
 from .workspace import Workspace, _same_text
 
@@ -119,6 +119,9 @@ class UvmLanguageServer(LanguageServer):
         self.nav = Navigator(self.ws)
         self.settings: dict = {}
         self.workspace_roots: list[str] = []
+        self.formatter = formatting.Formatter(lambda message: self.window_log_message(
+            T.LogMessageParams(T.MessageType.Log, message)))
+        self.formatter_version = 0
         self.published: dict[str, list[Diag]] = {}  # what the client was last sent, per file
         self.diag_texts: dict[str, str | None] = {}  # indexed text those describe, including unopened files
         self.diag_origins: dict[str, dict[tuple, int | None]] = {}
@@ -548,6 +551,8 @@ def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
         if isinstance(commands, list) else frozenset()
     if get_capability(params.capabilities, "text_document.inlay_hint") is not None:
         ls.feature(T.TEXT_DOCUMENT_INLAY_HINT, T.InlayHintOptions(resolve_provider=False))(inlay_hint)
+    if get_capability(params.capabilities, "text_document.formatting") is not None:
+        ls.feature(T.TEXT_DOCUMENT_FORMATTING)(document_formatting)
 
 
 @server.feature(T.INITIALIZED)
@@ -558,13 +563,15 @@ async def initialized(ls: UvmLanguageServer, params: T.InitializedParams):
 
 
 @server.feature(T.SHUTDOWN)
-def on_shutdown(ls: UvmLanguageServer, params):
+async def on_shutdown(ls: UvmLanguageServer, params):
     ls.stop_elaboration()
+    await ls.formatter.shutdown()
 
 
 @server.feature(T.EXIT)
 def on_exit(ls: UvmLanguageServer, params):
     ls.stop_elaboration()
+    ls.formatter.stop()
 
 
 # Settings that change only what is shown, not what is indexed.
@@ -583,6 +590,8 @@ async def did_change_configuration(ls: UvmLanguageServer, params: T.DidChangeCon
     if isinstance(settings, dict) and settings != ls.settings:
         was_off = ls.elab_mode == "off"
         old, ls.settings = ls.settings, settings
+        if formatting.Settings.from_settings(old) != formatting.Settings.from_settings(settings):
+            ls.formatter_version += 1
         if ls.elab_mode == "off":
             ls.clear_elaboration()
         if _without(old, "elaboration", *VIEW_SETTINGS) != _without(settings, "elaboration", *VIEW_SETTINGS):
@@ -651,6 +660,52 @@ async def did_change_watched(ls: UvmLanguageServer, params: T.DidChangeWatchedFi
     # is reloaded or reverted to the file on disk.
     if changed:
         ls.schedule_elaboration(ELAB_SAVE_DELAY)
+
+
+# -- formatting ---------------------------------------------------------------
+
+
+def _format_eligible(ls: UvmLanguageServer, uri: str, path: str) -> bool:
+    parsed = urlparse(uri)
+    if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
+        return False
+    doc = ls.workspace.text_documents.get(unquote(uri))
+    if doc is not None:
+        if doc.language_id not in ("systemverilog", "verilog"):
+            return False
+    elif not is_sv_file(path):
+        return False
+    if is_bundled(path) or path in ls.ws.library_files:
+        return False
+    cfg = ls.config()
+    sources = ls.ws.sources
+    library = sources.uvm_dir if sources else _uvm_src_dir(cfg.uvm_home) or _uvm_src_dir(cfg.env_uvm_home)
+    return not library or not os.path.realpath(path).startswith(os.path.realpath(library) + os.sep)
+
+
+def _text_position(ls: UvmLanguageServer, ft: fixes.FileText, offset: int) -> T.Position:
+    line, col = ft.position(offset)
+    return T.Position(line, ls.workspace.position_codec.client_num_units(ft.line(line)[:col]))
+
+
+async def document_formatting(ls: UvmLanguageServer, params: T.DocumentFormattingParams):
+    settings = formatting.Settings.from_settings(ls.settings)
+    uri = params.text_document.uri
+    path = uri_to_path(uri)
+    if not settings.enabled or not _format_eligible(ls, uri, path):
+        return []
+    doc = ls.workspace.text_documents.get(unquote(uri))
+    version = doc.version if doc else None
+    text = _text(ls, uri)
+    revision = ls.formatter_version
+    output = await ls.formatter.run(text, path, params.options.tab_size, settings, list(ls.workspace_roots))
+    current = ls.workspace.text_documents.get(unquote(uri))
+    if output is None or output == text or revision != ls.formatter_version or current is not doc \
+            or (current is not None and current.version != version) or _text(ls, uri) != text \
+            or settings != formatting.Settings.from_settings(ls.settings) or not _format_eligible(ls, uri, path):
+        return []
+    ft = fixes.FileText(path, text)
+    return [T.TextEdit(T.Range(T.Position(0, 0), _text_position(ls, ft, len(text))), output)]
 
 
 # -- navigation ----------------------------------------------------------------

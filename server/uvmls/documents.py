@@ -10,6 +10,13 @@ LINE_RE = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$")
 
 class TextDocument(PyglsTextDocument):
     @property
+    def source(self) -> str:
+        if self._source is None and self.path is not None:
+            with open(self.path, encoding="utf-8", newline="") as f:
+                return f.read()
+        return self._source or ""
+
+    @property
     def lines(self) -> tuple[str, ...]:
         # str.splitlines also splits page breaks and Unicode separators, unlike LSP and slang.
         return tuple(LINE_RE.findall(self.source))
