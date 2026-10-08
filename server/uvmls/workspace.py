@@ -433,7 +433,13 @@ class Workspace:
             in_unit = [c for c, u in outside if u is None]
             together = [c for c in in_unit if self._compiled_together(c.range.path, near.path)]
             elsewhere = [c for c in in_unit if all(c is not t for t in together)]
-            levels = [local, imported, together, elsewhere] if unit else [together, imported, elsewhere]
+            if unit:
+                # The module's own imports come before $unit declarations, its $unit imports after.
+                own = self.visible_packages(imports[len(unit.unit_imports):])
+                mine = [c for c in imported if c.package in own]
+                levels = [local, mine, together, [c for c in imported if c.package not in own], elsewhere]
+            else:
+                levels = [together, imported, elsewhere]
         for found in levels:
             if len(found) > 1 and near is not None:
                 # Same-named declarations of another testbench, which is not compiled with `near`.

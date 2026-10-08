@@ -755,7 +755,7 @@ class Extractor:
         unit = DesignUnit(name=hdr.name.valueText, kind=kind, range=rng,
                           decl_range=self.node_range(m) or rng, library=self.library,
                           doc=self.doc_of(m, hdr.name.valueText))
-        unit.imports = list(outer_imports)  # $unit imports made before a module are visible in it
+        unit.imports, unit.unit_imports = list(outer_imports), list(outer_imports)  # visible in a module
         unit.params = self.params(hdr.parameters)
         for imp in nodes(hdr.imports):
             for item in nodes(imp.items):

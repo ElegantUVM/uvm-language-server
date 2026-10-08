@@ -145,6 +145,11 @@ SCOPES = {
     'included_typedef': {'tb/top.sv': 'module top;\nimport uvm_pkg::*;\n`include "uvm_macros.svh"\n' +
                          COMP.replace('NAME', 'my_comp') + 'typedef my_comp comp_t;\n`include "env.svh"\nendmodule\n',
                          'tb/env.svh': USER.replace('USER', 'my_env').replace('my_comp c;', 'comp_t c;')},
+    # a $unit class hides the one a $unit import brings (IEEE 1800 26.3)
+    'shadow': {'top.sv': PKG.replace('foo(int a, int b)', 'other(string s)').replace(
+        'uvm_component parent)', 'uvm_component parent, int extra = 0)', 1) +
+        'import uvm_pkg::*;\nimport agent_pkg::*;\n`include "uvm_macros.svh"\n' + COMP.replace('NAME', 'my_comp') +
+        'module top;\n' + USER.replace('USER', 'my_env') + 'endmodule\n'},
 }
 OWNERS = {'included': 'tb/top.sv', 'included_typedef': 'tb/top.sv'}
 
