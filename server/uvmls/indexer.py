@@ -475,6 +475,7 @@ class Extractor:
         self.library_dirs = library_dirs
         self.out = FileIndex(root=root, library=library)
         self._paths: dict[int, str | None] = {}
+        self._line_starts: dict[int, list[int]] = {}
 
     # -- locations -----------------------------------------------------------
 
@@ -503,18 +504,30 @@ class Extractor:
         # Spelled inside a macro body: attribute it to the expansion site.
         return sm.getFullyExpandedLoc(loc), True
 
+    def physical_position(self, loc) -> tuple[int, int]:
+        """Editor ranges use buffer coordinates, unaffected by `line directives."""
+        bid = loc.buffer.id
+        if bid not in self._line_starts:
+            try:
+                raw = self.sm.getSourceText(loc.buffer).encode("utf-8")
+            except UnicodeDecodeError as e:
+                raw = e.object
+            self._line_starts[bid] = [0] + [m.end() for m in re.finditer(rb"\r\n|\r|\n", raw)]
+        starts = self._line_starts[bid]
+        line = bisect.bisect_right(starts, loc.offset) - 1
+        return line, loc.offset - starts[line]
+
     def make_range(self, start, end=None) -> tuple[Range | None, bool]:
         start, gen = self.file_loc(start)
         path = self.path_of(start.buffer)
         if path is None:
             return None, gen
-        sm = self.sm
-        line, col = sm.getLineNumber(start) - 1, sm.getColumnNumber(start) - 1
+        line, col = self.physical_position(start)
         if end is not None:
             end, _ = self.file_loc(end)
             if end.buffer == start.buffer and end.offset >= start.offset:
-                return Range(path, line, col, sm.getLineNumber(end) - 1,
-                             sm.getColumnNumber(end) - 1), gen
+                end_line, end_col = self.physical_position(end)
+                return Range(path, line, col, end_line, end_col), gen
         return Range(path, line, col, line, col), gen
 
     def tok_range(self, tok) -> tuple[Range | None, bool]:
@@ -570,14 +583,7 @@ class Extractor:
             return None
         start, _ = self.file_loc(first.location)
         end, _ = self.file_loc(last.range.end) if last is not None else (start, False)
-        path = self.path_of(start.buffer)
-        if path is None:
-            return None
-        sm = self.sm
-        line, col = sm.getLineNumber(start) - 1, sm.getColumnNumber(start) - 1
-        if end.buffer == start.buffer and end.offset >= start.offset:
-            return Range(path, line, col, sm.getLineNumber(end) - 1, sm.getColumnNumber(end) - 1)
-        return Range(path, line, col, line, col)
+        return self.make_range(start, end)[0]
 
     def comment_blocks(self, token):
         """The comment blocks in a token's leading trivia, nearest first, each with whether it is
@@ -1338,14 +1344,13 @@ class Extractor:
             path = self.path_of(loc.buffer)
             if path is None:
                 continue
-            sm = self.sm
-            line, col = sm.getLineNumber(loc) - 1, sm.getColumnNumber(loc) - 1
+            line, col = self.physical_position(loc)
             end_line, end_col = line, col + 1
             for sr in d.ranges:
                 s, _ = self.file_loc(sr.start)
                 e, _ = self.file_loc(sr.end)
                 if s.buffer == loc.buffer and e.buffer == loc.buffer and s.offset <= loc.offset <= e.offset:
-                    end_line, end_col = sm.getLineNumber(e) - 1, sm.getColumnNumber(e) - 1
+                    end_line, end_col = self.physical_position(e)
                     break
             code = str(d.code).replace("DiagCode(", "").rstrip(")")
             severity = {ps.DiagnosticSeverity.Error: "error", ps.DiagnosticSeverity.Fatal: "error",
@@ -1476,7 +1481,7 @@ class Extractor:
             if key in seen:
                 continue
             seen.add(key)
-            line, col = sm.getLineNumber(loc) - 1, sm.getColumnNumber(loc) - 1
+            line, col = self.physical_position(loc)
             name = tok.valueText
             width = tok.range.end.offset - tok.range.start.offset
             ids.setdefault(name, []).append(Range(path, line, col, line, col + width))

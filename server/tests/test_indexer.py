@@ -1,4 +1,5 @@
 import pyslang
+import pytest
 
 from uvmls.indexer import Indexer
 from uvmls.project import ProjectConfig
@@ -101,6 +102,38 @@ def test_escaped_identifier_ranges(tmp_path):
     path.write_text('class c;\n  int \\foo.bar ;\n  function void f(); \\foo.bar = 1; endfunction\nendclass\n')
     idx = Indexer([], {}, use_shim=True).parse(str(path))
     assert idx.identifiers["foo.bar"] == [Range(str(path), 1, 6, 1, 14), Range(str(path), 2, 21, 2, 29)]
+
+
+@pytest.mark.parametrize("eol", [b"\n", b"\r\n", b"\r"])
+@pytest.mark.parametrize("prefix", ["/* 😀 */ ".encode(), b"// \xe9\n", b"\xef\xbb\xbf"])
+def test_line_directive_ranges(tmp_path, eol, prefix):
+    source = prefix + b'''`line 100 "virtual.sv" 0
+class c;
+  int value;
+  function void f();
+    begin
+`line 1 "nested.sv" 1
+      value = ;
+    end
+`line 200 "virtual.sv" 2
+  endfunction
+endclass
+'''
+    source = source.replace(b"\n", eol)
+    path = tmp_path / "line.sv"
+    ix = Indexer([], {}, use_shim=True)
+    path.write_bytes(source.replace(b"`line", b"//   "))
+    expected = ix.parse(str(path))
+    path.write_bytes(source)
+    idx = ix.parse(str(path))
+    assert {"c", "value", "f"} <= set(idx.identifiers)
+    assert idx.identifiers == expected.identifiers
+    assert idx.structures == expected.structures
+    [cls], [other] = idx.classes, expected.classes
+    assert (cls.range, cls.decl_range, cls.header_end, cls.end_kw) == (
+        other.range, other.decl_range, other.header_end, other.end_kw)
+    assert cls.methods == other.methods
+    assert idx.diagnostics == expected.diagnostics
 
 
 def test_generated_structural_endpoints(tmp_path):

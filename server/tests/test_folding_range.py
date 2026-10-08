@@ -146,6 +146,23 @@ def source_folds(text):
                     fold(text, "begin : gen", "end : gen")])
 
 
+def test_line_directive_fold(doc):
+    doc.change('`line 100 "virtual.sv" 0\nclass c;\n int value;\nendclass\n')
+    assert folds(doc) == [{"startLine": 1, "endLine": 2}]
+
+
+def test_line_directives_inside_folds(doc):
+    original = doc.text
+    text = '`line 100 "virtual.sv" 0\n' + SOURCE.replace(
+        "      end : inner", '`line 1 "nested.sv" 1\n      end : inner\n`line 200 "virtual.sv" 2')
+    doc.change(text)
+    assert folds(doc) == source_folds(text)
+    doc.change("\n" + text)
+    assert folds(doc) == source_folds(doc.text)
+    doc.close()
+    assert folds(doc) == agent_folds(original)
+
+
 def test_nested_named_procedural_and_generated_blocks(doc):
     doc.change(SOURCE)
     assert folds(doc) == source_folds(SOURCE)

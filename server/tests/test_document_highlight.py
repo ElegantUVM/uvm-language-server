@@ -89,7 +89,8 @@ def test_non_identifiers(doc, needle, offset):
     assert highlight_at(doc, needle, offset) == []
 
 
-def test_scopes_files_macros_and_named_labels(tmp_path):
+@pytest.mark.parametrize("line_directives", [False, True])
+def test_scopes_files_macros_and_named_labels(tmp_path, line_directives):
     source = '''`define USE(x) x = x;
 `define GENERATED value = value;
 class a;
@@ -102,6 +103,9 @@ class a;
 endclass
 class b; int value; endclass
 '''
+    if line_directives:
+        source = '`line 100 "virtual.sv" 0\n' + source.replace(
+            "class b;", '`line 1 "nested.sv" 1\nclass b;')
     header = tmp_path / "shared.svh"
     header.write_text(source)
     (tmp_path / "first.sv").write_text('`include "shared.svh"\n')
@@ -160,6 +164,13 @@ def test_escaped_identifiers(tmp_path, encoding, offset):
             assert highlight_at(d, needle, len(word), codec) == []
     finally:
         c.close()
+
+
+def test_line_directive_identifiers(doc):
+    text = '`line 100 "virtual.sv" 0\nclass c;\n int value;\nendclass\n'
+    doc.change(text)
+    assert highlight_at(doc, "value") == highlights(text, [("value", 0, "value")])
+    assert highlight_at(doc, "c;", 0) == highlights(text, [("c;", 0, "c")])
 
 
 def test_deadline_and_intervening_edit(tmp_path):
@@ -230,6 +241,12 @@ def test_agent_keyword_pairs(doc, opening, closing):
     assert highlight_at(doc, closing, len(closing.split()[0])) == []
 
 
+@pytest.mark.parametrize("needle", ["class c", "endclass"])
+def test_line_directive_keywords(doc, needle):
+    doc.change('`line 100 "virtual.sv" 0\nclass c;\n int value;\nendclass\n')
+    assert highlight_at(doc, needle) == pair_highlights(doc.text, "class c", "endclass")
+
+
 def test_extern_task_keywords(client, tb):
     d = Doc(client, os.path.join(tb, "agent", "alu_driver.svh"))
     try:
@@ -296,8 +313,14 @@ def test_unmatched_keywords(doc, source, needle):
 
 
 @pytest.mark.parametrize("encoding", ["utf-16", "utf-8"])
-def test_keyword_encoding_crlf_and_duplicate_includes(tmp_path, encoding):
-    text = '/* 😀 */ class c;\r\n  function new();\r\n    /* 😀 */ begin : label\r\n      int x;\r\n    end : label\r\n  endfunction\r\nendclass'
+@pytest.mark.parametrize("line_directives", [False, True])
+def test_keyword_encoding_crlf_and_duplicate_includes(tmp_path, encoding, line_directives):
+    text = ('/* 😀 */ class c;\r\n  function new();\r\n    /* 😀 */ begin : label\r\n'
+            '      int x;\r\n    end : label\r\n  endfunction\r\n'
+            '  task run();\r\n    int y;\r\n  endtask\r\nendclass')
+    if line_directives:
+        text = '`line 100 "virtual.sv" 0\r\n' + text.replace(
+            "    end : label", '`line 1 "nested.sv" 1\r\n    end : label\r\n`line 200 "virtual.sv" 2')
     path = tmp_path / "café.svh"
     path.write_bytes(text.encode())
     for name in ("first", "second"):
@@ -307,10 +330,20 @@ def test_keyword_encoding_crlf_and_duplicate_includes(tmp_path, encoding):
     try:
         d = Doc(c, str(path))
         codec = "utf-16-le" if encoding == "utf-16" else "utf-8"
-        for opening, closing in [("class c", "endclass"), ("begin : label", "end : label")]:
-            expected = pair_highlights(text, opening, closing, codec)
-            assert highlight_at(d, opening, 1, codec) == expected
-            assert highlight_at(d, closing, 1, codec) == expected
+
+        def check_pairs():
+            for opening, closing in [("class c", "endclass"), ("function new", "endfunction"),
+                                     ("begin : label", "end : label"), ("task run", "endtask")]:
+                expected = pair_highlights(d.text, opening, closing, codec)
+                assert highlight_at(d, opening, 1, codec) == expected
+                assert highlight_at(d, closing, 1, codec) == expected
+
+        check_pairs()
+        d.change("\r\n" + text)
+        check_pairs()
+        d.close()
+        d.text = text
+        check_pairs()
     finally:
         c.close()
 
