@@ -553,6 +553,8 @@ def initialize(ls: UvmLanguageServer, params: T.InitializeParams):
         ls.feature(T.TEXT_DOCUMENT_INLAY_HINT, T.InlayHintOptions(resolve_provider=False))(inlay_hint)
     if get_capability(params.capabilities, "text_document.formatting") is not None:
         ls.feature(T.TEXT_DOCUMENT_FORMATTING)(document_formatting)
+    if get_capability(params.capabilities, "text_document.range_formatting") is not None:
+        ls.feature(T.TEXT_DOCUMENT_RANGE_FORMATTING)(range_formatting)
 
 
 @server.feature(T.INITIALIZED)
@@ -683,12 +685,38 @@ def _format_eligible(ls: UvmLanguageServer, uri: str, path: str) -> bool:
     return not library or not os.path.realpath(path).startswith(os.path.realpath(library) + os.sep)
 
 
-def _text_position(ls: UvmLanguageServer, ft: fixes.FileText, offset: int) -> T.Position:
+def _text_position(codec, ft: fixes.FileText, offset: int) -> T.Position:
     line, col = ft.position(offset)
-    return T.Position(line, ls.workspace.position_codec.client_num_units(ft.line(line)[:col]))
+    return T.Position(line, codec.client_num_units(ft.line(line)[:col]))
+
+
+def _format_lines(codec, ft: fixes.FileText, rng: T.Range):
+    for pos in (rng.start, rng.end):
+        if not 0 <= pos.line < len(ft.starts):
+            return None
+        line = ft.line(pos.line)
+        if not 0 <= pos.character <= codec.client_num_units(line):
+            return None
+        col = codec.position_from_client_units([line], T.Position(0, pos.character)).character
+        if codec.client_num_units(line[:col]) != pos.character:
+            return None  # inside a multibyte code point or surrogate pair
+    if (rng.end.line, rng.end.character) < (rng.start.line, rng.start.character):
+        return None
+    last = len(ft.starts) - 1 - int(ft.text.endswith("\n"))
+    start = min(rng.start.line, last)
+    end = min(rng.end.line - int(rng.end.line > rng.start.line and rng.end.character == 0), last)
+    return start + 1, end + 1
 
 
 async def document_formatting(ls: UvmLanguageServer, params: T.DocumentFormattingParams):
+    return await _format(ls, params)
+
+
+async def range_formatting(ls: UvmLanguageServer, params: T.DocumentRangeFormattingParams):
+    return await _format(ls, params, params.range)
+
+
+async def _format(ls: UvmLanguageServer, params, rng: T.Range | None = None):
     settings = formatting.Settings.from_settings(ls.settings)
     uri = params.text_document.uri
     path = uri_to_path(uri)
@@ -697,15 +725,32 @@ async def document_formatting(ls: UvmLanguageServer, params: T.DocumentFormattin
     doc = ls.workspace.text_documents.get(unquote(uri))
     version = doc.version if doc else None
     text = _text(ls, uri)
+    if not text:
+        return []
+    ft = fixes.FileText(path, text)
+    codec = ls.workspace.position_codec
+    lines = _format_lines(codec, ft, rng) if rng is not None else None
+    if rng is not None and lines is None:
+        return []
     revision = ls.formatter_version
-    output = await ls.formatter.run(text, path, params.options.tab_size, settings, list(ls.workspace_roots))
+    output = await ls.formatter.run(text, path, params.options.tab_size, settings, list(ls.workspace_roots), lines)
     current = ls.workspace.text_documents.get(unquote(uri))
     if output is None or output == text or revision != ls.formatter_version or current is not doc \
             or (current is not None and current.version != version) or _text(ls, uri) != text \
             or settings != formatting.Settings.from_settings(ls.settings) or not _format_eligible(ls, uri, path):
         return []
-    ft = fixes.FileText(path, text)
-    return [T.TextEdit(T.Range(T.Position(0, 0), _text_position(ls, ft, len(text))), output)]
+    start, end = 0, len(text)
+    if lines is not None:
+        start = ft.starts[lines[0] - 1]
+        end = ft.starts[lines[1]] if lines[1] < len(ft.starts) else len(text)
+        prefix, suffix = text[:start], text[end:]
+        if len(output) < len(prefix) + len(suffix) or not output.startswith(prefix) or not output.endswith(suffix):
+            ls.formatter.log("formatter: range output extended beyond the requested lines; no edits returned")
+            return []
+        output = output[start:len(output) - len(suffix)]
+    if output == text[start:end]:
+        return []
+    return [T.TextEdit(T.Range(_text_position(codec, ft, start), _text_position(codec, ft, end)), output)]
 
 
 # -- navigation ----------------------------------------------------------------
@@ -1121,8 +1166,7 @@ class _Actions:
         self.files, self.uris = files, uris
 
     def position(self, ft: fixes.FileText, offset: int) -> T.Position:
-        line, col = ft.position(offset)
-        return T.Position(line, self.codec.client_num_units(ft.line(line)[:col]))
+        return _text_position(self.codec, ft, offset)
 
     def edit(self, changes: list[fixes.TextChange]) -> T.WorkspaceEdit:
         by_path: dict[str, list[fixes.TextChange]] = {}

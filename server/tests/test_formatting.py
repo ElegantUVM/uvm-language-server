@@ -13,7 +13,7 @@ from test_code_actions import Doc, applied
 from test_lsp import Client
 from uvmls.project import BUNDLED_UVM
 
-CAPABILITIES = {"textDocument": {"formatting": {}}}
+CAPABILITIES = {"textDocument": {"formatting": {}, "rangeFormatting": {}}}
 
 
 class Formatter:
@@ -335,3 +335,111 @@ def test_library_and_language_filter_without_index(clients, fake, tmp_path):
         "uri": doc.uri, "languageId": "plaintext", "version": 2, "text": doc.text}})
     assert format_doc(doc) == []
     assert not fake.record.exists()
+
+
+def selection(start, end):
+    return {"start": {"line": start[0], "character": start[1]},
+            "end": {"line": end[0], "character": end[1]}}
+
+
+def format_range(doc, start, end):
+    return doc.client.request("textDocument/rangeFormatting", {**params(doc), "range": selection(start, end)})
+
+
+@pytest.mark.parametrize("names", [[], ["formatting"], ["rangeFormatting"], ["formatting", "rangeFormatting"]])
+def test_independent_formatter_capabilities(clients, tmp_path, names):
+    c = clients(tmp_path, {"enabled": False, "path": "/missing"},
+                {"textDocument": {name: {"dynamicRegistration": False} for name in names}})
+    caps = c.initial["capabilities"]
+    assert bool(caps.get("documentFormattingProvider")) == ("formatting" in names)
+    assert bool(caps.get("documentRangeFormattingProvider")) == ("rangeFormatting" in names)
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+@pytest.mark.parametrize("start,end,lines,edit_range", [
+    ((1, 3), (2, 0), "2-2", ((1, 0), (2, 0))),
+    ((1, 3), (1, 3), "2-2", ((1, 0), (2, 0))),
+    ((1, 3), (2, 1), "2-3", ((1, 0), (3, 0))),
+    ((0, 0), (3, 0), "1-3", ((0, 0), (3, 0))),
+])
+def test_complete_touched_lines(clients, fake, tmp_path, ending, start, end, lines, edit_range):
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path, ending.join(["// before", "// 😀 BAD", "// after", ""]))
+    original = Path(doc.path).read_bytes()
+    edits = format_range(doc, start, end)
+    assert edits == [{"range": selection(*edit_range), "newText": ending.join(
+        doc.text.replace("BAD", "good").split(ending)[edit_range[0][0]:edit_range[1][0]]) + ending}]
+    assert applied(doc.text, edits) == doc.text.replace("BAD", "good")
+    record = fake.called()
+    assert record["stdin"] == doc.text
+    assert record["argv"] == ["--failsafe_success=false", "--indentation_spaces=2", "--lines=" + lines, "-"]
+    assert Path(doc.path).read_bytes() == original
+
+
+@pytest.mark.parametrize("newline,start,end,expected_end", [
+    ("", (1, 5), (1, 9), (1, 9)),
+    ("\n", (1, 5), (2, 0), (2, 0)),
+    ("\n", (2, 0), (2, 0), (2, 0)),
+])
+def test_range_at_eof(clients, fake, tmp_path, newline, start, end, expected_end):
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path, "// before\n// 😀 BAD" + newline)
+    edits = format_range(doc, start, end)
+    assert edits[0]["range"] == selection((1, 0), expected_end)
+    assert applied(doc.text, edits) == doc.text.replace("BAD", "good")
+    assert "--lines=2-2" in fake.called()["argv"]
+
+
+@pytest.mark.parametrize("start,end", [((0, 0), (5, 0)), ((1, 0), (0, 0)), ((0, 3), (0, 2)),
+                                       ((1, 10), (1, 10)), ((2, 1), (2, 1)), ((1, 4), (1, 4))])
+def test_invalid_range_does_not_spawn(clients, fake, tmp_path, start, end):
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path, "// before\n// 😀 BAD\n")
+    assert format_range(doc, start, end) == []
+    assert not fake.record.exists()
+
+
+@pytest.mark.parametrize("output", ["// changed\n// good\n// after\n", "// before\n// good\n// changed\n",
+                                    "// before\n// good\n"])
+def test_range_never_clips_changes_outside_lines(clients, fake, tmp_path, output):
+    fake.set(output=output)
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path, "// before\n// BAD\n// after\n")
+    assert format_range(doc, (1, 0), (2, 0)) == []
+    c.wait_for("window/logMessage", lambda m: "beyond the requested lines" in m["params"]["message"])
+
+
+def test_range_can_change_line_count(clients, fake, tmp_path):
+    fake.set(output="// before\n// good\n// added\n// after\n")
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path, "// before\n// BAD\n// after\n")
+    edits = format_range(doc, (1, 0), (2, 0))
+    assert edits == [{"range": selection((1, 0), (2, 0)), "newText": "// good\n// added\n"}]
+    assert applied(doc.text, edits) == "// before\n// good\n// added\n// after\n"
+    doc.change(applied(doc.text, edits))
+    assert format_range(doc, (1, 0), (3, 0)) == []
+
+
+def test_range_rejecting_lines_option_and_stale_result(clients, fake, tmp_path):
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path)
+    fake.set(exit=1, stderr="unknown --lines", output="should not be used")
+    assert format_range(doc, (0, 0), (1, 0)) == []
+    c.wait_for("window/logMessage", lambda m: "unknown --lines" in m["params"]["message"])
+    fake.record.unlink()
+    fake.set(delay=0.5)
+    rid = pending(doc, "textDocument/rangeFormatting", range=selection((0, 0), (1, 0)))
+    fake.called()
+    doc.change("// changed\n")
+    assert response(c, rid)["result"] == []
+
+
+def test_range_utf8_units(clients, fake, tmp_path):
+    caps = {**CAPABILITIES, "general": {"positionEncodings": ["utf-8"]}}
+    c = clients(tmp_path, {"path": str(fake.path)}, caps)
+    doc = document(c, tmp_path, "// 😀 BAD")
+    assert format_range(doc, (0, 4), (0, 4)) == []
+    assert not fake.record.exists()
+    [edit] = format_range(doc, (0, 7), (0, 7))
+    assert edit["range"] == selection((0, 0), (0, len(doc.text.encode("utf-8"))))
+    assert edit["newText"] == "// 😀 good"

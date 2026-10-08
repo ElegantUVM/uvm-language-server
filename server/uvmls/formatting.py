@@ -87,7 +87,8 @@ class Formatter:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def run(self, source: str, path: str, size: int, settings: Settings, roots: list[str]) -> str | None:
+    async def run(self, source: str, path: str, size: int, settings: Settings, roots: list[str],
+                  lines: tuple[int, int] | None = None) -> str | None:
         if self.stopped or not settings.enabled or not source or type(size) is not int or size <= 0:
             return None
         endings = {m.group() for m in EOL_RE.finditer(source)}
@@ -102,7 +103,10 @@ class Formatter:
                 self.log(f"formatter: cannot find executable {settings.path or 'verible-verilog-format'!r}; "
                          "set uvm.formatter.path or install verible-verilog-format on the server's PATH")
             return None
-        argv = [binary, "--failsafe_success=false", f"--indentation_spaces={size}", "-"]
+        argv = [binary, "--failsafe_success=false", f"--indentation_spaces={size}"]
+        if lines is not None:
+            argv.append(f"--lines={lines[0]}-{lines[1]}")
+        argv.append("-")
         task = asyncio.current_task()
         self.tasks.add(task)
         proc, communication = None, None
