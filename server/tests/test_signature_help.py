@@ -630,3 +630,34 @@ endclass
         signature(help_at(doc, needle), formals)
     finally:
         pkg.close()
+
+
+@pytest.mark.parametrize('receiver', ['hidden', 'alias_t', 'uvm_hidden'])
+def test_unimported_type_is_not_visible(client, tb, doc, receiver):
+    pkg = Doc(client, os.path.join(tb, 'agent', 'alu_pkg.sv'))
+    try:
+        pkg.change('''package first;
+class hidden;
+ static function void go(int secret_arg); endfunction
+endclass
+typedef hidden alias_t;
+class uvm_hidden;
+ static function void go(int secret_arg); endfunction
+endclass
+endpackage
+package calls;
+`include "alu_driver.svh"
+endpackage
+''')
+        doc.change('''class caller;
+ function void test(); RECEIVER::go(1); endfunction
+endclass
+'''.replace('RECEIVER', receiver))
+        assert help_at(doc, receiver + '::go(') is None
+        doc.change(doc.text.replace(receiver + '::go', 'first::' + receiver + '::go'))
+        signature(help_at(doc, 'first::' + receiver + '::go('), ['int secret_arg'])
+        doc.change(doc.text.replace('first::' + receiver + '::go', receiver + '::go'))
+        pkg.change(pkg.text.replace('package calls;', 'package calls;\nimport first::*;'))
+        signature(help_at(doc, receiver + '::go('), ['int secret_arg'])
+    finally:
+        pkg.close()

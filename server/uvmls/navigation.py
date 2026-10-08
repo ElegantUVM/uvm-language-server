@@ -197,7 +197,7 @@ class Navigator:
         if matches:
             return matches if len(matches) == 1 else []
         if name.startswith("uvm_"):
-            spec = ws.resolve_spec(name)
+            spec = ws.resolve_spec(name, package=package, imports=imports, strict=strict)
             if spec is not None:
                 return [Target(spec.cls or spec.name, spec=spec)]
         return []

@@ -349,11 +349,11 @@ class Workspace:
         cands = self.classes_by_name.get(name)
         if not cands:
             return None
-        if len(cands) == 1:
-            return cands[0]
         if strict:
             visible = [c for c in cands if c.package == package] or [c for c in cands if c.package in imports]
             return visible[0] if len(visible) == 1 else None
+        if len(cands) == 1:
+            return cands[0]
         for pref in ([package] if package else []) + list(imports):
             for c in cands:
                 if c.package == pref:
@@ -370,8 +370,6 @@ class Workspace:
             owned = [t for t in cands if t.owner_class == owner_class and t.package == package] if owner_class else []
             public = [t for t in cands if t.owner_class is None]
             visible = owned or [t for t in public if t.package == package] or [t for t in public if t.package in imports]
-            if not visible and len(public) == 1:
-                visible = public
             return visible[0] if len(visible) == 1 else None
         if owner_class:
             for t in cands:
