@@ -444,6 +444,20 @@ class Workspace:
         scope, name, args = parsed
         return self.resolve_spec(name, scope, args, ctx, strict=strict)
 
+    def resolve_type_ref(self, ref: TypeRef, ctx: ClassInfo | None = None, bindings: dict[str, str] | None = None,
+                         strict: bool = False) -> Spec | None:
+        """Resolve an indexed type reference with the type parameters in scope bound. The structured
+        reference keeps scopes such as `cls #(4)::inner_t` that the type text cannot."""
+        bindings = bindings or {}
+        if ref.scope is None and ref.name in bindings:
+            return self.resolve_type_text(bindings[ref.name], ctx, strict=strict)
+        scope = ref.scope
+        if scope in bindings:  # T::inner_t
+            parsed = parse_type_text(bindings[scope])
+            scope = "::".join(p for p in parsed[:2] if p) if parsed else scope
+        args = [substitute_params(a, bindings) for a in ref.args]
+        return self.resolve_spec(ref.name, scope, args, ctx, strict=strict)
+
     def base_spec(self, cls: ClassInfo, bindings: dict[str, str] | None = None) -> Spec | None:
         """The base class; `extends BASE` follows what the type parameter BASE is bound to
         (uvm_reg_sequence, uvm_port_base), else its default."""
@@ -553,17 +567,14 @@ class Workspace:
         if isinstance(member, Variable):
             if member.type is None:
                 return None
-            name = bindings.get(member.type.name)
-            if name is not None:
-                return self.resolve_type_text(name, ctx, strict=strict)
-            return self.resolve_type_text(substitute_params(member.type.text, bindings), ctx, strict=strict)
+            return self.resolve_type_ref(member.type, ctx, bindings, strict)
         if isinstance(member, Method):
             parsed = parse_type_text(member.return_type)
             if parsed:
                 return self.resolve_type_text(bindings.get(parsed[1], member.return_type), ctx, strict=strict)
             return None
         if isinstance(member, Typedef) and member.target is not None:
-            return self.resolve_type_text(substitute_params(member.target_text, bindings), ctx, strict=strict)
+            return self.resolve_type_ref(member.target, ctx, bindings, strict)
         if isinstance(member, str):  # built-in member type text
             parsed = parse_type_text(member)
             if parsed:

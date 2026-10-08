@@ -13,7 +13,7 @@ from .indexer import SHIM_FILE
 from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable, utf8_prefix
 from .uvm import builtin_params
 from .views import config_db_report, mismatched, norm_type
-from .workspace import Spec, Workspace, bind_params, substitute_params
+from .workspace import Spec, Workspace, bind_params
 
 WORD = re.compile(r"[A-Za-z0-9_$]")
 # What the utils and field macros generate in a user class; other generated methods are API
@@ -219,9 +219,7 @@ class Navigator:
             ctx = t.owner if isinstance(t.owner, ClassInfo) else None
             if t.obj.type is None:
                 return None
-            if t.bindings and t.obj.type.name in t.bindings:
-                return ws.resolve_type_text(t.bindings[t.obj.type.name], ctx, strict=strict)
-            return ws.resolve_type_text(substitute_params(t.obj.type.text, t.bindings or {}), ctx, strict=strict)
+            return ws.resolve_type_ref(t.obj.type, ctx, t.bindings, strict)
         if t.owner is not None and isinstance(t.obj, (Method, Typedef, str)):
             return ws.member_type_spec(t.owner, t.obj, t.bindings or {}, strict=strict)
         return None
@@ -230,7 +228,7 @@ class Navigator:
         """The assigned type, its written spelling and whether it came from a base."""
         cls, _, _ = self.ws.enclosing(path, line, col)
         if type_ref is not None:
-            return self.ws.resolve_type_text(type_ref.text, cls), type_ref.text, False
+            return self.ws.resolve_type_ref(type_ref, cls), type_ref.text, False
         if not target:
             return None, "", False
         text = re.sub(r"\[[^\]]*\]", "", target)

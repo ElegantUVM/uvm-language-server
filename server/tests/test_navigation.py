@@ -57,6 +57,75 @@ endpackage
     assert 'go' in nav.hover(path, line, col, text)
 
 
+def test_types_scoped_by_a_specialization_resolve(tmp_path):
+    from test_fixes import findings, index
+    from uvmls import signatures
+    from uvmls.views import topology
+
+    text = '''package agent_pkg;
+import uvm_pkg::*;
+`include "uvm_macros.svh"
+class cfg_a; function void apply(int level); endfunction endclass
+class my_drv extends uvm_component;
+  `uvm_component_utils(my_drv)
+  cfg_a cfg;
+  int field;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class my_agent #(int W = 8) extends uvm_agent;
+  `uvm_component_param_utils(my_agent#(W))
+  typedef my_drv drv_t;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class holder #(type T = my_agent#(2));
+  T::drv_t inner;
+endclass
+class my_env extends uvm_env;
+  `uvm_component_utils(my_env)
+  my_agent #(4) :: drv_t d1;
+  holder#() h;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    d1 = new("d1", this);
+    d1.field = 1;
+    d1.cfg.apply(1);
+    h.inner.field = 2;
+  endfunction
+endclass
+class my_test extends uvm_test;
+  `uvm_component_utils(my_test)
+  my_env env;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void build_phase(uvm_phase phase);
+    env = my_env::type_id::create("env", this);
+  endfunction
+endclass
+endpackage
+'''
+    ws = index(tmp_path, {'pkg.sv': text}, bundled=True)
+    nav = Navigator(ws)
+    path = str(tmp_path / 'pkg.sv')
+    lines = text.splitlines()
+    drv = lines.index('class my_drv extends uvm_component;')
+
+    def at(needle, offset=0):
+        line = next(i for i, s in enumerate(lines) if needle in s)
+        return line, lines[line].index(needle) + offset
+
+    for receiver in ('d1.field', 'h.inner.field'):
+        line, col = at(receiver, receiver.rindex('.') - 1)
+        assert [(r.line, r.col) for r in nav.type_definition(path, line, col, text)] == [(drv, 6)]
+        line, col = at(receiver, receiver.rindex('.') + 1)
+        assert 'field' in {c['label'] for c in nav.completions(path, line, col, text)}
+    assert 'type `drv_t` = `my_drv` (component)' in nav.hover(path, *at('d1.field'), text)
+    help = signatures.signature(nav, path, *at('d1.cfg.apply(', len('d1.cfg.apply(')))
+    assert help is not None and help[2] == 'function void apply(int level)'
+    [d] = findings(ws, 'create-new')
+    assert d.message.startswith('d1 is created with new()')
+    env = topology(ws, 'my_test')['root']['children'][0]
+    assert [c['name'] for c in env['children']] == ['d1']
+
+
 def test_member_through_config_object(ws):
     assert defs(ws, "agent/alu_driver.svh", "m_cfg.idle_cycles", 6) == ["agent/alu_agent_config.svh:8"]
 
