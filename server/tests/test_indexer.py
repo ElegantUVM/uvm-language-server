@@ -275,6 +275,7 @@ def test_invocation_spans_and_formal_metadata(tmp_path):
     text = '''`define GENERATED f(1)
 class C;
  function void f(input int a, b, output bit [3:0] v[], const ref string s="x,y"); endfunction
+ function void old_style; const ref int a, more[]; output byte b; endfunction
  function void run();
    f(1, 2);
    `GENERATED
@@ -296,6 +297,9 @@ endclass
     assert [(a.direction, a.type_text, a.dimensions, a.default) for a in args] == [
         ('input', 'int', '', None), ('input', 'int', '', None),
         ('output', 'bit[3:0]', '[]', None), ('const ref', 'string', '', '"x,y"')]
+    args = ws.classes[0].methods[1].args
+    assert [(a.direction, a.type_text, a.dimensions) for a in args] == [
+        ('const ref', 'int', ''), ('const ref', 'int', '[]'), ('output', 'byte', '')]
     ws.update_document(path, text.replace('f(1, 2);', ''))
     assert len(ws.invocations_by_file[path]) == 1
 

@@ -703,3 +703,19 @@ endclass
 '''.replace('DIRECTIVE', directive)).replace('\n', '\r\n'))
     assert help_at(doc, '.b(') is None
     signature(help_at(doc, '.a('), ['int a = 0', 'int b = 0', 'int c = 0'])
+
+
+@pytest.mark.parametrize('kind,ending', [('function void', 'endfunction'), ('task', 'endtask')])
+def test_non_ansi_const_ref(doc, kind, ending):
+    doc.change('''class C;
+ KIND f;
+   const ref int a, others[];
+   ref int c;
+   output byte b;
+   b = a;
+ ENDING
+ task test(); int a = 1; int others[]; byte b; f(a, others, a, b); endtask
+endclass
+'''.replace('KIND', kind).replace('ENDING', ending))
+    formals = ['const ref int a', 'const ref int others[]', 'ref int c', 'output byte b']
+    signature(help_at(doc, '; f(a,'), formals, 1, kind + ' f(' + ', '.join(formals) + ')')

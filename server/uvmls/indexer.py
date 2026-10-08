@@ -1011,7 +1011,8 @@ class Extractor:
                     for d in nodes(st.declarators):
                         v = self.variable(d, "argument", getattr(st.header, "dataType", None), compact(st), [])
                         if v:
-                            v.direction = compact(st.header.direction)
+                            v.direction = (compact(getattr(st.header, "constKeyword", None)) + " " +
+                                           compact(st.header.direction)).strip()
                             v.dimensions = compact(d.dimensions)
                             meth.args.append(v)
         if not self.library and not self.in_library(meth.range.path):
