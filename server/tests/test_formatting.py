@@ -6,6 +6,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -387,6 +388,56 @@ def test_library_and_language_filter_without_index(clients, fake, tmp_path):
     c.notify("textDocument/didOpen", {"textDocument": {
         "uri": doc.uri, "languageId": "plaintext", "version": 2, "text": doc.text}})
     assert format_doc(doc) == []
+    assert not fake.record.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="FIFO holds source discovery open over stdio")
+@pytest.mark.parametrize("ranged", [False, True])
+def test_project_library_is_protected_during_discovery(clients, fake, tmp_path, ranged):
+    library = tmp_path / "library"
+    nested = library / "base"
+    nested.mkdir(parents=True)
+    (library / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n")
+    (library / "uvm_macros.svh").write_text("// macros\n")
+    targets = [library / "lib.svh", nested / "nested.svh"]
+    for target in targets:
+        target.write_text("// BAD\n")
+    alias = tmp_path / "alias.svh"
+    alias.symlink_to(targets[1])
+    targets.append(alias)
+    filelist = tmp_path / "tb.f"
+    os.mkfifo(filelist)
+    entered, release = threading.Event(), threading.Event()
+
+    def hold_filelist():
+        with filelist.open("w") as f:
+            entered.set()
+            release.wait(10)
+            f.write("library/uvm_pkg.sv\nlibrary/lib.svh\n")
+
+    writer = threading.Thread(target=hold_filelist, daemon=True)
+    writer.start()
+    c = clients(tmp_path, {"path": str(fake.path)}, filelists=[str(filelist)])
+    c.notify("initialized", {})
+    request = (lambda doc: format_range(doc, (0, 0), (1, 0))) if ranged else format_doc
+    try:
+        assert entered.wait(5)
+        docs = [Doc(c, str(path)) for path in targets]
+        for doc in docs:
+            assert request(doc) == []
+            assert Path(doc.path).read_text() == doc.text
+        assert not fake.record.exists()
+        user = document(c, tmp_path)
+        assert applied(user.text, request(user)) == "// good\n"
+        assert not any(m["method"] == "uvm/indexChanged" for m in c.notifications)
+    finally:
+        release.set()
+        writer.join(timeout=5)
+    c.wait_for("uvm/indexChanged")
+    assert c.request("uvm/stats", {})["uvm"]["dir"] == str(library)
+    fake.record.unlink()
+    for doc in docs:
+        assert request(doc) == []
     assert not fake.record.exists()
 
 

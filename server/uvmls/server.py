@@ -689,10 +689,20 @@ def _format_eligible(ls: UvmLanguageServer, uri: str, path: str) -> bool:
         return False
     if is_bundled(path) or path in ls.ws.library_files:
         return False
+    # Discovery may still be running or describe the previous project settings.
+    real_path = os.path.realpath(path)
+    directory = os.path.dirname(real_path)
+    while True:
+        if os.path.isfile(os.path.join(directory, "uvm_pkg.sv")):
+            return False
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        directory = parent
     cfg = ls.config()
     sources = ls.ws.sources
     library = sources.uvm_dir if sources else _uvm_src_dir(cfg.uvm_home) or _uvm_src_dir(cfg.env_uvm_home)
-    return not library or not os.path.realpath(path).startswith(os.path.realpath(library) + os.sep)
+    return not library or not real_path.startswith(os.path.realpath(library) + os.sep)
 
 
 def _text_position(codec, ft: fixes.FileText, offset: int) -> T.Position:
