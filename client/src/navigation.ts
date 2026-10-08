@@ -13,12 +13,16 @@ export async function revealLocation(arg?: SourceLocation) {
     return;
   }
   const { file, line } = arg;
-  const col = arg.col === undefined ? 0 : arg.col;
-  const endLine = arg.endLine === undefined ? line : arg.endLine;
-  const endCol = arg.endCol === undefined ? col : arg.endCol;
-  if (![line, col, endLine, endCol].every((n) => Number.isInteger(n) && n >= 0) ||
-      endLine < line || (endLine === line && endCol < col)) {
+  if (!Number.isInteger(line) || line < 0) {
+    vscode.window.showErrorMessage(`UVM: cannot open ${file}: no valid line given`);
     return;
+  }
+  let col = arg.col === undefined ? 0 : arg.col;
+  let endLine = arg.endLine === undefined ? line : arg.endLine;
+  let endCol = arg.endCol === undefined ? col : arg.endCol;
+  if (![col, endLine, endCol].every((n) => Number.isInteger(n) && n >= 0) ||
+      endLine < line || (endLine === line && endCol < col)) {
+    [col, endLine, endCol] = [0, line, 0];  // the line is still worth opening
   }
   try {
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
