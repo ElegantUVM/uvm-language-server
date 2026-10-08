@@ -14,18 +14,19 @@ from uvmls.server import UvmLanguageServer, code_action, code_lens, definition, 
 
 
 @pytest.mark.parametrize("handler", [code_action, code_lens, hover, definition, inlay_hint])
-def test_full_index_wait_has_a_deadline(tmp_path, handler):
+def test_full_index_wait_never_blocks_the_loop(tmp_path, handler):
     async def run():
         ls = UvmLanguageServer()
         ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
         ls.protocol.client_capabilities = T.ClientCapabilities()
         ls.settings = {'elaboration': 'off'}
-        entered = threading.Event()
+        entered, leaving = threading.Event(), threading.Event()
 
         def configure(config):
             with ls.ws.lock:
                 entered.set()
                 time.sleep(.25)
+                leaving.set()
         ls.ws.configure = configure
         ls.after_index = lambda: None
         ls.outdate_elaboration = lambda: None
@@ -50,9 +51,25 @@ def test_full_index_wait_has_a_deadline(tmp_path, handler):
             params = T.InlayHintParams(params.text_document, rng)
         start = time.monotonic()
         try:
-            assert not await handler(ls, params)
-            assert time.monotonic() - start < .15
-            assert not task.done()  # timing out the request must not cancel the index
+            if handler in (code_lens, hover, definition):
+                # These answer from the index once it is free, waiting in a worker, not on the loop.
+                ticks = 0
+
+                async def ticker():
+                    nonlocal ticks
+                    while True:
+                        ticks += 1
+                        await asyncio.sleep(.01)
+                tick = asyncio.create_task(ticker())
+                try:
+                    await handler(ls, params)
+                finally:
+                    tick.cancel()
+                assert leaving.is_set() and ticks >= 10
+            else:
+                assert not await handler(ls, params)
+                assert time.monotonic() - start < .15
+                assert not task.done()  # timing out the request must not cancel the index
         finally:
             await task
     asyncio.run(run())

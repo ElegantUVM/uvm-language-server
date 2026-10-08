@@ -386,7 +386,7 @@ def test_config_lenses_refresh_after_index_and_settings(tb, support, refresh):
         assert requests.count("workspace/codeLens/refresh") == 3 * count
         c.notify("workspace/didChangeConfiguration", {"settings": {"uvm": {
             **settings, "codeLens": {"configDb": False}}}})
-        c.wait_for("uvm/indexChanged")
+        # A display setting refreshes the lenses without reindexing.
         found = lenses(c, path)
         assert found and all(l["command"]["command"] == "uvm.showClassGraph" for l in found)
         assert requests.count("workspace/codeLens/refresh") == 4 * count

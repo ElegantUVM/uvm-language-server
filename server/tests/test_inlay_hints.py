@@ -479,8 +479,24 @@ def test_inlay_refresh_after_configuration_change(tb, refresh):
         assert hints(c, tb / "agent/alu_driver.svh")
         assert requests.count("workspace/inlayHint/refresh") == int(refresh)
         c.notify("workspace/didChangeConfiguration", {"settings": {"uvm": settings(tb, inlayHints=False)}})
-        c.wait_for("uvm/indexChanged")
+        # A display setting refreshes the hints without reindexing.
         assert hints(c, tb / "agent/alu_driver.svh") == []
         assert requests.count("workspace/inlayHint/refresh") == 2 * int(refresh)
+    finally:
+        c.close()
+
+
+def test_factory_hint_reveals_the_override_when_the_client_can(tb):
+    c = start(tb, capabilities=CAPABILITIES, clientCommands=["uvm.revealLocation"])
+    try:
+        [hint] = hints(c, tb / "agent/alu_agent.svh")
+        [part] = hint["label"]
+        assert "location" not in part  # VS Code would go to the definition of the call instead
+        target = tb / "tests/alu_tests.svh"
+        line = next(i for i, text in enumerate(target.read_text().splitlines()) if "set_type_override_by_type" in text)
+        assert part["command"]["command"] == "uvm.revealLocation"
+        [arg] = part["command"]["arguments"]
+        assert (arg["file"], arg["line"], arg["col"]) == (str(target), line, 4)
+        assert arg["endLine"] == line and arg["endCol"] > arg["col"]
     finally:
         c.close()

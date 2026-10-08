@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import os
@@ -21,7 +22,7 @@ from pygls.uris import from_fs_path
 from . import __version__, elab, fixes, indexer
 from .documents import Workspace as LspWorkspace
 from .lints import lint
-from .model import Diag, Range
+from .model import Diag, Range, utf8_prefix
 from .navigation import Navigator
 from .project import ProjectConfig, is_sv_file, norm
 from .views import class_graph, config_db_report, effective_type, topology
@@ -232,6 +233,10 @@ class UvmLanguageServer(LanguageServer):
     def after_index(self):
         self.publish_diagnostics()
         self.protocol.notify("uvm/indexChanged", {"stats": self.ws.stats(), "version": self.ws.version})
+        self.refresh_views()
+
+    def refresh_views(self):
+        """Ask the client to re-request code lenses and inlay hints."""
         if get_capability(self.client_capabilities, "text_document.code_lens") is not None and \
                 get_capability(self.client_capabilities, "workspace.code_lens.refresh_support", False):
             self.workspace_code_lens_refresh(None)
@@ -562,8 +567,12 @@ def on_exit(ls: UvmLanguageServer, params):
     ls.stop_elaboration()
 
 
-def _without(settings: dict, key: str) -> dict:
-    return {k: v for k, v in settings.items() if k != key}
+# Settings that change only what is shown, not what is indexed.
+VIEW_SETTINGS = ("codeLens", "inlayHints", "inlayHints.test")
+
+
+def _without(settings: dict, *keys: str) -> dict:
+    return {k: v for k, v in settings.items() if k not in keys}
 
 
 @server.feature(T.WORKSPACE_DID_CHANGE_CONFIGURATION)
@@ -576,10 +585,13 @@ async def did_change_configuration(ls: UvmLanguageServer, params: T.DidChangeCon
         old, ls.settings = ls.settings, settings
         if ls.elab_mode == "off":
             ls.clear_elaboration()
-        if _without(old, "elaboration") != _without(settings, "elaboration"):
-            await ls.full_index()  # elaborates afterwards unless it is off
-        elif was_off and ls.elab_mode != "off":
+        if _without(old, "elaboration", *VIEW_SETTINGS) != _without(settings, "elaboration", *VIEW_SETTINGS):
+            await ls.full_index()  # elaborates afterwards unless it is off, and refreshes the views
+            return
+        if was_off and ls.elab_mode != "off":
             ls.start_elaboration()
+        if any(old.get(k) != settings.get(k) for k in VIEW_SETTINGS):
+            ls.refresh_views()
 
 
 @server.feature(T.TEXT_DOCUMENT_DID_OPEN)
@@ -644,24 +656,29 @@ async def did_change_watched(ls: UvmLanguageServer, params: T.DidChangeWatchedFi
 # -- navigation ----------------------------------------------------------------
 
 
-def _indexed_lines(ls: UvmLanguageServer, path: str) -> list[str]:
-    if path not in ls.ws.lines:
-        ls.ws.lines[path] = fixes.EOL_RE.split(ls.ws.texts.get(path, ""))
-    return ls.ws.lines[path]
+# Separate from the default executor: requests cancelled while they wait for the lock (hovers, on
+# every mouse move) must not hold back the indexing and inlay-hint work queued behind them.
+REQUEST_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="uvmls-request")
+
+
+async def _off_loop(fn, *args):
+    """Run a request's index lookups in a worker: a reindex or a cold inlay-hint request can hold
+    the index lock for seconds, and waiting for it on the event loop would stall every request."""
+    return await asyncio.get_running_loop().run_in_executor(REQUEST_POOL, fn, *args)
 
 
 def _indexed_column(ls: UvmLanguageServer, path: str, pos: T.Position) -> int:
-    lines = _indexed_lines(ls, path)
+    lines = ls.ws.lines_of(path)
     decoded = ls.workspace.position_codec.position_from_client_units(lines, pos)
     return len(lines[pos.line][:decoded.character].encode("utf-8")) if pos.line < len(lines) else 0
 
 
 def _indexed_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
     # slang columns are UTF-8 bytes; editor positions use the negotiated encoding.
-    lines = _indexed_lines(ls, rng.path)
+    lines = ls.ws.lines_of(rng.path)
 
     def position(line, col):
-        prefix = lines[line].encode("utf-8")[:col].decode("utf-8", errors="replace") if line < len(lines) else ""
+        prefix = utf8_prefix(lines[line], col) if line < len(lines) else ""
         return T.Position(line, ls.workspace.position_codec.client_num_units(prefix))
 
     return T.Range(position(rng.line, rng.col), position(rng.end_line, rng.end_col))
@@ -669,8 +686,11 @@ def _indexed_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
 
 @server.feature(T.TEXT_DOCUMENT_DEFINITION)
 async def definition(ls: UvmLanguageServer, params: T.DefinitionParams):
-    if not await ls.fresh():
-        return None
+    await ls.fresh()  # after the timeout, answer from the index as it is
+    return await _off_loop(_definition, ls, params)
+
+
+def _definition(ls: UvmLanguageServer, params: T.DefinitionParams):
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
         config = ls.nav.config_db_definition(path, params.position.line, _indexed_column(ls, path, params.position))
@@ -692,8 +712,11 @@ def type_definition(ls: UvmLanguageServer, params: T.TypeDefinitionParams):
 
 @server.feature(T.TEXT_DOCUMENT_HOVER)
 async def hover(ls: UvmLanguageServer, params: T.HoverParams):
-    if not await ls.fresh():
-        return None
+    await ls.fresh()  # after the timeout, answer from the index as it is
+    return await _off_loop(_hover, ls, params)
+
+
+def _hover(ls: UvmLanguageServer, params: T.HoverParams):
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
         config = ls.nav.config_db_hover(path, params.position.line, _indexed_column(ls, path, params.position))
@@ -862,8 +885,11 @@ def config_db_lenses(ls: UvmLanguageServer, path: str) -> list[T.CodeLens]:
 
 @server.feature(T.TEXT_DOCUMENT_CODE_LENS, T.CodeLensOptions(resolve_provider=False))
 async def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
-    if not await ls.fresh():
-        return []
+    await ls.fresh()  # after the timeout, answer from the index as it is
+    return await _off_loop(_code_lens, ls, params)
+
+
+def _code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
     path = uri_to_path(params.text_document.uri)
     lenses = []
     with ls.ws.lock:
@@ -887,6 +913,9 @@ async def code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
     return lenses
 
 
+INLAY_CACHE_SIZE = 64
+
+
 async def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
     if ls.settings.get("inlayHints", True) is False:
         return []
@@ -907,7 +936,10 @@ async def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
         if version == ls.ws.version and selected_test == ls.settings.get("inlayHints.test"):
             if ls.settings.get("inlayHints", True) is False:
                 return []
-            ls.ws._inlay_hint_cache[key] = hints
+            cache = ls.ws._inlay_hint_cache
+            if len(cache) >= INLAY_CACHE_SIZE:  # scrolling a file without editing it asks for many ranges
+                cache.clear()
+            cache[key] = hints
             return hints
     return []
 
@@ -934,9 +966,16 @@ def _compute_inlay_hints(ls: UvmLanguageServer, params: T.InlayHintParams, selec
                 if entry.instances < count:
                     label += f" ({entry.instances} of {count} instances)"
                 tooltip = f"overridden in {ov.owner}::{ov.method} ({os.path.basename(ov.range.path)}:{ov.range.line + 1})"
-                hints.append(T.InlayHint(position=pos, kind=T.InlayHintKind.Type, padding_left=True,
-                    label=[T.InlayHintLabelPart(value=label, location=T.Location(
-                        path_to_uri(ov.range.path), _indexed_range(ls, ov.range)))],
+                target = _indexed_range(ls, ov.range)
+                if "uvm.revealLocation" in ls.client_commands:
+                    # A part's location is where the editor runs go-to-definition, so a click would
+                    # open set_type_override_by_type in the UVM library rather than this call.
+                    part = T.InlayHintLabelPart(value=label, command=T.Command(
+                        title="go to the override", command="uvm.revealLocation", arguments=[{
+                            **ov.range.to_json(), "col": target.start.character, "endCol": target.end.character}]))
+                else:
+                    part = T.InlayHintLabelPart(value=label, location=T.Location(path_to_uri(ov.range.path), target))
+                hints.append(T.InlayHint(position=pos, kind=T.InlayHintKind.Type, padding_left=True, label=[part],
                     tooltip=T.MarkupContent(kind=T.MarkupKind.Markdown, value=tooltip)))
         last_line = end.line if end.character else end.line - 1
         for rng, bound, tooltip in ls.nav.bound_member_hints(path, start.line, last_line):
