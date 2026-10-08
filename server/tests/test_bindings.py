@@ -38,3 +38,10 @@ endclass
     assert spec.name == "box" and spec.args == ["item"]
     [(_, bound, _)] = nav.bound_member_hints(path)
     assert bound == "box #(item)"
+
+
+def test_type_arguments_keep_commas_in_literals():
+    from uvmls.workspace import parse_type_text
+
+    assert parse_type_text('box #(item, "x,y", .N(f(1, 2)))') == (
+        None, 'box', ['item', '"x,y"', '.N(f(1, 2))'])

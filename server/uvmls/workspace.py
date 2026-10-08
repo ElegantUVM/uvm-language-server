@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from .indexer import EOL_RE, Indexer
+from .indexer import EOL_RE, Indexer, argument_spans, mask
 from .model import (
     ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex, MacroDef,
     Method, OverrideCall, Range, SeqStart, Typedef, TypeRef, Variable,
@@ -54,19 +54,9 @@ class CallSet:
 
 
 def split_args(text: str) -> list[str]:
-    out, depth, cur = [], 0, ""
-    for ch in text:
-        if ch in "([{":
-            depth += 1
-        elif ch in ")]}":
-            depth -= 1
-        if ch == "," and depth == 0:
-            out.append(cur.strip())
-            cur = ""
-        else:
-            cur += ch
-    if cur.strip():
-        out.append(cur.strip())
+    out = [text[a:b].strip() for a, b in argument_spans(mask(text), 0, len(text))]
+    if out and not out[-1]:
+        out.pop()
     return out
 
 

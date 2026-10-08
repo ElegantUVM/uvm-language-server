@@ -19,7 +19,7 @@ from pygls.capabilities import get_capability
 from pygls.lsp.server import LanguageServer
 from pygls.uris import from_fs_path
 
-from . import __version__, elab, fixes, formatting, indexer, signatures
+from . import __version__, elab, fixes, formatting, indexer, naturaldocs, signatures
 from .documents import Workspace as LspWorkspace
 from .lints import lint
 from .model import Diag, Range, utf8_prefix
@@ -1022,12 +1022,18 @@ def _code_lens(ls: UvmLanguageServer, params: T.CodeLensParams):
 async def signature_help(ls: UvmLanguageServer, params: T.SignatureHelpParams):
     if not await ls.fresh():
         return None
-    key = (params.text_document.uri, params.position.line, params.position.character)
+    caps = ls.client_capabilities
+    prefix = "text_document.signature_help.signature_information."
+    markdown = "markdown" in (get_capability(caps, prefix + "documentation_format", []) or [])
+    offsets = bool(get_capability(caps, prefix + "parameter_information.label_offset_support", False))
+    active_support = bool(get_capability(caps, prefix + "active_parameter_support", False))
+    options = (markdown, offsets, active_support)
+    key = (params.text_document.uri, params.position.line, params.position.character, options)
     if key in ls.ws._signature_cache:
         return ls.ws._signature_cache[key]
     version, documents = ls.ws.version, ls.documents
     revisions = {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}
-    result = await asyncio.get_running_loop().run_in_executor(None, _compute_signature, ls, params)
+    result = await asyncio.get_running_loop().run_in_executor(None, _compute_signature, ls, params, options)
     if version != ls.ws.version or documents != ls.documents or ls.pending or \
             revisions != {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
         return None
@@ -1035,15 +1041,32 @@ async def signature_help(ls: UvmLanguageServer, params: T.SignatureHelpParams):
     return result
 
 
-def _compute_signature(ls: UvmLanguageServer, params: T.SignatureHelpParams):
+def _compute_signature(ls: UvmLanguageServer, params: T.SignatureHelpParams, options):
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
         found = signatures.signature(ls.nav, path, params.position.line,
                                      _indexed_column(ls, path, params.position))
         if found is None:
             return None
-        _, _, label, formals, active = found
-        sig = {"label": label, "parameters": [{"label": f} for f in formals]}
+        target, method, label, formals, active = found
+        markdown, offsets, active_support = options
+        parameters = []
+        start = len(label) - sum(len(f) for f in formals) - max(0, len(formals) - 1) * 2 - 1
+        for formal in formals:
+            end = start + len(formal)
+            span = [len(label[:start].encode("utf-16-le")) // 2, len(label[:end].encode("utf-16-le")) // 2]
+            parameters.append({"label": span if offsets else formal})
+            start = end + 2
+        sig = {"label": label, "parameters": parameters}
+        if active_support and formals:
+            sig["activeParameter"] = active
+        doc, source = ls.nav.method_doc(method, target.owner)
+        if doc:
+            rendered = naturaldocs.markdown(doc) if markdown else naturaldocs.plain(doc)
+            if source is not None:
+                name = source.name + "::" + method.name
+                rendered = (f"doc from `{name}`" if markdown else f"doc from {name}") + "\n\n" + rendered
+            sig["documentation"] = {"kind": "markdown" if markdown else "plaintext", "value": rendered}
         result = {"signatures": [sig], "activeSignature": 0}
         if formals:
             result["activeParameter"] = active
