@@ -105,6 +105,17 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
     return out
 
 
+def _unseen(known: dict, by_file: dict, path: str, key, key_of) -> bool:
+    """Whether a record of `path` with this key is not in `by_file` yet (and is now)."""
+    seen = known.get((id(by_file), path))
+    if seen is None:
+        seen = known[(id(by_file), path)] = {key_of(r) for r in by_file.get(path, ())}
+    if key in seen:
+        return False
+    seen.add(key)
+    return True
+
+
 def _never(cond: tuple[str, str], given: set[str], known: set[str]) -> bool:
     """Whether an `ifdef branch condition is false whatever order files are read in: `ifndef of a
     macro the configuration defines, or `ifdef of one nothing defines."""
@@ -248,22 +259,25 @@ class Workspace:
         self.version += 1
         seen_decl: set[tuple[str, int, str]] = set()
         seen_ids: set[Range] = set()
-        seen_calls: set[Range] = set()
-        seen_directives: set[Range] = set()
-        seen_structures = set()
-        for idx in self.indices.values():
+        # A file's structures, calls and directives: the first root that reaches it adds its own;
+        # another root (a shared header) adds only those not seen yet.
+        owners: dict[str, str] = {}
+        known: dict = {}
+        for root, idx in self.indices.items():
             self.texts.update(idx.texts)
             for pair in idx.structures:
-                if pair not in seen_structures:
-                    seen_structures.add(pair)
-                    self.structures_by_file.setdefault(pair.opening.path, []).append(pair)
+                path = pair.opening.path
+                if owners.setdefault(path, root) == root or \
+                        _unseen(known, self.structures_by_file, path, pair, lambda p: p):
+                    self.structures_by_file.setdefault(path, []).append(pair)
             for call in idx.invocations:
-                if call.opening not in seen_calls:
-                    seen_calls.add(call.opening)
-                    self.invocations_by_file.setdefault(call.head.path, []).append(call)
+                path = call.head.path
+                if owners.setdefault(path, root) == root or \
+                        _unseen(known, self.invocations_by_file, path, call.opening, lambda c: c.opening):
+                    self.invocations_by_file.setdefault(path, []).append(call)
             for rng in idx.directives:
-                if rng not in seen_directives:
-                    seen_directives.add(rng)
+                if owners.setdefault(rng.path, root) == root or \
+                        _unseen(known, self.directives_by_file, rng.path, rng, lambda r: r):
                     self.directives_by_file.setdefault(rng.path, []).append(rng)
             if idx.library:
                 self.library_files |= idx.files
@@ -351,6 +365,20 @@ class Workspace:
 
     def all_indices(self):
         return list(self.indices.values())
+
+    def structures_in(self, path: str) -> list:
+        """A file's structural pairs. A library root's are collected when one of its files first
+        asks: user code never needs them."""
+        if path in self.library_files:
+            for root in self.roots_for(path):
+                idx = self.indices[root]
+                if idx.structures_pending:
+                    idx.structures, idx.structures_pending = self.indexer.structures(root, self.overrides), False
+                    known: dict = {}
+                    for pair in idx.structures:
+                        if _unseen(known, self.structures_by_file, pair.opening.path, pair, lambda p: p):
+                            self.structures_by_file.setdefault(pair.opening.path, []).append(pair)
+        return self.structures_by_file.get(path, [])
 
     def visible_packages(self, imports) -> list[str]:
         """Imported packages and the packages they re-export (`export p::*`, `export *::*`)."""

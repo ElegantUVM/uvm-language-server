@@ -29,7 +29,7 @@ def call_at(ws, path, line, col):
         if opening is None or cursor < opening[1]:
             continue
         closing = ft.span(call.closing) if call.closing else None
-        boundary = ft.span(call.boundary)
+        boundary = ft.span(call.boundary) if call.boundary else None
         end = closing[0] if closing else boundary[1] if boundary else opening[1]
         if opening[1] <= cursor <= end and cursor - opening[1] <= LIMIT:
             candidates.append((opening[1], end, call))
@@ -51,7 +51,7 @@ def call_at(ws, path, line, col):
     if ";" in prefix or re.search(r"\b(?:endfunction|endtask|endclass)\b", prefix):
         return None
     slots = argument_spans(masked, 0, len(masked))
-    active = sum((r.end_line, r.end_col) <= (line, col) for r in call.commas) if call.closing else \
+    active = sum(end <= (line, col) for end in call.commas) if call.closing else \
         sum(b < at for _, b in slots)
     name = call.names[active] if active < len(call.names) else None
     if active < len(slots):
@@ -87,7 +87,7 @@ def signature(nav, path, line, col):
         targets = [Target(hit[1], owner=hit[0], bindings=hit[2])] if hit else []
     else:
         ce = CursorExpr(names[-1], names, [s[2] for s in call.segments[1:]], False, 0, 0,
-                        [s[1] for s in call.segments])
+                        [list(s[1]) for s in call.segments])
         targets = nav.resolve_expr(path, call.head.line, call.head.col, ce, strict=True)
     if len(targets) != 1 or not isinstance(targets[0].obj, Method):
         return None

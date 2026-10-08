@@ -333,7 +333,7 @@ endclass
     path = str(tmp_path / 't.sv')
     calls = ws.invocations_by_file[path]
     assert len(calls) == 2
-    assert calls[0].segments == [('f', [], '')]
+    assert calls[0].segments == (('f', (), ''),)
     assert calls[0].closing is not None and calls[1].closing is None
     args = ws.classes[0].methods[0].args
     assert [(a.direction, a.type_text, a.dimensions, a.default) for a in args] == [
@@ -372,3 +372,36 @@ endclass
     ws.update_document(path, text.replace('`ifdef ABSENT', '`ifndef ABSENT'))
     assert call_at(ws, path, 5, 8)[1:] == (1, 'b')
     assert call_at(ws, path, 7, 8)[1:] == (2, 'a')
+
+
+def test_indexing_leaves_library_text_alone(tmp_path):
+    from unittest.mock import patch
+
+    from test_fixes import index
+    from uvmls.indexer import Extractor
+    from uvmls.navigation import Navigator
+
+    text = '''`include "uvm_macros.svh"
+import uvm_pkg::*;
+class c extends uvm_component;
+  `uvm_component_utils(c)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+'''
+    ws = index(tmp_path, {'t.sv': text}, bundled=True)
+    [lib] = [idx for idx in ws.indices.values() if idx.library]
+    assert lib.structures_pending and lib.structures == [] and lib.identifiers == {}
+    # A user root ranges only its own text: none of the UVM headers' many `defines, and no line
+    # table where slang's line numbers are already the physical ones.
+    path = str(tmp_path / 't.sv')
+    ex = Extractor(*ws.indexer._tree(path, {}, False), path, False, {}, ws.indexer.library_dirs)
+    made, original = [], Extractor.make_range
+    with patch.object(Extractor, 'make_range', lambda self, *a: made.append(original(self, *a)) or made[-1]):
+        ex.collect_source_ranges()
+    assert {r.path for r, _ in made} == {path} and len(ex.out.directives) == 2  # `include, `uvm_component_utils
+    assert not any(ex._line_starts.values())
+    # Folding in a library file collects its root's pairs on first use.
+    component = next(f for f in lib.files if f.endswith('uvm_component.svh'))
+    assert Navigator(ws).folding_ranges(component)
+    assert not lib.structures_pending and lib.structures
+

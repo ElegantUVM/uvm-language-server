@@ -126,19 +126,18 @@ class CreateCall:
     nargs: int = 0
 
 
-@dataclass
+@dataclass(slots=True)
 class CallSite:
     """Source-spelled invocation context; declarations still own the signature."""
 
     head: Range
-    segments: list[tuple[str, list[str], str]]
+    segments: tuple[tuple[str, tuple[str, ...], str], ...]
     opening: Range
     closing: Range | None
-    boundary: Range
+    boundary: Range | None  # the enclosing statement of a call missing its `)`
     target: str | None = None  # assignment target of a bare new
-    arguments: list[Range] = field(default_factory=list)
-    commas: list[Range] = field(default_factory=list)
-    names: list[str | None] = field(default_factory=list)
+    commas: tuple[tuple[int, int], ...] = ()  # where each top-level comma ends
+    names: tuple[str | None, ...] = ()  # each argument's name, when any is named
 
 
 @dataclass
@@ -313,7 +312,7 @@ class Diag:
     data: dict | None = None  # what a quick fix needs; sent to the client with the diagnostic
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StructuralPair:
     opening: Range
     closing: Range
@@ -337,6 +336,7 @@ class FileIndex:
     structures: list[StructuralPair] = field(default_factory=list)
     invocations: list[CallSite] = field(default_factory=list)
     directives: list[Range] = field(default_factory=list)  # includes disabled preprocessor text
+    structures_pending: bool = False  # a library root's structures, collected on first use
     named_argument_labels: set[Range] = field(default_factory=set)
     ignores: dict[str, dict[int, list[str]]] = field(default_factory=dict)  # file -> line -> lint codes ignored there
     library: bool = False

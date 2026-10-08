@@ -632,7 +632,7 @@ class Navigator:
         return out
 
     def document_highlights(self, path, line, col) -> list[Range]:
-        pairs = [p for p in self.ws.structures_by_file.get(path, ())
+        pairs = [p for p in self.ws.structures_in(path)
                  if any((r.line, r.col) <= (line, col) < (r.end_line, r.end_col) for r in (p.opening, p.closing))]
         if pairs:
             pair = min(pairs, key=lambda p: (p.closing.line - p.opening.line, p.closing.col - p.opening.col))
@@ -647,7 +647,7 @@ class Navigator:
         return []
 
     def folding_ranges(self, path) -> list[tuple[int, int]]:
-        intervals = {(p.opening.line, p.closing.line - 1) for p in self.ws.structures_by_file.get(path, ())
+        intervals = {(p.opening.line, p.closing.line - 1) for p in self.ws.structures_in(path)
                      if p.closing.line - 1 > p.opening.line}
         out, ends = [], []
         for start, end in sorted(intervals, key=lambda p: (p[0], -p[1])):

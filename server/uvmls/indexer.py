@@ -35,6 +35,10 @@ SHIM_BUFFER_NAME = "<uvm-macro-shim>"
 UVM_MACROS_PRELUDE = "<uvm-macros-prelude>"
 
 FUNC_DECLS = (K.FunctionDeclaration, K.TaskDeclaration)
+STRUCTURE_KINDS = (K.ClassDeclaration, *FUNC_DECLS, K.SequentialBlockStatement, K.GenerateBlock)
+# Where a call's missing delimiters may still be recovered.
+CALL_BOUNDARY_KINDS = frozenset([*FUNC_DECLS, K.DataDeclaration,
+                                 *(k for k in K.__members__.values() if k.name.endswith("Statement"))])
 LOOP_KINDS = {
     K.ForLoopStatement, K.ForeachLoopStatement, K.LoopStatement, K.DoWhileStatement,
     K.ForeverStatement,
@@ -198,7 +202,7 @@ def _uses_unknown_uvm_macro(tree) -> bool:
 # Token / text helpers
 
 
-def iter_tokens(node, visit=None):
+def iter_tokens(node):
     """All tokens under a node, in source order."""
     stack = [node]
     while stack:
@@ -208,8 +212,6 @@ def iter_tokens(node, visit=None):
         if isinstance(n, Token):
             yield n
             continue
-        if visit is not None and isinstance(n, Node):
-            visit(n)
         children = [c for c in n]
         stack.extend(reversed(children))
 
@@ -429,6 +431,21 @@ class Indexer:
     def parse(self, root: str, overrides: dict[str, str] | None = None,
               library: bool = False) -> FileIndex:
         overrides = overrides or {}
+        built = self._tree(root, overrides, library)
+        if isinstance(built, FileIndex):
+            return built
+        return Extractor(*built, root, library, overrides, self.library_dirs).run()
+
+    def structures(self, root: str, overrides: dict[str, str] | None = None) -> list[StructuralPair]:
+        """A library root's structural pairs, which indexing leaves for the first request."""
+        overrides = overrides or {}
+        built = self._tree(root, overrides, True)
+        if isinstance(built, FileIndex):
+            return []
+        return Extractor(*built, root, True, overrides, self.library_dirs).collect_structures()
+
+    def _tree(self, root: str, overrides: dict[str, str], library: bool):
+        """(syntax tree, source manager), or the index of a root that cannot be read."""
         sm = ps.SourceManager()
         for path, text in overrides.items():
             if path != root:
@@ -461,7 +478,7 @@ class Indexer:
             # the compilation unit, or -uvm), so predefine the real ones, as the shim would be.
             prelude = sm.assignText(UVM_MACROS_PRELUDE, '`include "uvm_macros.svh"\n')
             tree = S.SyntaxTree.fromBuffers([prelude] + buffers, sm, bag)
-        return Extractor(tree, sm, root, library, overrides, self.library_dirs).run()
+        return tree, sm
 
 
 class Extractor:
@@ -475,7 +492,7 @@ class Extractor:
         self.library_dirs = library_dirs
         self.out = FileIndex(root=root, library=library)
         self._paths: dict[int, str | None] = {}
-        self._line_starts: dict[int, list[int]] = {}
+        self._line_starts: dict[int, list[int] | None] = {}
 
     # -- locations -----------------------------------------------------------
 
@@ -509,11 +526,16 @@ class Extractor:
         bid = loc.buffer.id
         if bid not in self._line_starts:
             try:
-                raw = self.sm.getSourceText(loc.buffer).encode("utf-8")
+                text = self.sm.getSourceText(loc.buffer)
+                raw = text.encode("utf-8") if "`line" in text else None
             except UnicodeDecodeError as e:
-                raw = e.object
-            self._line_starts[bid] = [0] + [m.end() for m in re.finditer(rb"\r\n|\r|\n", raw)]
+                raw = e.object if b"`line" in e.object else None
+            # Without a `line directive, slang's (cached) line numbers are the physical ones.
+            self._line_starts[bid] = None if raw is None else \
+                [0] + [m.end() for m in re.finditer(rb"\r\n|\r|\n", raw)]
         starts = self._line_starts[bid]
+        if starts is None:
+            return self.sm.getLineNumber(loc) - 1, self.sm.getColumnNumber(loc) - 1
         line = bisect.bisect_right(starts, loc.offset) - 1
         return line, loc.offset - starts[line]
 
@@ -544,6 +566,17 @@ class Extractor:
             return None
         r = tok.range
         return self.make_range(r.start, r.end)[0]
+
+    def keyword_range(self, tok) -> Range | None:
+        """plain_range of a keyword or delimiter, which cannot span lines."""
+        loc = tok.location
+        if self.sm.isMacroLoc(loc):
+            return None
+        path = self.path_of(loc.buffer)
+        if path is None:
+            return None
+        line, col = self.physical_position(loc)
+        return Range(path, line, col, line, col + len(tok.rawText))
 
     def spelled_range(self, tok) -> Range | None:
         """Navigation can use source-spelled macro arguments as well as ordinary tokens."""
@@ -668,7 +701,10 @@ class Extractor:
         self.collect_diagnostics()
         self.collect_includes()
         self.collect_macros()
-        self.collect_source_ranges()
+        if self.library:
+            self.out.structures_pending = True  # walked when one of its files first needs them
+        else:
+            self.collect_source_ranges()
         return self.out
 
     def unit_member(self, m, package: str | None, imports: list[str], unit: DesignUnit | None,
@@ -990,7 +1026,8 @@ class Extractor:
                     v = self.variable(port.declarator, "argument", dtype, compact(port), [])
                     if v:
                         v.direction = direction
-                        v.dimensions = compact(port.declarator.dimensions)
+                        dims = port.declarator.dimensions
+                        v.dimensions = compact(dims) if len(dims) else ""
                         if not v.type_text:
                             v.type_text = "logic"
                         init = port.declarator.initializer
@@ -1116,29 +1153,32 @@ class Extractor:
         tokens = list(iter_tokens(head))
         if not tokens or any(t.isMissing or self.sm.isMacroLoc(t.location) for t in tokens):
             return
-        opening = self.plain_range(arguments.openParen)
-        closing = None if arguments.closeParen.isMissing else self.plain_range(arguments.closeParen)
+        opening = self.keyword_range(arguments.openParen)
+        closing = None if arguments.closeParen.isMissing else self.keyword_range(arguments.closeParen)
         rng = self.node_range(head)
-        # Missing delimiters may be recovered only within their enclosing syntax statement.
-        parent = node
-        while parent.parent is not None and parent.kind not in (*FUNC_DECLS, K.DataDeclaration) and \
-                not parent.kind.name.endswith("Statement"):
-            parent = parent.parent
-        boundary = self.node_range(parent)
-        if opening is None or rng is None or boundary is None or rng.path != opening.path:
+        boundary = None
+        if closing is None:
+            # Missing delimiters may be recovered only within their enclosing syntax statement.
+            parent = node
+            while parent.parent is not None and parent.kind not in CALL_BOUNDARY_KINDS:
+                parent = parent.parent
+            boundary = self.node_range(parent)
+            if boundary is None:
+                return
+        if opening is None or rng is None or rng.path != opening.path:
             return
-        segs = [(s.name, s.args, s.sep) for s in flatten_name(head)]
-        call = CallSite(rng, segs, opening, closing, boundary, self.assignment_target(node))
+        segs = tuple((s.name, tuple(s.args), s.sep) for s in flatten_name(head))
+        target = self.assignment_target(node) if node.kind == K.NewClassExpression else None
+        call = CallSite(rng, segs, opening, closing, boundary, target)
+        commas, names = [], []
         for arg in arguments.parameters:
             if isinstance(arg, Token):
-                comma = self.plain_range(arg)
+                comma = self.keyword_range(arg)
                 if arg.kind == TK.Comma and comma is not None:
-                    call.commas.append(comma)
+                    commas.append((comma.end_line, comma.end_col))
             else:
-                span = self.node_range(arg)
-                if span is not None:
-                    call.arguments.append(span)
-                call.names.append(arg.name.valueText if arg.kind == K.NamedArgument else None)
+                names.append(arg.name.valueText if arg.kind == K.NamedArgument else None)
+        call.commas, call.names = tuple(commas), tuple(names) if any(names) else ()
         self.out.invocations.append(call)
 
     def assignment_target(self, node) -> str | None:
@@ -1449,28 +1489,48 @@ class Extractor:
             return
         if opening.isMissing or closing.isMissing:
             return
-        a, b = self.plain_range(opening), self.plain_range(closing)
+        a, b = self.keyword_range(opening), self.keyword_range(closing)
         if a is not None and b is not None and a.path == b.path and \
                 (a.end_line, a.end_col) <= (b.line, b.col):
             self.out.structures.append(StructuralPair(a, b))
 
+    def collect_structures(self) -> list[StructuralPair]:
+        stack = [self.tree.root]
+        while stack:
+            n = stack.pop()
+            if isinstance(n, Node):
+                if n.kind in STRUCTURE_KINDS:
+                    self.structural_pair(n)
+                stack.extend(c for c in n if isinstance(c, Node))
+        return self.out.structures
+
     def collect_source_ranges(self):
+        """Identifiers, structural pairs and directives, in one pass over the tree."""
         ids = self.out.identifiers
         sm = self.sm
+        path_of, in_library, position = self.path_of, self.in_library, self.physical_position
+        directive, identifier = P.TriviaKind.Directive, TK.Identifier
         seen = set()
-        for tok in iter_tokens(self.tree.root, self.structural_pair):
-            if self.library:
+        stack = [self.tree.root]
+        while stack:
+            tok = stack.pop()
+            if tok is None:
+                continue
+            if not isinstance(tok, Token):
+                if tok.kind in STRUCTURE_KINDS:
+                    self.structural_pair(tok)
+                stack.extend(reversed([c for c in tok]))
                 continue
             for trivia in tok.trivia:
-                if trivia.kind != P.TriviaKind.Directive:
+                if trivia.kind != directive:
                     continue
                 sr = trivia.syntax().sourceRange
-                if sr.start.buffer != sr.end.buffer or sm.isMacroLoc(sr.start) or sm.isMacroLoc(sr.end):
+                path = path_of(sr.start.buffer)
+                if path is None or in_library(path) or sr.start.buffer != sr.end.buffer or \
+                        sm.isMacroLoc(sr.start) or sm.isMacroLoc(sr.end):
                     continue
-                rng, _ = self.make_range(sr.start, sr.end)
-                if rng is not None and not self.in_library(rng.path):
-                    self.out.directives.append(rng)
-            if tok.kind != TK.Identifier:
+                self.out.directives.append(self.make_range(sr.start, sr.end)[0])
+            if tok.kind != identifier:
                 continue
             loc = tok.location
             if sm.isMacroLoc(loc):
@@ -1479,14 +1539,12 @@ class Extractor:
                 loc = sm.getFullyOriginalLoc(loc)
                 if sm.isMacroLoc(loc):
                     continue
-            path = self.path_of(loc.buffer)
-            if path is None or self.in_library(path):
+            path = path_of(loc.buffer)
+            if path is None or in_library(path):
                 continue
             key = (loc.buffer.id, loc.offset)
             if key in seen:
                 continue
             seen.add(key)
-            line, col = self.physical_position(loc)
-            name = tok.valueText
-            width = tok.range.end.offset - tok.range.start.offset
-            ids.setdefault(name, []).append(Range(path, line, col, line, col + width))
+            line, col = position(loc)
+            ids.setdefault(tok.valueText, []).append(Range(path, line, col, line, col + len(tok.rawText)))
