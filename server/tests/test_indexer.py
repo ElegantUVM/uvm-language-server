@@ -147,14 +147,27 @@ endclass
     assert idx.diagnostics == expected.diagnostics
 
 
-def test_lf_cr_is_two_line_breaks(tmp_path):
+@pytest.mark.parametrize("eol", ["\n\r", "\r\n\n\r", "\r\n\r\n"])
+def test_lf_cr_is_two_line_breaks(tmp_path, eol):
+    from unittest.mock import patch
+
+    from uvmls import indexer
     from uvmls.fixes import FileText
 
-    # slang counts LF CR as one line break; an editor, like FileText, counts two.
-    text = "class c;\n\r  int value;\n\r  function void f(); value = 1; endfunction\nendclass\n"
+    # slang counts LF CR as one line break; an editor, like FileText, counts two. A blank line of
+    # a CRLF file is CRLF CRLF to both: slang's own line numbers stay in use.
+    text = f"class c;{eol}  int value;{eol}  function void f(); value = 1; endfunction\nendclass\n"
     path = tmp_path / "lfcr.sv"
     path.write_bytes(text.encode())
-    idx = Indexer([], {}, use_shim=True).parse(str(path))
+    tables, original = [], indexer.physical_position
+
+    def position(sm, loc, starts):
+        found = original(sm, loc, starts)
+        tables.append(any(starts.values()))
+        return found
+    with patch.object(indexer, "physical_position", position):
+        idx = Indexer([], {}, use_shim=True).parse(str(path))
+    assert any(tables) == (eol != "\r\n\r\n")
     ft = FileText(str(path), text)
     spans = {name: [text[slice(*ft.span(r))] for r in ranges] for name, ranges in idx.identifiers.items()}
     assert spans == {"c": ["c"], "value": ["value", "value"], "f": ["f"]}
