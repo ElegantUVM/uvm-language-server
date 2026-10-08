@@ -36,7 +36,6 @@ UVM_MACROS_PRELUDE = "<uvm-macros-prelude>"
 
 FUNC_DECLS = (K.FunctionDeclaration, K.TaskDeclaration)
 STRUCTURE_KINDS = (K.ClassDeclaration, *FUNC_DECLS, K.SequentialBlockStatement, K.GenerateBlock)
-BRANCH_DIRECTIVES = (K.IfDefDirective, K.IfNDefDirective, K.ElsIfDirective, K.ElseDirective)
 # Where a call's missing delimiters may still be recovered.
 CALL_BOUNDARY_KINDS = frozenset([*FUNC_DECLS, K.DataDeclaration,
                                  *(k for k in K.__members__.values() if k.name.endswith("Statement"))])
@@ -1514,7 +1513,7 @@ class Extractor:
         ids, directives = self.out.identifiers, self.out.directives
         sm = self.sm
         path_of, in_library, position = self.path_of, self.in_library, self.physical_position
-        directive, identifier = P.TriviaKind.Directive, TK.Identifier
+        directive, disabled, identifier = P.TriviaKind.Directive, P.TriviaKind.DisabledText, TK.Identifier
         seen = set()
         stack = [self.tree.root]
         while stack:
@@ -1526,7 +1525,7 @@ class Extractor:
                     self.structural_pair(tok)
                 stack.extend(reversed([c for c in tok]))
                 continue
-            branch = None  # (index, start) of the branch directive just before
+            prev = None  # (index, start) of the directive just before
             for trivia in tok.trivia:
                 if trivia.kind != directive:
                     continue
@@ -1535,14 +1534,15 @@ class Extractor:
                 path = path_of(sr.start.buffer)
                 if path is None or in_library(path) or sr.start.buffer != sr.end.buffer or \
                         sm.isMacroLoc(sr.start) or sm.isMacroLoc(sr.end):
-                    branch = None
+                    prev = None
                     continue
-                if branch is not None and branch[1].buffer == sr.start.buffer:
-                    # A branch, skipped text included, ends where the next directive starts. pyslang
-                    # 11 ends a skipped one at its last token: a line's end would count as active.
-                    directives[branch[0]] = self.make_range(branch[1], sr.start)[0]
+                if prev is not None and prev[1].buffer == sr.start.buffer and \
+                        any(t.kind == disabled for t in syntax.getFirstToken().trivia):
+                    # pyslang 12 ends a directive that skips text where the next one starts; 11 ends
+                    # it at its last token and leaves the rest, blank or not, before the next one.
+                    directives[prev[0]] = self.make_range(prev[1], sr.start)[0]
                 directives.append(self.make_range(sr.start, sr.end)[0])
-                branch = (len(directives) - 1, sr.start) if syntax.kind in BRANCH_DIRECTIVES else None
+                prev = (len(directives) - 1, sr.start)
             if tok.kind != identifier:
                 continue
             loc = tok.location

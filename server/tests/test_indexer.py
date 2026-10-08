@@ -374,14 +374,17 @@ endclass
     assert call_at(ws, path, 7, 8)[1:] == (2, 'a')
 
 
-def test_branch_directives_end_at_the_next_directive(tmp_path):
+def test_skipped_text_ends_at_the_next_directive(tmp_path):
     from test_fixes import index
     from uvmls.fixes import FileText
+    from uvmls.signatures import call_at
 
-    # pyslang 12 ends a skipped branch at the next directive, 11 after its last token: both must
-    # give the same inactive text, or a line's end counts as active on one of them.
-    text = '''module m;
-initial begin
+    # pyslang 12 ends a directive that skips text at the next directive, 11 after the last skipped
+    # token (a nested one's included): both must give the same inactive text, or a line's end
+    # counts as active on one of them. Text of a taken branch, blank or not, stays active.
+    text = '''class k;
+ function void f(int a = 0, int b = 0, int c = 0, int d = 0); endfunction
+ function void g();
   f(1,
 `ifdef A
       2,
@@ -396,17 +399,33 @@ initial begin
    7,
 `endif
 `ifdef NEVER
+`ifdef X
+   6,
+`endif
+   8,
+`endif
+`ifndef NEVER
+
 `endif
       3);
-end
-endmodule
+ endfunction
+endclass
 '''
     ws = index(tmp_path, {'t.sv': text})
     path = str(tmp_path / 't.sv')
     ft = FileText(path, text)
-    assert [text[slice(*ft.span(r))] for r in ws.directives_by_file[path]] == [
-        '`ifdef A\n      2,\n      // trailing\n\n  ', '`elsif B\n   9, /* block */\n', '`else\n',
-        '`ifndef C', '`endif', '`endif', '`ifdef NEVER\n', '`endif']
+    spans = []
+    for start, end in sorted(ft.span(r) for r in ws.directives_by_file[path]):
+        if spans and spans[-1][1] == start:
+            start = spans.pop()[0]
+        spans.append((start, end))
+    assert [text[a:b] for a, b in spans] == [
+        '`ifdef A\n      2,\n      // trailing\n\n  `elsif B\n   9, /* block */\n`else', '`ifndef C', '`endif',
+        '`endif', '`ifdef NEVER\n`ifdef X\n   6,\n`endif\n   8,\n`endif', '`ifndef NEVER', '`endif']
+    lines = text.splitlines()
+    assert call_at(ws, path, lines.index('   8,'), 5) is None
+    assert call_at(ws, path, lines.index('`ifndef NEVER') + 1, 0)[1] == 3
+    assert call_at(ws, path, lines.index('`else'), 5)[1] == 1
 
 def test_indexing_leaves_library_text_alone(tmp_path):
     from unittest.mock import patch
