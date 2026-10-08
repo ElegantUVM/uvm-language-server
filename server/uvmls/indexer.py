@@ -207,18 +207,24 @@ def _uses_unknown_uvm_macro(tree) -> bool:
 # Token / text helpers
 
 
-def iter_tokens(node):
-    """All tokens under a node, in source order."""
+def iter_tokens(node) -> list:
+    """All tokens under a node (or a list of them), in source order."""
+    out: list = []
+    append = out.append
+
+    def collect(n):
+        if isinstance(n, Token):
+            append(n)
     stack = [node]
     while stack:
         n = stack.pop()
-        if n is None:
-            continue
-        if isinstance(n, Token):
-            yield n
-            continue
-        children = [c for c in n]
-        stack.extend(reversed(children))
+        if isinstance(n, Node):
+            n.visit(collect)  # slang's own walk: two to four times faster than one from Python
+        elif isinstance(n, Token):
+            append(n)
+        elif n is not None:
+            stack.extend(reversed(list(n)))
+    return out
 
 
 def compact(node) -> str:
@@ -1017,8 +1023,8 @@ class Extractor:
 
     # -- methods -------------------------------------------------------------
 
-    def method_calls(self, decl) -> list[tuple[str, bool]] | None:
-        if any(t.isMissing or self.sm.isMacroLoc(t.location) for t in iter_tokens(decl)):
+    def method_calls(self, decl, tokens=None) -> list[tuple[str, bool]] | None:
+        if any(t.isMissing or self.sm.isMacroLoc(t.location) for t in tokens or iter_tokens(decl)):
             return None
         calls, pending = [], [decl]
         while pending:
@@ -1037,7 +1043,7 @@ class Extractor:
             pending.extend(c for c in node if isinstance(c, Node))
         return calls
 
-    def prototype(self, proto, quals: list[str], decl_node, doc_node=None) -> Method | None:
+    def prototype(self, proto, quals: list[str], decl_node, doc_node=None, tokens=None) -> Method | None:
         tok = name_token(proto.name)
         if tok is None:
             return None
@@ -1071,7 +1077,8 @@ class Extractor:
         return Method(name=tok.valueText, kind=kind, return_type=ret, signature=pretty(proto),
                       range=r, decl_range=self.node_range(decl_node) or r, args=args,
                       qualifiers=quals, is_prototype=True, generated=gen,
-                      calls=self.method_calls(decl_node) if not self.library and not self.in_library(r.path) else None,
+                      calls=self.method_calls(decl_node, tokens) if not self.library and not self.in_library(r.path)
+                      else None,
                       doc=self.doc_of(decl_node if doc_node is None else doc_node, tok.valueText))
 
     def method(self, decl, quals, owner) -> Method | None:
@@ -1082,7 +1089,8 @@ class Extractor:
         sink = Sink()
         if decl.kind not in FUNC_DECLS:
             return None, sink
-        meth = self.prototype(decl.prototype, quals, decl, doc_node)
+        tokens = None if self.library else iter_tokens(decl)
+        meth = self.prototype(decl.prototype, quals, decl, doc_node, tokens)
         if meth is None:
             return None, sink
         meth.is_prototype = False
@@ -1104,7 +1112,6 @@ class Extractor:
             meth.locals = sink.locals
             # Any identifier in the method may shadow a class type. Imports and enum
             # ranges can introduce names absent from the tokens, so leave those unknown.
-            tokens = list(iter_tokens(decl))
             if not any(t.kind in (TK.ImportKeyword, TK.EnumKeyword) for t in tokens):
                 meth.scope_identifiers = {t.valueText for t in tokens if t.kind == TK.Identifier}
             meth.super_calls = sink.super_calls
@@ -1184,7 +1191,7 @@ class Extractor:
     def invocation(self, node, head, arguments):
         if arguments is None or arguments.openParen.isMissing:
             return
-        tokens = list(iter_tokens(head))
+        tokens = iter_tokens(head)
         if not tokens or any(t.isMissing or self.sm.isMacroLoc(t.location) for t in tokens):
             return
         opening = self.keyword_range(arguments.openParen)
@@ -1548,16 +1555,12 @@ class Extractor:
         path_of, in_library, position = self.path_of, self.in_library, self.physical_position
         directive, disabled, identifier = P.TriviaKind.Directive, P.TriviaKind.DisabledText, TK.Identifier
         seen = set()
-        stack = [self.tree.root]
-        while stack:
-            tok = stack.pop()
-            if tok is None:
-                continue
+
+        def visit(tok):
             if not isinstance(tok, Token):
                 if tok.kind in STRUCTURE_KINDS:
                     self.structural_pair(tok)
-                stack.extend(reversed([c for c in tok]))
-                continue
+                return
             prev = None  # (index, start) of the directive just before
             for trivia in tok.trivia:
                 if trivia.kind != directive:
@@ -1577,20 +1580,21 @@ class Extractor:
                 directives.append(self.make_range(sr.start, sr.end)[0])
                 prev = (len(directives) - 1, sr.start)
             if tok.kind != identifier:
-                continue
+                return
             loc = tok.location
             if sm.isMacroLoc(loc):
                 if not sm.isMacroArgLoc(loc):
-                    continue
+                    return
                 loc = sm.getFullyOriginalLoc(loc)
                 if sm.isMacroLoc(loc):
-                    continue
+                    return
             path = path_of(loc.buffer)
             if path is None or in_library(path):
-                continue
+                return
             key = (loc.buffer.id, loc.offset)
             if key in seen:
-                continue
+                return
             seen.add(key)
             line, col = position(loc)
             ids.setdefault(tok.valueText, []).append(Range(path, line, col, line, col + len(tok.rawText)))
+        self.tree.root.visit(visit)
