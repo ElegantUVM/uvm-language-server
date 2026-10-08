@@ -127,7 +127,8 @@ class Navigator:
             return found
         cls, meth, unit = ws.enclosing(path, line, col)
         segs, seps = ce.segments, ce.seps
-        current = self.resolve_first(segs[0], cls, meth, unit, scoped=bool(seps) and seps[0] == "::", strict=strict)
+        current = self.resolve_first(segs[0], cls, meth, unit, scoped=bool(seps) and seps[0] == "::", strict=strict,
+                                     near=Range(path, line, col, line, col))
         for i in range(len(segs)):
             if i:
                 if strict and len(current) != 1:
@@ -139,7 +140,8 @@ class Navigator:
                 current[0].spec = replace(current[0].spec, args=ce.args[i])
         return current
 
-    def resolve_first(self, name: str, cls, meth, unit, scoped: bool, strict: bool = False) -> list[Target]:
+    def resolve_first(self, name: str, cls, meth, unit, scoped: bool, strict: bool = False,
+                      near: Range | None = None) -> list[Target]:
         ws = self.ws
         if name == "this" and cls is not None:
             return [Target(cls, spec=Spec(cls.name, cls))]
@@ -164,12 +166,12 @@ class Navigator:
                     return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
         package = cls.package if cls else (unit.name if unit and unit.kind == "package" else None)
         imports = list(cls.imports) if cls else (list(unit.imports) if unit else [])
-        found = ws.find_class(name, package, imports, strict=strict)
+        found = ws.find_class(name, package, imports, strict=strict, near=near)
         if found is not None:
             return [Target(found, spec=Spec(found.name, found))]
-        td = ws.find_typedef(name, package, cls.name if cls else None, imports, strict=strict)
+        td = ws.find_typedef(name, package, cls.name if cls else None, imports, strict=strict, near=near)
         if td is not None:
-            spec = ws.resolve_spec(name, ctx=cls, strict=strict)
+            spec = ws.resolve_spec(name, ctx=cls, strict=strict, near=near)
             return [Target(td, spec=spec)]
         for u in ws.units_by_name.get(name, []):
             return [Target(u)]
@@ -197,7 +199,7 @@ class Navigator:
         if matches:
             return matches if len(matches) == 1 else []
         if name.startswith("uvm_"):
-            spec = ws.resolve_spec(name, package=package, imports=imports, strict=strict)
+            spec = ws.resolve_spec(name, package=package, imports=imports, strict=strict, near=near)
             if spec is not None:
                 return [Target(spec.cls or spec.name, spec=spec)]
         return []

@@ -176,6 +176,8 @@ class Workspace:
         self.ignores: dict[str, dict[int, list[str]]] = {}  # file -> line -> lint codes ignored there
         self._role_cache: dict[str, str] = {}
         self._spec_cache: dict = {}
+        self._visible_packages: dict = {}
+        self._roots_by_file: dict[str, set[str]] | None = None
 
     def configure(self, config: ProjectConfig):
         with self.lock:
@@ -350,14 +352,68 @@ class Workspace:
     def all_indices(self):
         return list(self.indices.values())
 
+    def visible_packages(self, imports) -> list[str]:
+        """Imported packages and the packages they re-export (`export p::*`, `export *::*`)."""
+        key = tuple(imports)
+        if key not in self._visible_packages:
+            out, todo = [], list(imports)
+            while todo:
+                p = todo.pop(0)
+                if p not in out:
+                    out.append(p)
+                    for u in self.units_by_name.get(p, ()):
+                        if u.kind == "package":
+                            todo += [q for q in u.exports if q != "*"] + (u.imports if "*" in u.exports else [])
+            self._visible_packages[key] = out
+        return self._visible_packages[key]
+
+    def unit_at(self, rng: Range) -> DesignUnit | None:
+        """The module, interface or program around a position."""
+        return next((u for u in self.by_path.get(rng.path, ()) if isinstance(u, DesignUnit)
+                     and u.kind != "package" and u.decl_range.contains(rng.line, rng.col)), None)
+
+    def _visible(self, cands: list, package: str | None, imports, near: Range | None):
+        """The one declaration of `cands` that a reference at `near`, in `package` with `imports`,
+        sees, or None when there is none or the index cannot tell which. Outside a package, a
+        module's own declarations come first and $unit ones compiled with `near` before others."""
+        packages = self.visible_packages(imports)
+        imported = [c for c in cands if c.package in packages]
+        if package:
+            levels = [[c for c in cands if c.package == package], imported]
+        elif near is None:
+            levels = [[c for c in cands if c.package is None], imported]
+        else:
+            unit = self.unit_at(near)
+            outside = [(c, self.unit_at(c.range)) for c in cands if c.package is None]
+            local = [c for c, u in outside if u is not None and u is unit]
+            in_unit = [c for c, u in outside if u is None]
+            together = [c for c in in_unit if self._compiled_together(c.range.path, near.path)]
+            elsewhere = [c for c in in_unit if all(c is not t for t in together)]
+            levels = [local, imported, together, elsewhere] if unit else [together, imported, elsewhere]
+        for found in levels:
+            if len(found) > 1 and near is not None:
+                # Same-named declarations of another testbench, which is not compiled with `near`.
+                found = [c for c in found if self._compiled_together(c.range.path, near.path)] or found
+            if found:
+                return found[0] if len(found) == 1 else None
+        return None
+
+    def _compiled_together(self, a: str, b: str) -> bool:
+        if self._roots_by_file is None:
+            self._roots_by_file = {}
+            for root, idx in self.indices.items():
+                for f in idx.files:
+                    self._roots_by_file.setdefault(f, set()).add(root)
+        return not self._roots_by_file.get(a, set()).isdisjoint(self._roots_by_file.get(b, ()))
+
     def find_class(self, name: str, package: str | None = None,
-                   imports: list[str] | tuple = (), strict: bool = False) -> ClassInfo | None:
+                   imports: list[str] | tuple = (), strict: bool = False,
+                   near: Range | None = None) -> ClassInfo | None:
         cands = self.classes_by_name.get(name)
         if not cands:
             return None
         if strict:
-            visible = [c for c in cands if c.package == package] or [c for c in cands if c.package in imports]
-            return visible[0] if len(visible) == 1 else None
+            return self._visible(cands, package, imports, near)
         if len(cands) == 1:
             return cands[0]
         for pref in ([package] if package else []) + list(imports):
@@ -368,15 +424,16 @@ class Workspace:
         return (user or cands)[0]
 
     def find_typedef(self, name: str, package: str | None = None, owner_class: str | None = None,
-                     imports: list[str] | tuple = (), strict: bool = False) -> Typedef | None:
+                     imports: list[str] | tuple = (), strict: bool = False,
+                     near: Range | None = None) -> Typedef | None:
         cands = self.typedefs_by_name.get(name)
         if not cands:
             return None
         if strict:
             owned = [t for t in cands if t.owner_class == owner_class and t.package == package] if owner_class else []
-            public = [t for t in cands if t.owner_class is None]
-            visible = owned or [t for t in public if t.package == package] or [t for t in public if t.package in imports]
-            return visible[0] if len(visible) == 1 else None
+            if owned:
+                return self._visible(owned, package, (), near)
+            return self._visible([t for t in cands if t.owner_class is None], package, imports, near)
         if owner_class:
             for t in cands:
                 if t.owner_class == owner_class:
@@ -396,30 +453,33 @@ class Workspace:
 
     def resolve_spec(self, name: str, scope: str | None = None, args: list[str] | None = None,
                      ctx: ClassInfo | None = None, depth: int = 0, *,
-                     package: str | None = None, imports: list[str] | None = None, strict: bool = False) -> Spec | None:
-        """Resolve a type name (following typedefs) to an indexed or built-in class."""
+                     package: str | None = None, imports: list[str] | None = None, strict: bool = False,
+                     near: Range | None = None) -> Spec | None:
+        """Resolve a type name (following typedefs) to an indexed or built-in class. A strict
+        lookup sees only what is visible at `near` (by default the context class)."""
         if depth > 8:
             return None
         args = list(args or [])
         package = package if package is not None else ctx.package if ctx else None
         imports = imports if imports is not None else ctx.imports if ctx else ()
-        cache_key = (name, scope, tuple(args), ctx.qualname if ctx else None, package, tuple(imports), strict)
+        near = (near or (ctx.range if ctx else None)) if strict else None
+        cache_key = (name, scope, tuple(args), ctx.qualname if ctx else None, package, tuple(imports), strict, near)
         if depth == 0 and cache_key in self._spec_cache:
             return self._spec_cache[cache_key]
         result: Spec | None = None
         if scope and scope in self.class_by_qual or (scope and self.classes_by_name.get(scope)):
             # Class-scoped typedef such as outer::inner_t.
-            owner = self.class_by_qual.get(scope) or self.find_class(scope, package, imports, strict=strict)
-            td = self.find_typedef(name, owner.package, owner.name, strict=strict) if owner else None
+            owner = self.class_by_qual.get(scope) or self.find_class(scope, package, imports, strict, near)
+            td = self.find_typedef(name, owner.package, owner.name, strict=strict, near=owner.range) if owner else None
             if td and td.target:
                 result = self._spec_from_typedef(td, ctx, depth, strict)
         if result is None:
-            cls = self.find_class(name, scope or package, [scope] if scope else imports, strict=strict)
+            cls = self.find_class(name, scope or package, [scope] if scope else imports, strict, near)
             if cls is not None and (scope is None or cls.package == scope or not cls.package):
                 result = Spec(name=cls.name, cls=cls, args=args)
         if result is None:
             td = self.find_typedef(name, scope or package, ctx.name if ctx else None,
-                                   [scope] if scope else imports, strict=strict)
+                                   [scope] if scope else imports, strict, near)
             if strict and scope and td and td.package != scope and td.owner_class != scope:
                 td = None
             if td is not None and td.target is not None:
@@ -432,7 +492,7 @@ class Workspace:
 
     def _spec_from_typedef(self, td: Typedef, ctx, depth, strict=False) -> Spec | None:
         inner = self.resolve_spec(td.target.name, td.target.scope, td.target.args, ctx, depth + 1,
-                                  package=td.package, imports=td.imports, strict=strict)
+                                  package=td.package, imports=td.imports, strict=strict, near=td.range)
         if inner is not None:
             return Spec(name=inner.name, cls=inner.cls, args=inner.args, via_typedef=td)
         return None

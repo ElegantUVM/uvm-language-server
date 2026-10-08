@@ -679,7 +679,7 @@ class Extractor:
         elif k in (K.ModuleDeclaration, K.InterfaceDeclaration, K.ProgramDeclaration):
             kind = {K.ModuleDeclaration: "module", K.InterfaceDeclaration: "interface",
                     K.ProgramDeclaration: "program"}[k]
-            self.design_unit(m, kind)
+            self.design_unit(m, kind, imports)
         elif k == K.ClassDeclaration:
             self.class_decl(m, package, list(imports), None, before)
         elif k == K.TypedefDeclaration:
@@ -693,6 +693,10 @@ class Extractor:
                 imports.append(item.package.valueText)
                 if unit is not None:
                     unit.imports.append(item.package.valueText)
+        elif k == K.PackageExportDeclaration and unit is not None:
+            unit.exports += [item.package.valueText for item in nodes(m.items)]
+        elif k == K.PackageExportAllDeclaration and unit is not None:
+            unit.exports.append("*")
         elif k in FUNC_DECLS:
             name_node = m.prototype.name
             if name_node.kind == K.ScopedName:
@@ -702,7 +706,7 @@ class Extractor:
                 if meth:
                     unit.methods.append(meth)
 
-    def design_unit(self, m, kind: str):
+    def design_unit(self, m, kind: str, outer_imports=()):
         hdr = m.header
         rng, _ = self.tok_range(hdr.name)
         if rng is None:
@@ -710,6 +714,7 @@ class Extractor:
         unit = DesignUnit(name=hdr.name.valueText, kind=kind, range=rng,
                           decl_range=self.node_range(m) or rng, library=self.library,
                           doc=self.doc_of(m, hdr.name.valueText))
+        unit.imports = list(outer_imports)  # $unit imports made before a module are visible in it
         unit.params = self.params(hdr.parameters)
         for imp in nodes(hdr.imports):
             for item in nodes(imp.items):
