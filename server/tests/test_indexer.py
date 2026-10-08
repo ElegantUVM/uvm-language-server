@@ -136,6 +136,20 @@ endclass
     assert idx.diagnostics == expected.diagnostics
 
 
+def test_lf_cr_is_two_line_breaks(tmp_path):
+    from uvmls.fixes import FileText
+
+    # slang counts LF CR as one line break; an editor, like FileText, counts two.
+    text = "class c;\n\r  int value;\n\r  function void f(); value = 1; endfunction\nendclass\n"
+    path = tmp_path / "lfcr.sv"
+    path.write_bytes(text.encode())
+    idx = Indexer([], {}, use_shim=True).parse(str(path))
+    ft = FileText(str(path), text)
+    spans = {name: [text[slice(*ft.span(r))] for r in ranges] for name, ranges in idx.identifiers.items()}
+    assert spans == {"c": ["c"], "value": ["value", "value"], "f": ["f"]}
+    assert sorted(text[slice(*ft.span(p.closing))] for p in idx.structures) == ["endclass", "endfunction"]
+
+
 def test_generated_structural_endpoints(tmp_path):
     path = tmp_path / "structure.sv"
     source = '''`define START class
