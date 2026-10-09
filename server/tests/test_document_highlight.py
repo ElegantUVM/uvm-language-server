@@ -481,3 +481,36 @@ def test_innermost_pair_at_shared_token():
     inner_end, outer_end = Range("a.sv", 3, 0, 3, 3), Range("a.sv", 6, 0, 6, 3)
     w.structures_by_file["a.sv"] = [StructuralPair(opening, outer_end), StructuralPair(opening, inner_end)]
     assert Navigator(w).document_highlights("a.sv", 0, 2) == [opening, inner_end]
+
+
+def test_comment_and_string_add_no_occurrences(doc):
+    doc.change(doc.text.replace("    m_monitor = alu_monitor",
+                                '    // m_driver is made below\n    $display("m_driver");\n    m_monitor = alu_monitor'))
+    assert highlight_at(doc, "m_driver;", 2) == agent_highlights(doc.text)
+    assert highlight_at(doc, "// m_driver", 4) is None
+    assert highlight_at(doc, '$display("m_driver', 11) is None
+
+
+BLOCKS = ("    begin : outer\n      int q;\n      begin : inner\n        q = 1;\n        q = 2;\n      end : inner\n"
+          "      begin q = 3; end\n      // begin function task end\n      q = 4; /* class begin end */\n"
+          "    end : outer\n")
+
+
+def test_blocks_typed_into_build_phase(doc):
+    from test_folding_range import agent_folds, fold, folds, ordered
+
+    original = doc.text
+    text = original.replace("    super.build_phase(phase);\n", "    super.build_phase(phase);\n" + BLOCKS)
+    doc.change(text)
+    # Only the two multiline blocks fold: not the one-line block, nor keywords in comments.
+    assert folds(doc) == ordered(agent_folds(text) + [fold(text, "begin : outer", "end : outer"),
+                                                      fold(text, "begin : inner", "end : inner")])
+    expected = pair_highlights(text, "begin : inner", "end : inner")
+    assert highlight_at(doc, "begin : inner") == highlight_at(doc, "end : inner") == expected
+    assert highlight_at(doc, "// begin", 3) is None and highlight_at(doc, "/* class", 3) is None
+    text = text.replace("      end : inner\n", "")
+    doc.change(text)
+    assert folds(doc) == agent_folds(text)
+    for needle in ("begin : outer", "begin : inner", "end : outer"):
+        assert highlight_at(doc, needle) is None
+

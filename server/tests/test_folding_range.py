@@ -777,3 +777,18 @@ def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
             release.set()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("limit", [2, 0])
+def test_range_limit_on_the_agent(tb, limit):
+    c = start(tb, capabilities={"textDocument": {"foldingRange": {"rangeLimit": limit, "lineFoldingOnly": True}}})
+    try:
+        d = Doc(c, os.path.join(tb, "agent", "alu_agent.svh"))
+        text = d.text.replace("    super.build_phase(phase);\n", "    super.build_phase(phase);\n" + NESTED)
+        d.change(text)
+        expected = ordered(agent_folds(text) + [fold(text, "begin : outer", "end : outer"),
+                                                fold(text, "begin : inner", "end : inner")])
+        assert folds(d) == expected[:limit]
+        assert expected[:2] == [fold(text, "class alu_agent", "endclass"), fold(text, "function new", "endfunction")]
+    finally:
+        c.close()
