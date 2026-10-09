@@ -1621,6 +1621,40 @@ endclass
         ['function string calc(string a, int b)'] * 4
 
 
+@pytest.mark.parametrize('bundled', [False, True])
+def test_a_member_typedef_of_a_type_parameter_keeps_the_receiver_binding(tmp_path, bundled):
+    """`elem_t v;` with `typedef T elem_t;` is the receiver's T, not T's default."""
+    from test_fixes import index
+    from uvmls.navigation import Navigator
+
+    text = '''class other;
+  function void f(string wrong); endfunction
+endclass
+class box;
+  function void f(int a, int b); endfunction
+  function void only_box(); endfunction
+endclass
+class gen #(type T = other);
+  typedef T elem_t;
+  elem_t v;
+  function elem_t get(); return v; endfunction
+endclass
+class user;
+  gen #(box) g;
+  function void t();
+    g.v.f(1, 2);
+    g.get().f(3, 4);
+  endfunction
+endclass
+'''
+    assert labels_in(tmp_path, text, ['g.v.f(', 'get().f('], bundled) == ['function void f(int a, int b)'] * 2
+    nav, path = Navigator(index(tmp_path, {'t.sv': text}, bundled=bundled)), str(tmp_path / 't.sv')
+    line, col = text.splitlines().index('    g.v.f(1, 2);'), len('    g.v.')
+    assert 'f(int a, int b)' in nav.hover(path, line, col, text)
+    assert [(d.line, d.col) for d in nav.definition(path, line, col, text)] == [(4, 16)]
+    assert 'only_box' in {c['label'] for c in nav.completions(path, line, col, text)}
+
+
 def test_calls_in_report_macro_arguments_with_the_built_in_model(tmp_path):
     text = '''`include "uvm_macros.svh"
 import uvm_pkg::*;
