@@ -142,6 +142,27 @@ def test_no_guess(doc, call, needle):
     assert help_at(doc, needle) is None
 
 
+@pytest.mark.parametrize('eol', ['\n', '\r\n'])
+@pytest.mark.parametrize('call,needle,active', [
+    ('f(1, // see a, b,\n 2);', '// see a, b,', None),
+    ('f(1, // see a, b,\n', '// see a, b,', None),
+    ('f(// first\n 1);', 'f(// first', None),
+    ('f(1, /* open', '/* open', None),
+    ('f(1, /* closed */ 2);', '/* closed */', 1),
+    ('f(1, /**/ 2);', '/**/', 1),
+    ('f(1, // see a\n 2);', '// see a\n', 1),
+])
+def test_end_of_a_comment(doc, eol, call, needle, active):
+    # Where the cursor is while a comment is typed, and a ',' in it triggers help.
+    doc.change(SOURCE.replace('CALL', call).replace('\n', eol))
+    found = help_at(doc, needle.replace('\n', eol))
+    if active is None:
+        assert found is None
+    else:
+        signature(found, ['input byte a', 'input byte b', 'output bit[3:0] bits[]', 'const ref string text = "T,a"'],
+                  active)
+
+
 def test_declaration_is_not_a_call(doc):
     doc.change(SOURCE.replace("CALL", ""))
     assert help_at(doc, "function void public_api(") is None

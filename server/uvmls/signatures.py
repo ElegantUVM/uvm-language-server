@@ -56,7 +56,10 @@ def call_at(ws, path, line, col):
             text = text[:a] + NOT_EOL_RE.sub(" ", text[a:b]) + text[b:]
     at = cursor - start
     for m in MASK_RE.finditer(text):
-        if m.group().startswith(("//", "/*")) and m.start() <= at < m.end():
+        comment = m.group()
+        # A line comment, or a block comment left open, goes on at its end.
+        if comment.startswith(("//", "/*")) and (m.start() <= at < m.end() or at == m.end() and (
+                comment.startswith("//") or len(comment) < 4 or not comment.endswith("*/"))):
             return None
     masked = mask(text)
     prefix = masked[:at]
