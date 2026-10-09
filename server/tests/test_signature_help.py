@@ -845,6 +845,18 @@ endmodule
         [ctor, f, f, ctor, f, f]
 
 
+def test_receivers_in_a_file_a_package_includes(client, tb, doc):
+    pkg = Doc(client, os.path.join(tb, 'agent', 'alu_pkg.sv'))
+    try:
+        pkg.change('package first;\nclass box; function void go(int first_arg); endfunction endclass\nendpackage\n'
+                   'package calls;\nimport first::*;\n`include "alu_driver.svh"\nendpackage\n')
+        doc.change('box pv;\nfunction void test(); box lv; lv.go(1); pv.go(2); endfunction\n')
+        signature(help_at(doc, 'lv.go('), ['int first_arg'])
+        signature(help_at(doc, 'pv.go('), ['int first_arg'])
+    finally:
+        pkg.close()
+
+
 @pytest.mark.parametrize('unit_scope', [False, True])
 def test_tb_top_calls(client, tb, unit_scope):
     """A testbench top importing inside the module, or at file ($unit) scope before it."""

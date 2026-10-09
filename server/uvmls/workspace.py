@@ -225,7 +225,7 @@ class Workspace:
         self._visible_packages: dict = {}
         self._roots_by_file: dict[str, set[str]] | None = None
         self._include_sites: dict[str, list[Range]] | None = None
-        self._including: dict[str, DesignUnit | None] = {}
+        self._including: dict[tuple[str, bool], DesignUnit | None] = {}
 
     def configure(self, config: ProjectConfig):
         with self.lock:
@@ -440,24 +440,26 @@ class Workspace:
         return [[package] if package else [], [p.split("::")[0] for p in imports if p.endswith("::" + name)],
                 [p for p in imports if "::" not in p]]
 
-    def unit_at(self, rng: Range) -> DesignUnit | None:
-        """The module, interface or program around a position, in its file or around the
-        `include that brings the file in."""
+    def unit_at(self, rng: Range, packages: bool = False) -> DesignUnit | None:
+        """The module, interface or program (or package) around a position, in its file or
+        around the `include that brings the file in."""
         unit = next((u for u in self.by_path.get(rng.path, ()) if isinstance(u, DesignUnit)
-                     and u.kind != "package" and u.decl_range.contains(rng.line, rng.col)), None)
-        return unit if unit is not None else self._unit_including(rng.path)
+                     and (packages or u.kind != "package") and u.decl_range.contains(rng.line, rng.col)), None)
+        return unit if unit is not None else self._unit_including(rng.path, packages)
 
-    def _unit_including(self, path: str) -> DesignUnit | None:
+    def _unit_including(self, path: str, packages: bool) -> DesignUnit | None:
         if self._include_sites is None:
             self._include_sites = {}
             for idx in self.indices.values():
                 for sites in idx.includes.values():
                     for target, site in sites:
                         self._include_sites.setdefault(target, []).append(site)
-        if path not in self._including:
-            self._including[path] = None  # an include cycle ends here
-            self._including[path] = next(filter(None, map(self.unit_at, self._include_sites.get(path, ()))), None)
-        return self._including[path]
+        key = (path, packages)
+        if key not in self._including:
+            self._including[key] = None  # an include cycle ends here
+            self._including[key] = next(filter(None, (self.unit_at(site, packages)
+                                                      for site in self._include_sites.get(path, ()))), None)
+        return self._including[key]
 
     def _visible(self, cands: list, package: str | None, imports, near: Range | None):
         """The one declaration of `cands` that a reference at `near`, in `package` with `imports`,
@@ -860,9 +862,11 @@ class Workspace:
                     meth_hit = m
                     cls_hit = self.class_by_qual.get(qual)
                     break
+        if cls_hit is None and unit_hit is None:  # a file a package or module includes
+            unit_hit = self.unit_at(Range(path, line, col, line, col), packages=True)
         if meth_hit is None and unit_hit is not None:
             for m in unit_hit.methods:
-                if m.decl_range.contains(line, col):
+                if m.decl_range.path == path and m.decl_range.contains(line, col):
                     meth_hit = m
         return cls_hit, meth_hit, unit_hit
 
