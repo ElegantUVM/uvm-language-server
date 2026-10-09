@@ -256,11 +256,17 @@ Tests for B.1/B.2 ship with those P0 items even if named arguments are deferred.
   coverpoints, generate regions, clocking blocks, properties, sequences, constraints; port,
   parameter, argument and instance lists and enum/struct bodies (bracket pairs, which fold but do
   not highlight); block comments, runs of two or more whole-line `//` comments, multiline
-  `` `define ``s and macro calls (`kind: comment` for comments); `` `ifdef `` branches; and
-  `// #region` markers (`kind: region`). A pair whose end label names something else, or a
-  same-kind pair inside a structure whose closer is missing and whose closer's line is indented
-  neither as its opener's line nor to the opener itself (an `end` under a case item's `begin`;
-  tabs at any common width), is not a matched pair.
+  `` `define ``s and macro calls (`kind: comment` for comments); `` `ifdef `` branches;
+  `// #region` markers, the `#` optional as in the SystemVerilog extensions' marker settings
+  (`kind: region`; an unpaired marker stays a comment line); `` `uvm_*_begin `` to `` `uvm_*_end ``
+  macro blocks (`uvm_object_utils_begin`, `uvm_info_begin`); and a statement whose body, with or
+  without `begin`, starts on a later line than its header: `if`/`else`, loops, procedural blocks,
+  timing controls, case items and generate `if`/`for`. Folds that indentation alone gave are not
+  reproduced: a continued expression or assignment, irregularly indented or commented-out code, and
+  a two-line call whose closing bracket ends its last line. A pair whose end label names something
+  else, or a same-kind pair inside a structure whose closer is missing and whose closer's line is
+  indented neither as its opener's line nor to the opener itself (an `end` under a case item's
+  `begin`; tabs at any common width), is not a matched pair.
 - Reuse class/method declaration ranges and extend the existing syntax traversal to retain opening
   and closing token locations and begin/end pairs. Keep data free of pyslang objects. Folding must
   not depend on B's call scanning, reparse documents on demand, or pair keywords with a regex stack.
@@ -270,14 +276,15 @@ Tests for B.1/B.2 ship with those P0 items even if named arguments are deferred.
 - v1 emits line-only folds: `startLine` is the opening keyword's line (the header's last line when a
   list in the header folds from the keyword's line); `endLine` is the line **before** the closing
   keyword, keeping header and closing delimiter visible. Comments, defines and regions end on
-  their last line. Omit folds with
+  their last line, and so does a statement's body, unless it is a block (the line before its
+  closer) or an `else` or `while` follows on that line (the line before). Omit folds with
   `endLine <= startLine`, and omit `startCharacter`/`endCharacter` even if the client supports them.
   This honours `lineFoldingOnly`. Leave `collapsedText` absent, and `kind` on structural folds. A
   trailing `: label` stays with its visible closing keyword.
 - Sort by start line ascending, end line descending; deduplicate identical intervals reached through
   multiple roots. Nested folds are valid, crossing folds are not: discard a conflicting inner range
-  rather than returning invalid structure; an `` `ifdef `` branch or region that crosses syntax is the
-  one discarded. Honour `rangeLimit` by taking the first N in that order
+  rather than returning invalid structure; an `` `ifdef `` branch, region or `` `uvm_*_begin `` block
+  that crosses syntax is the one discarded. Honour `rangeLimit` by taking the first N in that order
   (outer before inner on a shared start), including `0 -> []`; an absent limit means no truncation.
   Serve current unsaved text through the indexing barrier and invalidate cached ranges on rebuild.
 
@@ -385,11 +392,14 @@ are absent. P0 checks are mandatory; B.3/C.3 checks apply when their P1 items sh
    there. P1: reorder `.parent(this), .name("m_driver")` and assert active indexes 1 then 0.
 8. Request document highlights on the declared `m_driver` in `agent/alu_agent.svh`: exactly its
    three indexed occurrences (declaration, create assignment, connect receiver), sorted, all Text,
-   all in that file. A comment/string containing `m_driver` adds none and has no highlights when
-   queried itself. Insert a blank line before the class without saving; every range shifts by one.
+   all in that file. A comment/string containing `m_driver` adds none, and a request there returns
+   `null`: the server indexes nothing there, so VS Code's own word highlighter (Acceptance 12) may
+   then mark every `m_driver` word. Insert a blank line before the class without saving; every
+   range shifts by one.
 9. Request folding ranges for `agent/alu_agent.svh`: folds start on its class, constructor,
    build_phase, connect_phase and conditional begin lines, ending one line before their matching
-   closers. For `agent/alu_driver.svh`, assert folds for the extern task implementations and forever
+   closers, and on its two one-statement `if`s, ending on their statement's line. For
+   `agent/alu_driver.svh`, assert folds for the extern task implementations and forever
    block, none for the extern prototypes. All folds are unique, nested or disjoint and line-only.
 10. Insert nested named begin/end blocks in build_phase, plus a one-line block and keyword-looking
     comments. Only actual multiline blocks add folds. Remove a closing token: no invented pair.
