@@ -1067,3 +1067,55 @@ endpackage
     assert where == [(12, 11)] and 'function new(int count)' in shown
     assert labels_in(tmp_path, text, ['t = new(', 'super.new(', 'o = new(']) == \
         [None, None, 'function new(int count)']
+
+
+def test_generic_class_shows_its_own_parameters(tmp_path):
+    """A parameter's default is not a binding inside the class: show the formal, as hover does."""
+    text = '''class base #(type T = int, int W = 8);
+  function void f(T a, bit [W-1:0] b); endfunction
+  function void g(); f(1, 2); this.f(3, 4); endfunction
+endclass
+class child #(type U = byte) extends base #(U, 4);
+  function void h(); f(5, 6); super.f(7, 8); this.f(9, 10); endfunction
+endclass
+class user;
+  base #(string, 16) bs;
+  base bd;
+  child #(shortint) cs;
+  function void k(); bs.f(11, 12); bd.f(13, 14); cs.f(15, 16); endfunction
+endclass
+'''
+    own, sub = 'function void f(T a, bit[W-1:0] b)', 'function void f(U a, bit[4-1:0] b)'
+    assert labels_in(tmp_path, text, ['; f(1,', 'this.f(3,', '; f(5,', 'super.f(7,', 'this.f(9,', 'bs.f(11,',
+                                      'bd.f(13,', 'cs.f(15,']) == \
+        [own, own, sub, sub, sub, 'function void f(string a, bit[16-1:0] b)', 'function void f(int a, bit[8-1:0] b)',
+         'function void f(shortint a, bit[4-1:0] b)']
+
+
+def test_generic_uvm_components_show_their_parameters(tmp_path):
+    text = '''`include "uvm_macros.svh"
+package p;
+import uvm_pkg::*;
+class bus_item extends uvm_sequence_item;
+  `uvm_object_utils(bus_item)
+  function new(string name = "bus_item"); super.new(name); endfunction
+endclass
+class gen_driver #(type REQ_T = bus_item) extends uvm_driver #(REQ_T);
+  `uvm_component_param_utils(gen_driver #(REQ_T))
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  task run_phase(uvm_phase phase); seq_item_port.get_next_item(req); req.copy(req); endtask
+endclass
+class gen_mon #(type T = bus_item) extends uvm_monitor;
+  uvm_analysis_port #(T) ap;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  task run_phase(uvm_phase phase); T t; ap.write(t); endtask
+endclass
+class wide_driver extends gen_driver #(bus_item);
+  task main(); seq_item_port.get_next_item(req); endtask
+endclass
+endpackage
+'''
+    assert labels_in(tmp_path, text, ['phase); seq_item_port.get_next_item(', 'req.copy(', 'ap.write(',
+                                      'main(); seq_item_port.get_next_item('], bundled=True) == \
+        ['task get_next_item(output REQ_T t)', 'function void copy(uvm_object rhs)', 'function void write(input T t)',
+         'task get_next_item(output bus_item t)']

@@ -157,7 +157,7 @@ class Navigator:
                       near: Range | None = None) -> list[Target]:
         ws = self.ws
         if name == "this" and cls is not None:
-            return [Target(cls, spec=Spec(cls.name, cls))]
+            return [Target(cls, spec=Spec(cls.name, cls, list(ws.formals(cls).values())))]
         if name == "super" and cls is not None:
             base = ws.base_spec(cls, strict=strict)
             return [Target(base.cls or base.name, spec=base)] if base else []

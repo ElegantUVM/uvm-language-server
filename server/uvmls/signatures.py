@@ -89,7 +89,8 @@ def signature(nav, path, line, col):
         active = next((i for i, arg in enumerate(method.args) if arg.name == name), None)
         if active is None:
             return None
-    bindings = target.bindings or {}
+    # Inside a generic class its own parameters are unbound: show them, not their defaults.
+    bindings = {name: getattr(value, "formal", None) or value for name, value in (target.bindings or {}).items()}
     head = method.kind + " "
     if method.return_type:
         head += substitute_params(method.return_type, bindings) + " "

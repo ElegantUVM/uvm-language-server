@@ -63,11 +63,13 @@ class Scope:
 
 class Bound(str):
     """A type argument's text and the scope that wrote it, where its names resolve: a
-    specialization's arguments mean what they meant where it was written, not in the class."""
+    specialization's arguments mean what they meant where it was written, not in the class.
+    `formal` names the parameter when this is the default of one the class's own body reads,
+    which no specialization binds there."""
 
-    def __new__(cls, text: str, scope: Scope, spec: Spec | None = None):
+    def __new__(cls, text: str, scope: Scope, spec: Spec | None = None, formal: str | None = None):
         out = super().__new__(cls, text)
-        out.scope, out.spec = scope, spec
+        out.scope, out.spec, out.formal = scope, spec, formal
         return out
 
 
@@ -219,6 +221,7 @@ class Workspace:
         self.ignores: dict[str, dict[int, list[str]]] = {}  # file -> line -> lint codes ignored there
         self._role_cache: dict[str, str] = {}
         self._spec_cache: dict = {}
+        self._formals: dict = {}
         self._visible_packages: dict = {}
         self._roots_by_file: dict[str, set[str]] | None = None
         self._include_sites: dict[str, list[Range]] | None = None
@@ -703,8 +706,7 @@ class Workspace:
     def chain(self, cls: ClassInfo, bindings: dict[str, str] | None = None, strict: bool = False) -> list[ChainEntry]:
         """The class followed by all its ancestors, with type parameter bindings. A strict chain
         ends at a base class the lookup cannot see or tell from another of its name."""
-        entries = [ChainEntry(Spec(cls.name, cls), bindings if bindings is not None else
-                              {p.name: p.default for p in cls.params})]
+        entries = [ChainEntry(Spec(cls.name, cls), bindings if bindings is not None else self.formals(cls))]
         seen = {cls.qualname}
         cur, bindings = cls, entries[0].bindings
         while cur is not None and cur.base is not None:
@@ -731,6 +733,14 @@ class Workspace:
                     name = parent
                 break
         return entries
+
+    def formals(self, cls: ClassInfo) -> dict[str, str]:
+        """A class's parameters as its own body sees them: unbound, resolving as their defaults."""
+        key = id(cls)
+        if key not in self._formals:
+            here = Scope.of(cls)
+            self._formals[key] = {p.name: Bound(p.default, here, formal=p.name) for p in cls.params}
+        return dict(self._formals[key])
 
     def role(self, cls: ClassInfo) -> str:
         r = self._role_cache.get(cls.qualname)
