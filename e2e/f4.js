@@ -1,5 +1,7 @@
 // f4-parity acceptance 12 in the VS Code web replica. Run from the replica's driver directory with
-// E2E_ROOT, ALU_TB, UVM_PYTHON and VERIBLE (a real verible-verilog-format) set.
+// E2E_ROOT, ALU_TB, UVM_PYTHON and VERIBLE (a real verible-verilog-format) set. With BUNDLED=1 the
+// workspace leaves uvm.formatter.path unset, so the server must use the Verible the .vsix bundles;
+// VERIBLE (that copy's path inside the installed extension) then only computes the expected output.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -84,9 +86,10 @@ endclass
     "uvm.lint.enabled": true,
     "uvm.codeLens.configDb": true,
     "uvm.inlayHints": true,
-    // The replica's server runs with PATH=/usr/bin:/bin, so Verible must be named explicitly.
+    // The replica's server runs with PATH=/usr/bin:/bin, so Verible must be named explicitly,
+    // unless the bundled copy is under test.
     "uvm.formatter.enabled": true,
-    "uvm.formatter.path": verible,
+    ...(env.BUNDLED === "1" ? {} : { "uvm.formatter.path": verible }),
     "[systemverilog]": { "editor.defaultFormatter": extension },
     "[verilog]": { "editor.defaultFormatter": extension },
     "editor.formatOnSave": false,
