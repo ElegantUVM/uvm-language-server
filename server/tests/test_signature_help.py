@@ -151,6 +151,9 @@ def test_no_guess(doc, call, needle):
     ('f(1, /* closed */ 2);', '/* closed */', 1),
     ('f(1, /**/ 2);', '/**/', 1),
     ('f(1, // see a\n 2);', '// see a\n', 1),
+    ('f(1, // see a\n 2);', 'f(1, ', 1),  # just before a comment
+    ('f(1,// see a\n 2);', 'f(1,', 1),
+    ('f(1, /* see a */ 2);', 'f(1, ', 1),
 ])
 def test_end_of_a_comment(doc, eol, call, needle, active):
     # Where the cursor is while a comment is typed, and a ',' in it triggers help.

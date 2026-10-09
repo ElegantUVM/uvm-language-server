@@ -58,8 +58,8 @@ def call_at(ws, path, line, col):
     at = cursor - start
     for m in MASK_RE.finditer(text):
         comment = m.group()
-        # A line comment, or a block comment left open, goes on at its end.
-        if comment.startswith(("//", "/*")) and (m.start() <= at < m.end() or at == m.end() and (
+        # Just before a comment is code; a line comment, or a block comment left open, goes on at its end.
+        if comment.startswith(("//", "/*")) and (m.start() < at < m.end() or at == m.end() and (
                 comment.startswith("//") or len(comment) < 4 or not comment.endswith("*/"))):
             return None
     masked = mask(text)
