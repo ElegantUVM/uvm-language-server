@@ -9,10 +9,12 @@ import {
   State,
 } from "vscode-languageclient/node";
 import { GraphPanel, PanelTab } from "./panel";
+import { McpProvider, PROVIDER_ID } from "./mcp";
 import { addIncludeDir, expandPath, serverSettings } from "./settings";
 import { revealLocation } from "./navigation";
 
 let client: LanguageClient | undefined;
+let serverPython: string | undefined;  // the interpreter the language server last started with
 let starting: Promise<boolean> | undefined;
 let status: vscode.StatusBarItem;
 let watcher: vscode.FileSystemWatcher | undefined;
@@ -184,6 +186,7 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
   }
 
   const cwd = serverDir(ctx);
+  serverPython = python;
   const serverOptions: ServerOptions = {
     command: python,
     args: ["-m", "uvmls", "--stdio"],
@@ -419,6 +422,9 @@ export async function activate(ctx: vscode.ExtensionContext) {
       },
     }),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
+      if (e.affectsConfiguration("uvm")) {
+        mcp.refresh();  // the server's command line follows the settings
+      }
       if (e.affectsConfiguration("uvm.pythonPath")) {
         await client?.stop().catch(() => undefined);
         client = undefined;
@@ -427,6 +433,24 @@ export async function activate(ctx: vscode.ExtensionContext) {
         client.sendNotification("workspace/didChangeConfiguration", { settings: { uvm: serverSettings() } });
       }
     }),
+  );
+
+  // The MCP server for agents in the editor: the same index, in a process of its own.
+  const mcpLog = vscode.window.createOutputChannel("UVM MCP", { log: true });
+  const mcp = new McpProvider({
+    serverDir: serverDir(ctx),
+    version: String(ctx.extension.packageJSON.version ?? ""),
+    knownPython: () => {
+      const configured = vscode.workspace.getConfiguration("uvm").get<string>("pythonPath");
+      return configured ? expandPath(configured) : serverPython;
+    },
+    findPython: () => findPython(ctx),
+    log: mcpLog,
+  });
+  ctx.subscriptions.push(
+    mcpLog, mcp,
+    vscode.lm.registerMcpServerDefinitionProvider(PROVIDER_ID, mcp),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => mcp.refresh()),
   );
 
   // Not awaited: a setup prompt must not hold activation open.

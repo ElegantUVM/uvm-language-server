@@ -6,7 +6,7 @@
   "publisher": "uvmls",
   "license": "UNLICENSED",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.101.0"
   },
   "categories": [
     "Programming Languages",
@@ -64,6 +64,12 @@
           "source.systemverilog",
           "source.verilog"
         ]
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "uvmls.mcp",
+        "label": "UVM Language Server"
       }
     ],
     "commands": [
@@ -244,6 +250,11 @@
           ],
           "default": "onSave",
           "markdownDescription": "Compile and elaborate the design with slang, in a separate process, to report what a simulator's elaboration would: type errors, unknown members, wrong argument counts, missing modules or packages and the like (source `slang-elab`). It uses the same files, include directories and defines as the index, and the text of open editors. Needs a real UVM library (the bundled one is fine)."
+        },
+        "uvm.mcp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Register the UVM MCP server (`python -m uvmls mcp`) with VS Code, so Copilot and other agents in the editor can query the testbench: classes, the topology with factory overrides, config_db, lint, elaboration, navigation. It runs as a separate process on the first workspace folder with the `uvm` settings as its flags, and reads the files on disk (unsaved editor text is not visible). See **MCP: List Servers**."
         }
       }
     }
@@ -261,7 +272,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/vscode": "~1.90.0",
+    "@types/vscode": "~1.101.0",
     "esbuild": "^0.28.2",
     "typescript": "^5.6.0"
   },
