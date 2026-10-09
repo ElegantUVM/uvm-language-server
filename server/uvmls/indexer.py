@@ -820,6 +820,8 @@ class Extractor:
                     v = self.variable(d, "signal", item.type, pretty(item), [])
                     if v:
                         unit.variables.append(v)
+                        if not self.library and not self.in_library(v.range.path):
+                            self.walk(d.initializer, BodyCtx(unit.name, ""), Sink())
             elif ik == K.ClockingDeclaration and item.blockName is not None:
                 r, _ = self.tok_range(item.blockName)
                 if r:

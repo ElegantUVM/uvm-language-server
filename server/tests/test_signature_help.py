@@ -1369,3 +1369,22 @@ def test_bound_arguments_copy_and_pickle():
     assert copy.copy(arg) is arg and copy.deepcopy({'T': arg})['T'] is arg
     back = pickle.loads(pickle.dumps(arg))
     assert (back, back.scope, back.spec, back.formal) == ('holder #(int)', arg.scope, None, 'holder #(T)')
+
+
+def test_declaration_initializers_outside_classes(tmp_path):
+    text = '''package p;
+class box;
+  function new(string n, int w = 1); endfunction
+endclass
+box pv = new("pv", 1);
+class holder;
+  box cp = new("cp", 2);
+endclass
+endpackage
+module m;
+  import p::*;
+  box mb = new("mb", 3);
+endmodule
+'''
+    assert labels_in(tmp_path, text, ['pv = new("pv",', 'cp = new("cp",', 'mb = new("mb",']) == \
+        ['function new(string n, int w = 1)'] * 3
