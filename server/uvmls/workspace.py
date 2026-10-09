@@ -634,8 +634,8 @@ class Workspace:
         cands = self.classes_by_name.get(name)
         if not cands:
             return None
-        if strict:
-            return self._visible(cands, package, imports, near)
+        if strict:  # a nested class is its outer class's member, not a package's declaration
+            return self._visible([c for c in cands if not c.outer_class], package, imports, near)
         if len(cands) == 1:
             return cands[0]
         for pref in (p for level in self.import_order(name, package, imports) for p in level):
@@ -708,9 +708,14 @@ class Workspace:
             td = self.find_typedef(name, owner.package, owner.name, strict=strict, near=owner.range) if owner else None
             if td and td.target:
                 result = self._spec_from_typedef(td, owner, depth, strict)
-        elif ctx is not None and not scope and members:
-            found, result = self._class_typedef(ctx, name, depth, strict)
-            settled = found and strict
+            elif owner is not None and (nested := self.nested_class(owner, name, strict)) is not None:
+                result = Spec(name=nested.name, cls=nested, args=args)
+        elif ctx is not None and not scope:
+            if members:
+                found, result = self._class_typedef(ctx, name, depth, strict)
+                settled = found and strict
+            if result is None and not settled and (nested := self.nested_class(ctx, name, strict, members)):
+                result = Spec(name=nested.name, cls=nested, args=args)
         if result is None and not settled:
             cls = self.find_class(name, scope or package, [scope] if scope else imports, strict, near)
             if cls is not None and (scope is None or cls.package == scope or not cls.package) and \
@@ -755,6 +760,23 @@ class Workspace:
             if cur is not None:
                 out.append(cur)
         return out
+
+    def nested_class(self, cls: ClassInfo, name: str, strict: bool = False,
+                     members: bool = True) -> ClassInfo | None:
+        """The class `name` declared in `cls` (when `members`), in a class enclosing it or in a
+        base of those, nearest first: a nested class is a member, which subclasses inherit
+        (IEEE 1800 8.25)."""
+        cands = [c for c in self.classes_by_name.get(name, ()) if c.outer_class]
+        if not cands:
+            return None
+        for outer in [cls, *self.outer_classes(cls)] if members else self.outer_classes(cls):
+            for entry in self.chain(outer, strict=strict):
+                owner = entry.spec.cls
+                if owner is not None:
+                    for c in cands:
+                        if c.outer_class == owner.name and c.package == owner.package:
+                            return c
+        return None
 
     def _spec_from_typedef(self, td: Typedef, owner: ClassInfo | None, depth, strict=False) -> Spec | None:
         """A typedef's target, resolved where the typedef is written: in `owner`, the class that

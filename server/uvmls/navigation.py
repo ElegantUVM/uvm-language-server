@@ -204,6 +204,9 @@ class Navigator:
                 hit = ws.find_member(c, name, strict=strict)
                 if hit is not None:
                     return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
+            nested = ws.nested_class(cls, name, strict)
+            if nested is not None:
+                return [Target(nested, spec=Spec(nested.name, nested))]
         package, imports = self._package_scope(cls, unit)
         found = ws.find_class(name, package, imports, strict=strict, near=near)
         if found is not None and not ws.typedef_hides(found, name, package):
@@ -399,6 +402,8 @@ class Navigator:
             hit = ws.find_member(spec.cls, name, bindings, strict)
             if hit is not None:
                 return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
+            if sep == "::" and (nested := ws.nested_class(spec.cls, name, strict)) is not None:
+                return [Target(nested, spec=Spec(nested.name, nested))]
             return []
         # A built-in UVM class: walk its built-in chain for known members.
         for entry_name in self._builtin_chain(spec.name):
