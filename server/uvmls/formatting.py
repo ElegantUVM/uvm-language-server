@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import platform
 import shutil
 import signal
+import sys
 from dataclasses import dataclass
 
 from .fixes import EOL_RE
@@ -13,6 +15,9 @@ from .project import expand_path, norm
 
 TIMEOUT = 5.0
 CLEANUP_TIMEOUT = 1.0
+# The Verible the .vsix ships (client/scripts/bundle-server.mjs), absent from git and the pip package.
+BUNDLED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party", "verible", "linux-x64",
+                       "verible-verilog-format")
 
 
 @dataclass(frozen=True)
@@ -28,10 +33,24 @@ class Settings:
         return cls(cfg.get("enabled") is not False, path if isinstance(path, str) else "")
 
 
+def bundled() -> str | None:
+    """The bundled Verible, on the one platform it is built for, with its exec bit repaired if an
+    extension installer dropped it."""
+    if sys.platform != "linux" or platform.machine() != "x86_64" or not os.path.isfile(BUNDLED):
+        return None
+    if not os.access(BUNDLED, os.X_OK):
+        try:
+            os.chmod(BUNDLED, os.stat(BUNDLED).st_mode | 0o755)
+        except OSError:
+            return None
+    return BUNDLED if os.access(BUNDLED, os.X_OK) else None
+
+
 def executable(path: str, roots: list[str]) -> str | None:
+    """uvm.formatter.path when set (and only that), else PATH, else the bundled copy."""
     if not path:
         found = shutil.which("verible-verilog-format")
-        return norm(found) if found else None
+        return norm(found) if found else bundled()
     expanded = expand_path(path, roots, relative=False)
     # Classify before normalization removes ./, including in expanded variables.
     if not os.path.dirname(expanded):
@@ -97,6 +116,7 @@ class Formatter:
     def __init__(self, log):
         self.log = log
         self.missing: set[tuple] = set()
+        self.announced: set[str] = set()  # executables named in the log on their first use
         self.tasks: set[asyncio.Task] = set()
         self.cleaning: set[asyncio.Task] = set()
         self.processes: set[asyncio.subprocess.Process] = set()
@@ -139,6 +159,11 @@ class Formatter:
                 self.log(f"formatter: cannot find executable {settings.path or 'verible-verilog-format'!r}; "
                          "set uvm.formatter.path or install verible-verilog-format on the server's PATH")
             return None
+        if binary not in self.announced:
+            self.announced.add(binary)
+            origin = ("uvm.formatter.path" if settings.path else
+                      "the bundled copy" if binary == BUNDLED else "PATH")
+            self.log(f"formatter: using {binary!r} ({origin})")
         argv = [binary, "--failsafe_success=false", f"--indentation_spaces={size}"]
         if lines is not None:
             argv.append(f"--lines={lines[0]}-{lines[1]}")
