@@ -108,6 +108,7 @@ QUALIFIER_TOKENS = {
 LINE_COMMENT, BLOCK_COMMENT = P.TriviaKind.LineComment, P.TriviaKind.BlockComment
 END_OF_LINE, WHITESPACE, DIRECTIVE = P.TriviaKind.EndOfLine, P.TriviaKind.Whitespace, P.TriviaKind.Directive
 REGION_RE = re.compile(rb"//\s*#(end)?region\b")  # the markers VS Code folds in other languages
+TRIVIA_MARK = re.compile(rb"`|/[/*]")
 FOLDED_DIRECTIVES = frozenset([K.IfDefDirective, K.IfNDefDirective, K.ElsIfDirective, K.ElseDirective,
                                K.EndIfDirective, K.DefineDirective, K.MacroUsage])
 RULE_CHARS = "-=*#~_+/\\"  # what a separator line in a comment is made of
@@ -1797,6 +1798,15 @@ class Extractor:
         if comments and (path := self.foldable(tok.location)):
             self.comment_folds(tok.location, trivia[after:], path)
 
+    def trivia_inside(self, node) -> bool:
+        """Whether a node's text after its first token may hold a directive or comment: an `ifdef
+        there pairs with an `endif after it."""
+        sr = node.sourceRange
+        start = sr.start
+        if self.sm.isMacroLoc(start) or start.buffer != sr.end.buffer:
+            return False
+        return TRIVIA_MARK.search(self.source_bytes(start.buffer), start.offset, sr.end.offset) is not None
+
     def comment_folds(self, loc, trivia, path: str):
         """Folds of the comments in trivia that ends at `loc`, walking back from it."""
         data = self.source_bytes(loc.buffer)
@@ -1886,6 +1896,9 @@ class Extractor:
                 first = n.getFirstToken()
                 if first is not None:
                     self.fold_trivia(first)
+                    if self.trivia_inside(n):
+                        for tok in iter_tokens(n)[1:]:
+                            self.fold_trivia(tok)
                 continue
             children = [c for c in n if c is not None]
             children.reverse()  # in source order: `ifdef branches pair up as they come

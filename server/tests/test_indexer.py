@@ -624,3 +624,19 @@ def test_library_fold_walk_skips_only_structureless_syntax(tmp_path, source):
     assert len(full.out.structures) > (1000 if source == "library" else 15)
     assert sorted(pruned, key=repr) == sorted(full.out.structures, key=repr)
     assert folds
+
+
+def test_library_fold_walk_sees_directives_inside_skipped_syntax(tmp_path):
+    from test_fixes import index
+    from uvmls.indexer import Extractor
+
+    text = ("`ifndef GUARD\n`define GUARD\nfunction automatic int f(int a, int b, int c);\n  int x;\n  x = a +\n"
+            "`ifdef GUARD\n    b;\n`else\n    c;\n`endif\n  x = x +\n    /* one\n       two */\n    1;\n  return x;\n"
+            "endfunction\n`endif\n")
+    ws = index(tmp_path, {"t.sv": text})
+    root = str(tmp_path / "t.sv")
+    _, folds = Extractor(*ws.indexer._tree(root, {}, True), root, True, {}, ws.indexer.library_dirs).collect_structures()
+    # The `ifdef inside the expression would otherwise close the outer `ifndef's branch.
+    expected = [(0, 15, "branch"), (2, 14, None), (5, 6, "branch"), (7, 8, "branch"), (11, 12, "comment")]
+    assert sorted((f.start, f.end, f.kind) for f in folds) == expected
+    assert sorted((f.start, f.end, f.kind) for f in ws.indices[root].folds) == expected
