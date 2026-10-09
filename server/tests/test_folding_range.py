@@ -490,6 +490,43 @@ def test_library_comments(client):
         d.close()
 
 
+@pytest.mark.parametrize("folding,refresh", [(True, True), (True, False), (True, None), (False, True)])
+def test_refresh_after_index(tb, folding, refresh):
+    c = Client()
+    requests = []
+    read = c.read
+
+    def record(timeout=30):
+        msg = read(timeout)
+        if "id" in msg and "method" in msg:
+            requests.append(msg["method"])
+        return msg
+
+    c.read = record
+    caps = {"textDocument": {"foldingRange": {}}} if folding else {}
+    if refresh is not None:
+        caps["workspace"] = {"foldingRange": {"refreshSupport": refresh}}
+    count = int(bool(folding and refresh))
+    try:
+        c.request("initialize", {"processId": None, "rootUri": f"file://{tb}", "capabilities": caps,
+                                "initializationOptions": {"settings": {"filelists": [os.path.join(tb, "alu_tb.f")],
+                                                                       "elaboration": "off"}}})
+        c.notify("initialized", {})
+        c.wait_for("uvm/indexChanged")
+        c.request("workspace/symbol", {"query": "alu_agent"})  # reads what the server sent meanwhile
+        # A fold request answered null while indexing is asked again.
+        assert requests.count("workspace/foldingRange/refresh") == count
+        d = Doc(c, os.path.join(tb, "agent", "alu_agent.svh"))
+        d.change("\n" + d.text)
+        c.wait_for("uvm/indexChanged")
+        c.request("workspace/symbol", {"query": "alu_agent"})
+        # An edit can change another open file's folds, an including or included one.
+        assert requests.count("workspace/foldingRange/refresh") >= 2 * count
+        assert count or "workspace/foldingRange/refresh" not in requests
+    finally:
+        c.close()
+
+
 def test_crossing_intervals_and_shared_start():
     from uvmls.model import FoldRegion
     from uvmls.navigation import Navigator
@@ -528,7 +565,7 @@ def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
             return False
 
         ls.fresh = expired
-        assert await module.folding_range(ls, params) == []
+        assert await module.folding_range(ls, params) is None  # the editor folds by indentation meanwhile
         ls.fresh = fresh
         entered, release = threading.Event(), threading.Event()
         compute = module._compute_folding_range
@@ -539,13 +576,16 @@ def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
             return compute(*args)
 
         monkeypatch.setattr(module, "_compute_folding_range", delayed)
+        monkeypatch.setattr(ls, "after_index", lambda: None)
         try:
             task = asyncio.create_task(module.folding_range(ls, params))
             await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
             assert entered.is_set()
+            path.write_text("\n\nclass a;\n int value;\nendclass\n")
             ls.pending.add(str(path))
             release.set()
-            assert await task == []
+            # Computed again for the edited file: never the lines it had.
+            assert await task == [T.FoldingRange(2, 3)]
         finally:
             release.set()
 

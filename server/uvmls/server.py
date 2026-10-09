@@ -237,6 +237,11 @@ class UvmLanguageServer(LanguageServer):
         self.publish_diagnostics()
         self.protocol.notify("uvm/indexChanged", {"stats": self.ws.stats(), "version": self.ws.version})
         self.refresh_views()
+        # The editor asks for folds again only when a file changes: an open file's folds change
+        # with its includes too, and one answered null while the index was not current waits.
+        if get_capability(self.client_capabilities, "text_document.folding_range") is not None and \
+                get_capability(self.client_capabilities, "workspace.folding_range.refresh_support", False):
+            self.workspace_folding_range_refresh(None)
 
     def refresh_views(self):
         """Ask the client to re-request code lenses and inlay hints."""
@@ -882,20 +887,27 @@ def references(ls: UvmLanguageServer, params: T.ReferenceParams):
     return [location(r) for r in ranges]
 
 
+async def _current(ls: UvmLanguageServer, cache: str, key, compute, *args):
+    """An answer from an index that describes the current text, kept in the workspace's `cache`
+    until the next rebuild. An edit while it is computed makes it compute again, so it never holds
+    older positions. None when the index is not current by fresh()'s deadline: the editor then
+    uses its own folding and word highlights, rather than none, until it asks again."""
+    while await ls.fresh():
+        if key in getattr(ls.ws, cache):
+            return getattr(ls.ws, cache)[key]
+        version, documents = ls.ws.version, ls.documents
+        revisions = {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}
+        result = await _off_loop(compute, ls, *args)
+        if version == ls.ws.version and documents == ls.documents and not ls.pending and \
+                revisions == {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
+            _remember(getattr(ls.ws, cache), key, result)
+            return result
+    return None
+
+
 async def document_highlight(ls: UvmLanguageServer, params: T.DocumentHighlightParams):
-    if not await ls.fresh():
-        return []
     key = (params.text_document.uri, params.position.line, params.position.character)
-    if key in ls.ws._highlight_cache:
-        return ls.ws._highlight_cache[key]
-    version, documents = ls.ws.version, ls.documents
-    revisions = {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}
-    result = await asyncio.get_running_loop().run_in_executor(None, _compute_document_highlight, ls, params)
-    if version != ls.ws.version or documents != ls.documents or ls.pending or \
-            revisions != {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
-        return []
-    _remember(ls.ws._highlight_cache, key, result)
-    return result
+    return await _current(ls, "_highlight_cache", key, _compute_document_highlight, params)
 
 
 def _compute_document_highlight(ls: UvmLanguageServer, params: T.DocumentHighlightParams):
@@ -908,20 +920,9 @@ def _compute_document_highlight(ls: UvmLanguageServer, params: T.DocumentHighlig
 
 
 async def folding_range(ls: UvmLanguageServer, params: T.FoldingRangeParams):
-    if not await ls.fresh():
-        return []
     limit = get_capability(ls.client_capabilities, "text_document.folding_range.range_limit")
-    key = (params.text_document.uri, limit)
-    if key in ls.ws._folding_cache:
-        return ls.ws._folding_cache[key]
-    version, documents = ls.ws.version, ls.documents
-    revisions = {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}
-    result = await asyncio.get_running_loop().run_in_executor(None, _compute_folding_range, ls, params, limit)
-    if version != ls.ws.version or documents != ls.documents or ls.pending or \
-            revisions != {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
-        return []
-    _remember(ls.ws._folding_cache, key, result)
-    return result
+    return await _current(ls, "_folding_cache", (params.text_document.uri, limit), _compute_folding_range,
+                          params, limit)
 
 
 FOLDING_KINDS = {"comment": T.FoldingRangeKind.Comment, "region": T.FoldingRangeKind.Region}

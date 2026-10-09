@@ -180,7 +180,7 @@ def test_line_directive_identifiers(doc):
     assert highlight_at(doc, "c;", 0) == highlights(text, [("c;", 0, "c")])
 
 
-def test_deadline_and_intervening_edit(tmp_path):
+def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
     import asyncio
     import threading
 
@@ -196,14 +196,15 @@ def test_deadline_and_intervening_edit(tmp_path):
         ls.workspace_roots = [str(tmp_path)]
         ls.settings = {"useBundledUvm": False}
         ls.ws.configure(ls.config())
-        params = T.DocumentHighlightParams(T.TextDocumentIdentifier(path.as_uri()), T.Position(0, 14))
+        document = T.TextDocumentIdentifier(path.as_uri())
+        params = T.DocumentHighlightParams(document, T.Position(0, 14))
         fresh = ls.fresh
 
         async def expired():
             return False
 
         ls.fresh = expired
-        assert await module.document_highlight(ls, params) == []
+        assert await module.document_highlight(ls, params) is None  # the editor highlights the word meanwhile
         ls.fresh = fresh
         entered, release = threading.Event(), threading.Event()
         compute = module._compute_document_highlight
@@ -213,18 +214,21 @@ def test_deadline_and_intervening_edit(tmp_path):
             release.wait(5)
             return compute(*args)
 
-        module._compute_document_highlight = delayed
+        monkeypatch.setattr(module, "_compute_document_highlight", delayed)
+        monkeypatch.setattr(ls, "after_index", lambda: None)
         try:
             task = asyncio.create_task(module.document_highlight(ls, params))
             await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
             assert entered.is_set()
-            ls.workspace.put_text_document(T.TextDocumentItem(path.as_uri(), "systemverilog", 2, "// changed"))
+            path.write_text("\nclass a; int value; endclass\n")
+            ls.pending.add(str(path))
             release.set()
-            assert await task == []
+            # Computed again for the edited file, where the word has moved down a line.
+            assert await task is None
         finally:
             release.set()
-            module._compute_document_highlight = compute
-        assert await module.document_highlight(ls, params)
+        assert await module.document_highlight(ls, T.DocumentHighlightParams(document, T.Position(1, 14))) == [
+            T.DocumentHighlight(T.Range(T.Position(1, 13), T.Position(1, 18)), T.DocumentHighlightKind.Text)]
 
     asyncio.run(run())
 
