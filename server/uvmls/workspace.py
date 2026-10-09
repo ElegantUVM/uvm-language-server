@@ -990,20 +990,26 @@ class Workspace:
 
     def member_type_spec(self, owner, member, bindings: dict[str, str], strict: bool = False,
                          depth: int = 0) -> Spec | None:
+        """The class type of a member of `owner`: a class, a design unit or a built-in class name.
+        A unit's member names its type where the unit declares it."""
         ctx = owner if isinstance(owner, ClassInfo) else None
+        where = {}
+        if isinstance(owner, DesignUnit):
+            where = {"package": owner.name if owner.kind == "package" else None,
+                     "imports": owner.imports, "near": member.range}
         if isinstance(member, Variable):
             if member.type is None:
                 return None
-            return self.resolve_type_ref(member.type, ctx, bindings, strict, depth)
+            return self.resolve_type_ref(member.type, ctx, bindings, strict, depth, **where)
         if isinstance(member, Method):
             parsed = parse_type_text(member.return_type)
             if parsed:
                 # As a property's type: a written specialization (holder #(T)) keeps the bindings.
                 ref = TypeRef(parsed[1], member.return_type, parsed[0], parsed[2])
-                return self.resolve_type_ref(ref, ctx, bindings, strict, depth)
+                return self.resolve_type_ref(ref, ctx, bindings, strict, depth, **where)
             return None
         if isinstance(member, Typedef) and member.target is not None:
-            return self.resolve_type_ref(member.target, ctx, bindings, strict, depth)
+            return self.resolve_type_ref(member.target, ctx, bindings, strict, depth, **where)
         if isinstance(member, str):  # built-in member type text
             parsed = parse_type_text(member)
             if parsed:
