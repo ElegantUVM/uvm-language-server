@@ -408,7 +408,11 @@ def test_project_library_is_protected_during_discovery(clients, fake, tmp_path, 
         target.write_text("// BAD\n")
     alias = tmp_path / "alias.svh"
     alias.symlink_to(targets[1])
-    targets.append(alias)
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    (storage / "linked.svh").write_text("// BAD\n")
+    (library / "linked.svh").symlink_to(storage / "linked.svh")
+    targets += [alias, library / "linked.svh"]
     filelist = tmp_path / "tb.f"
     os.mkfifo(filelist)
     entered, release = threading.Event(), threading.Event()
@@ -443,6 +447,36 @@ def test_project_library_is_protected_during_discovery(clients, fake, tmp_path, 
     for doc in docs:
         assert request(doc) == []
     assert not fake.record.exists()
+
+
+@pytest.mark.parametrize("ranged", [False, True])
+@pytest.mark.parametrize("indexed", [False, True])
+def test_library_files_through_links(clients, fake, tmp_path, ranged, indexed):
+    uvm, store, proj = tmp_path / "uvm" / "src", tmp_path / "store", tmp_path / "proj"
+    for d in (uvm, store / "base", proj):
+        d.mkdir(parents=True)
+    for name in ("component", "base/object.svh", "shared.svh"):
+        (store / name).write_text("// BAD\n")
+    (uvm / "uvm_component.svh").symlink_to(store / "component")
+    (uvm / "base").symlink_to(store / "base")
+    (uvm / "uvm_macros.svh").write_text("// macros\n")
+    (uvm / "uvm_pkg.sv").write_text('package uvm_pkg;\n`include "uvm_component.svh"\n'
+                                    '`include "base/object.svh"\n`include "../../store/shared.svh"\nendpackage\n')
+    (proj / "alias.svh").symlink_to(store / "shared.svh")
+    c = clients(proj, {"path": str(fake.path)}, initialize_index=indexed, uvmHome=str(uvm.parent))
+    targets = [uvm / "uvm_component.svh", uvm / "base" / "object.svh"]
+    if indexed:
+        assert c.request("uvm/stats", {})["uvm"]["source"] == "configured"
+        # Only indexing finds a library include outside the library, reached through an alias.
+        targets += [store / "shared.svh", proj / "alias.svh"]
+    request = (lambda doc: format_range(doc, (0, 0), (1, 0))) if ranged else format_doc
+    for target in targets:
+        doc = Doc(c, str(target))
+        assert request(doc) == []
+        doc.close()
+    assert not fake.record.exists()
+    user = document(c, proj)
+    assert applied(user.text, request(user)) == "// good\n"
 
 
 def selection(start, end):

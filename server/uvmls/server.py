@@ -692,22 +692,34 @@ def _format_eligible(ls: UvmLanguageServer, uri: str, path: str) -> bool:
             return False
     elif not is_sv_file(path):
         return False
-    if is_bundled(path) or path in ls.ws.library_files:
-        return False
-    # Discovery may still be running or describe the previous project settings.
-    real_path = os.path.realpath(path)
-    directory = os.path.dirname(real_path)
+    return not _library_source(ls, path)
+
+
+def _parents(path: str):
+    directory = os.path.dirname(path)
     while True:
-        if os.path.isfile(os.path.join(directory, "uvm_pkg.sv")):
-            return False
+        yield directory
         parent = os.path.dirname(directory)
         if parent == directory:
-            break
+            return
         directory = parent
+
+
+def _library_source(ls: UvmLanguageServer, path: str) -> bool:
+    """Library code, which formatting leaves alone. The editor may open a file through a link that
+    slang or the settings name resolved, or the reverse, so both spellings are compared."""
+    real = os.path.realpath(path)
+    if is_bundled(path) or real in ls.ws.library_real:
+        return True
+    names = (path, real)
+    # Discovery may still be running or describe the previous project settings.
+    if any(os.path.isfile(os.path.join(d, "uvm_pkg.sv")) for p in names for d in _parents(p)):
+        return True
     cfg = ls.config()
     sources = ls.ws.sources
     library = sources.uvm_dir if sources else _uvm_src_dir(cfg.uvm_home) or _uvm_src_dir(cfg.env_uvm_home)
-    return not library or not real_path.startswith(os.path.realpath(library) + os.sep)
+    return bool(library) and any(p.startswith(root + os.sep) for root in {library, os.path.realpath(library)}
+                                 for p in names)
 
 
 def _text_position(codec, ft: fixes.FileText, offset: int) -> T.Position:

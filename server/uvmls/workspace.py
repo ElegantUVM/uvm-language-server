@@ -220,6 +220,9 @@ class Workspace:
         self._include_candidates: tuple[tuple, dict[str, list[str]],
                                          dict[str, tuple[int, int, int] | None]] | None = None
         self._chaining: set[int] = set()  # classes whose ancestors are being found
+        # library_files by resolved path, for formatting outside the lock: replaced, never updated.
+        self.library_real: frozenset[str] = frozenset()
+        self._library_real_of: frozenset[str] | None = None
         self._clear_maps()
 
     # -- building ------------------------------------------------------------
@@ -270,6 +273,7 @@ class Workspace:
     def reindex_all(self):
         with self.lock:
             self._include_candidates = None
+            self._library_real_of = None  # links may have changed
             t0 = time.time()
             self.sources = build_source_set(self.config)
             s = self.sources
@@ -401,6 +405,9 @@ class Workspace:
                 self.ignores.setdefault(path, lines)  # a file two roots include: the same text
         for identifiers in self.identifiers_by_file.values():
             identifiers.sort(key=lambda pair: (pair[1].line, pair[1].col))
+        files = frozenset(self.library_files)
+        if files != self._library_real_of:
+            self.library_real, self._library_real_of = frozenset(map(os.path.realpath, files)), files
         # A definition in an `ifdef branch that cannot be in effect (UVM's empty stubs under
         # `ifdef UVM_EMPTY_MACROS) is left out, unless nothing else defines the macro. A macro
         # defined only in such branches (QUESTA under `ifdef MODEL_TECH) is not defined either.
