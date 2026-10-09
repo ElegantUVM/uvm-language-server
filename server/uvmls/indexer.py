@@ -652,6 +652,7 @@ class Extractor:
         self._argument_calls: set[Range] = set()
         self._suspect: set[tuple[int, int]] = set()  # openers whose closer slang's recovery may have taken
         self._sources: dict[int, bytes] = {}
+        self._foldable: dict[int, str | None] = {}  # per buffer, the path whose folds it gives
         self._headed: list[tuple[str, int, int, int]] = []  # (path, opening, header end, end) of a fold
         self._list_starts: set[tuple[str, int]] = set()  # where a bracketed list's fold starts
         self._branches: dict[int, list[int]] = {}  # per buffer, the lines of the open `ifdef branches
@@ -1814,10 +1815,12 @@ class Extractor:
 
     def foldable(self, loc) -> str | None:
         """The path of a location whose comments and directives fold here."""
-        if self.sm.isMacroLoc(loc):
-            return None
-        path = self.path_of(loc.buffer)
-        return None if path is None or not self.library and self.in_library(path) else path
+        buffer = loc.buffer
+        bid = buffer.id
+        if bid not in self._foldable:  # each root walks the library headers it includes: ask once
+            path = None if self.sm.isMacroLoc(loc) else self.path_of(buffer)
+            self._foldable[bid] = None if path is None or not self.library and self.in_library(path) else path
+        return self._foldable[bid]
 
     def fold_trivia(self, tok):
         """For the library's walk: the folds the trivia before a token makes."""
