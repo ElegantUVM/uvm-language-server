@@ -1618,3 +1618,18 @@ endclass
 '''
     assert labels_in(tmp_path, text, ['get().calc("x",', 'self_().calc("y",', 'peer.calc("z",', 'h.calc("w",']) == \
         ['function string calc(string a, int b)'] * 4
+
+def test_calls_in_report_macro_arguments_with_the_built_in_model(tmp_path):
+    text = '''`include "uvm_macros.svh"
+import uvm_pkg::*;
+class comp extends uvm_component;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function int inner(int a, int b); return a; endfunction
+  task run_phase(uvm_phase phase);
+    `uvm_info("ID", $sformatf("%0d", inner(1, 2)), UVM_LOW)
+    `uvm_error(get_type_name(), $sformatf("%0d", this.inner(3, 4)))
+  endtask
+endclass
+'''
+    assert hints_in(tmp_path, text, ['inner(1,', 'inner(3,', '`uvm_info("ID", ']) == \
+        [('function int inner(int a, int b)', 1)] * 2 + [None]

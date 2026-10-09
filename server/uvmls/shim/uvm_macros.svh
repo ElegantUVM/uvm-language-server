@@ -111,15 +111,15 @@
 `define uvm_do_seq(UVM_SEQ, SEQR_CONS_IF) begin end
 `define uvm_do_seq_with(UVM_SEQ, SEQR_CONS_IF, CONSTRAINTS) begin end
 `define uvm_do_with(SEQ_OR_ITEM, CONSTRAINTS) begin end
-`define uvm_error(ID, MSG) begin end
+`define uvm_error(ID, MSG) begin if (0) $display(ID, MSG); end
 `define uvm_error_begin(ID, MSG, RM = __uvm_msg) begin
-`define uvm_error_context(ID, MSG, RO) begin end
+`define uvm_error_context(ID, MSG, RO) begin if (0) $display(ID, MSG); end
 `define uvm_error_context_begin(ID, MSG, RO, RM = __uvm_msg) begin
 `define uvm_error_context_end end
 `define uvm_error_end end
-`define uvm_fatal(ID, MSG) begin end
+`define uvm_fatal(ID, MSG) begin if (0) $display(ID, MSG); end
 `define uvm_fatal_begin(ID, MSG, RM = __uvm_msg) begin
-`define uvm_fatal_context(ID, MSG, RO) begin end
+`define uvm_fatal_context(ID, MSG, RO) begin if (0) $display(ID, MSG); end
 `define uvm_fatal_context_begin(ID, MSG, RO, RM = __uvm_msg) begin
 `define uvm_fatal_context_end end
 `define uvm_fatal_end end
@@ -168,9 +168,9 @@
 `define uvm_file `__FILE__
 `define uvm_get_imp_decl(SFX)
 `define uvm_get_peek_imp_decl(SFX)
-`define uvm_info(ID, MSG, VERBOSITY) begin end
+`define uvm_info(ID, MSG, VERBOSITY) begin if (0) $display(ID, MSG); end
 `define uvm_info_begin(ID, MSG, VERBOSITY, RM = __uvm_msg) begin
-`define uvm_info_context(ID, MSG, VERBOSITY, RO) begin end
+`define uvm_info_context(ID, MSG, VERBOSITY, RO) begin if (0) $display(ID, MSG); end
 `define uvm_info_context_begin(ID, MSG, VERBOSITY, RO, RM = __uvm_msg) begin
 `define uvm_info_context_end end
 `define uvm_info_end end
@@ -382,9 +382,9 @@
 `define uvm_user_bottomup_phase(PHASE,COMP,PREFIX)
 `define uvm_user_task_phase(PHASE,COMP,PREFIX)
 `define uvm_user_topdown_phase(PHASE,COMP,PREFIX)
-`define uvm_warning(ID, MSG) begin end
+`define uvm_warning(ID, MSG) begin if (0) $display(ID, MSG); end
 `define uvm_warning_begin(ID, MSG, RM = __uvm_msg) begin
-`define uvm_warning_context(ID, MSG, RO) begin end
+`define uvm_warning_context(ID, MSG, RO) begin if (0) $display(ID, MSG); end
 `define uvm_warning_context_begin(ID, MSG, RO, RM = __uvm_msg) begin
 `define uvm_warning_context_end end
 `define uvm_warning_end end
