@@ -1,7 +1,9 @@
 """Formatting through stdio with a recording executable, without requiring Verible."""
 
+import asyncio
 import json
 import os
+import platform
 import signal
 import shutil
 import subprocess
@@ -15,6 +17,7 @@ import pytest
 from test_code_actions import Doc, applied
 from test_lsp import Client
 from conftest import EXAMPLE
+from uvmls import formatting
 from uvmls.indexer import SHIM_FILE
 from uvmls.project import BUNDLED_UVM
 
@@ -391,6 +394,84 @@ def test_missing_binary_is_retried_without_reindexing(clients, tmp_path, monkeyp
     fake = Formatter(tmp_path)
     assert applied(doc.text, format_doc(doc)) == "// good\n"
     fake.called()
+
+
+@pytest.fixture
+def bundled(tmp_path, monkeypatch):
+    """A fake copy where the .vsix puts Verible, on a Linux x86_64 server with an empty PATH."""
+    (tmp_path / "bundle").mkdir()
+    copy = Formatter(tmp_path / "bundle")
+    copy.set(output="// bundled\n")
+    monkeypatch.setattr(formatting, "BUNDLED", str(copy.path))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing"))
+    return copy
+
+
+def test_lookup_order(bundled, fake, tmp_path, monkeypatch):
+    roots = [str(tmp_path)]
+    assert formatting.executable("", roots) == str(bundled.path)
+    monkeypatch.setenv("PATH", str(tmp_path))  # fake is verible-verilog-format in tmp_path
+    assert formatting.executable("", roots) == str(fake.path)
+    (tmp_path / "elsewhere").mkdir()
+    explicit = Formatter(tmp_path / "elsewhere", "mine")
+    assert formatting.executable(str(explicit.path), roots) == str(explicit.path)
+    assert formatting.executable("mine", roots) is None  # not on PATH: no fallback
+    assert formatting.executable(str(tmp_path / "missing"), roots) is None
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing"))
+    assert formatting.executable(str(tmp_path / "missing"), roots) is None
+    assert formatting.executable("verible-verilog-format", roots) is None
+
+
+@pytest.mark.parametrize("system,machine", [("darwin", "x86_64"), ("win32", "AMD64"), ("linux", "aarch64"),
+                                            ("linux", "i686")])
+def test_bundled_copy_is_linux_x86_64_only(bundled, tmp_path, monkeypatch, system, machine):
+    monkeypatch.setattr(sys, "platform", system)
+    monkeypatch.setattr(platform, "machine", lambda: machine)
+    monkeypatch.setattr(shutil, "which", lambda *args, **kwargs: None)  # which() is platform-specific
+    assert formatting.executable("", [str(tmp_path)]) is None
+
+
+def test_bundled_copy_must_exist(bundled, tmp_path):
+    bundled.path.unlink()
+    assert formatting.executable("", [str(tmp_path)]) is None
+    bundled.path.mkdir()
+    assert formatting.executable("", [str(tmp_path)]) is None
+
+
+def test_bundled_copy_exec_bit_is_repaired(bundled, tmp_path, monkeypatch):
+    bundled.path.chmod(0o644)
+    assert formatting.executable("", [str(tmp_path)]) == str(bundled.path)
+    assert bundled.path.stat().st_mode & 0o755 == 0o755
+    bundled.path.chmod(0o644)
+
+    def refused(path, mode):
+        raise PermissionError(path)
+
+    monkeypatch.setattr(os, "chmod", refused)
+    assert formatting.executable("", [str(tmp_path)]) is None
+    assert bundled.path.stat().st_mode & 0o111 == 0
+
+
+def test_bundled_copy_runs_and_is_announced_once(bundled, fake, tmp_path, monkeypatch):
+    logs = []
+    formatter = formatting.Formatter(logs.append)
+    settings = formatting.Settings()
+
+    def run(text="// BAD\n"):
+        return asyncio.run(formatter.run(text, str(tmp_path / "t.sv"), 2, settings, [str(tmp_path)]))
+
+    assert run() == "// bundled\n"
+    assert bundled.called()["argv"] == ["--failsafe_success=false", "--indentation_spaces=2", "-"]
+    assert run("// BAD BAD\n") == "// bundled\n"
+    assert logs == [f"formatter: using {str(bundled.path)!r} (the bundled copy)"]
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert run() == "// good\n"
+    assert logs[1:] == [f"formatter: using {str(fake.path)!r} (PATH)"]
+    assert asyncio.run(formatter.run("// BAD\n", str(tmp_path / "t.sv"), 2, formatting.Settings(path="/missing"),
+                                     [str(tmp_path)])) is None
+    assert len(logs) == 3 and "uvm.formatter.path" in logs[2]
 
 
 def test_removed_directory_runs_in_nearest_existing_one(clients, fake, tmp_path):
