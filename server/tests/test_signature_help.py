@@ -845,6 +845,14 @@ endmodule
         [ctor, f, f, ctor, f, f]
 
 
+def test_package_variable_receiver_in_a_class(doc):
+    """uvm_top is a variable of uvm_pkg: its type resolves in uvm_pkg, not in the calling class."""
+    doc.change(doc.text.replace('    super.build_phase(phase);', '    super.build_phase(phase);\n'
+                                '    uvm_top.set_timeout(10);\n    uvm_top.print_topology();', 1))
+    signature(help_at(doc, 'uvm_top.set_timeout('), ['time timeout', 'bit overridable = 1'])
+    signature(help_at(doc, 'uvm_top.print_topology('), ['uvm_printer printer = null'])
+
+
 def test_receivers_in_a_file_a_package_includes(client, tb, doc):
     pkg = Doc(client, os.path.join(tb, 'agent', 'alu_pkg.sv'))
     try:
