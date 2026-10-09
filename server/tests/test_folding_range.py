@@ -295,8 +295,8 @@ def span(text, first, last, kind=None, after=""):
 @pytest.mark.parametrize("name,expected", [
     ("tb/tb_top.sv", lambda t: [fold(t, "module tb_top", "endmodule"), fold(t, "u_dut (", "  );"),
                                 fold(t, "initial begin", "  end")]),
-    ("agent/alu_if.sv", lambda t: [fold(t, "interface alu_if", "endinterface"), fold(t, "clocking drv_cb", "endclocking"),
-                                   fold(t, "clocking mon_cb", "endclocking")]),
+    ("agent/alu_if.sv", lambda t: [fold(t, "interface alu_if", "endinterface"),
+                                   fold(t, "clocking drv_cb", "endclocking"), fold(t, "clocking mon_cb", "endclocking")]),
     ("agent/alu_pkg.sv", lambda t: [fold(t, "package alu_pkg", "endpackage")]),
     ("rtl/alu.sv", lambda t: [fold(t, "module alu", ");"), fold(t, ");", "endmodule"),
                               fold(t, "always_ff", "  end\nendmodule"), fold(t, "if (!rst_n) begin", "    end else"),

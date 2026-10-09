@@ -459,7 +459,8 @@ class Workspace:
         for root in self.roots_for(path):
             idx = self.indices[root]
             if idx.structures_pending:
-                (idx.structures, idx.folds), idx.structures_pending = self.indexer.structures(root, self.overrides), False
+                idx.structures, idx.folds = self.indexer.structures(root, self.overrides)
+                idx.structures_pending = False
                 known: dict = {}
                 for pair in idx.structures:
                     if _unseen(known, self.structures_by_file, pair.opening.path, pair, lambda p: p):

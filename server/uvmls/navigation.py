@@ -705,7 +705,8 @@ class Navigator:
         for f in sorted(self.ws.folds_in(path), key=lambda f: f.kind in CROSSING_FOLDS):
             kinds.setdefault((f.start, f.end), f.kind)
         out, ends = [], []
-        for start, end in sorted((p for p, k in kinds.items() if k not in CROSSING_FOLDS), key=lambda p: (p[0], -p[1])):
+        syntax = sorted((p for p, k in kinds.items() if k not in CROSSING_FOLDS), key=lambda p: (p[0], -p[1]))
+        for start, end in syntax:
             while ends and start > ends[-1]:
                 ends.pop()
             if ends and end > ends[-1]:
