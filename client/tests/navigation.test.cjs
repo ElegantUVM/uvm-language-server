@@ -59,16 +59,35 @@ test("a location without an end selects the starting position", async () => {
   ]);
 });
 
-test("invalid locations do not open an editor", async () => {
+test("a location without a file does not open an editor", async () => {
   const c = client();
   const valid = { file: "t.sv", line: 2, col: 3, endLine: 4, endCol: 5 };
-  const invalid = [undefined, null, {}, "t.sv", { ...valid, file: 1 }, { ...valid, file: "" },
-    { ...valid, file: "  " }, { ...valid, endLine: 1 }, { ...valid, endLine: 2, endCol: 2 }];
-  for (const key of ["line", "col", "endLine", "endCol"]) {
+  for (const arg of [undefined, null, {}, "t.sv", { ...valid, file: 1 }, { ...valid, file: "" },
+    { ...valid, file: "  " }]) await c.reveal(arg);
+  assert.deepEqual(c.calls, []);
+});
+
+test("a location without a valid line reports it and opens nothing", async () => {
+  const c = client();
+  for (const value of [undefined, -1, 1.5, "1", NaN, Infinity, null]) {
+    await c.reveal({ file: "t.sv", line: value, col: 3, endLine: 4, endCol: 5 });
+  }
+  assert.equal(c.calls.length, 7);
+  for (const call of c.calls) assert.deepEqual(call, ["error", "UVM: cannot open t.sv: no valid line given"]);
+});
+
+test("invalid columns or an end before the start open the line at its start", async () => {
+  const c = client();
+  const valid = { file: "t.sv", line: 2, col: 3, endLine: 4, endCol: 5 };
+  const invalid = [{ ...valid, endLine: 1 }, { ...valid, endLine: 2, endCol: 2 }];
+  for (const key of ["col", "endLine", "endCol"]) {
     for (const value of [-1, 1.5, "1", NaN, Infinity, null]) invalid.push({ ...valid, [key]: value });
   }
   for (const arg of invalid) await c.reveal(arg);
-  assert.deepEqual(c.calls, []);
+  assert.equal(c.calls.length, 2 * invalid.length);
+  for (let i = 0; i < c.calls.length; i += 2) {
+    assert.deepEqual(c.calls.slice(i, i + 2), [["open", "t.sv"], ["show", "t.sv", 2, 0, 2, 0, 1, false]]);
+  }
 });
 
 test("a failed open reports the file and leaves the editor alone", async () => {
