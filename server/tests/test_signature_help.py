@@ -1655,7 +1655,12 @@ endclass
     assert 'only_box' in {c['label'] for c in nav.completions(path, line, col, text)}
 
 
-def test_calls_in_report_macro_arguments_with_the_built_in_model(tmp_path):
+@pytest.mark.parametrize('bundled', [False, True])
+def test_calls_in_report_macro_arguments(tmp_path, bundled):
+    """The UVM library's report macros expand their ID and message. The built-in shim's leave them
+    unparsed: they cost nothing to index, and a UVM macro the shim lacks there is not unknown."""
+    from test_fixes import index
+
     text = '''`include "uvm_macros.svh"
 import uvm_pkg::*;
 class comp extends uvm_component;
@@ -1664,8 +1669,10 @@ class comp extends uvm_component;
   task run_phase(uvm_phase phase);
     `uvm_info("ID", $sformatf("%0d", inner(1, 2)), UVM_LOW)
     `uvm_error(get_type_name(), $sformatf("%0d", this.inner(3, 4)))
+    `uvm_info("VERSION", `UVM_VERSION_STRING, UVM_LOW)
   endtask
 endclass
 '''
-    assert hints_in(tmp_path, text, ['inner(1,', 'inner(3,', '`uvm_info("ID", ']) == \
-        [('function int inner(int a, int b)', 1)] * 2 + [None]
+    found = ('function int inner(int a, int b)', 1) if bundled else None
+    assert hints_in(tmp_path, text, ['inner(1,', 'inner(3,', '`uvm_info("ID", '], bundled) == [found] * 2 + [None]
+    assert index(tmp_path, {'t.sv': text}, bundled=bundled).user_diagnostics() == []

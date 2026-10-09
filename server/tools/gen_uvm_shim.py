@@ -5,9 +5,7 @@ not configured. Without it, slang drops unknown macros such as `uvm_fatal and th
 statement after `if (...) `uvm_fatal(...)` becomes the body of the `if`.
 
 Each macro keeps its real name and arity but gets a light body:
-  * `uvm_info / `uvm_warning / `uvm_error / `uvm_fatal (and _context) ->
-    `begin if (0) $display(ID, MSG); end`, so calls written in the message are parsed
-  * other reporting / sequence / callback / pack / record macros -> `begin end`
+  * reporting / sequence / callback / pack / record macros -> `begin end`
   * *_utils / *_registry macros -> `typedef uvm_*_registry #(T) type_id;`
     so the indexer can see factory registration the same way it does with real UVM
   * `uvm_declare_p_sequencer(S) -> `S p_sequencer;`
@@ -85,8 +83,6 @@ def body_for(name, params):
         return "begin"
     if re.match(r"uvm_(info|warning|error|fatal|message)(_context)?_end$", name):
         return "end"
-    if re.match(r"uvm_(info|warning|error|fatal)(_context)?$", name):
-        return "begin if (0) $display(ID, MSG); end"
     if name.startswith(("uvm_do_callbacks", "uvm_do_obj_callbacks")):
         return "begin end"
     if name.startswith(STATEMENT_PREFIXES):
