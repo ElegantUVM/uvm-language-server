@@ -17,7 +17,8 @@ The goal is a DVT-class experience for UVM testbenches that is open, fast, and v
 | **Formatting** | **Format Document** (`editor.action.formatDocument`) and **Format Selection** (`editor.action.formatSelection`) run `verible-verilog-format` on the current buffer, including unsaved edits. On Linux x86_64 this works out of the box: the .vsix bundles Verible v0.0-4296-g0f262651 (Apache-2.0). Elsewhere, or to use your own Verible, install it and set `uvm.formatter.path` or put it on PATH. They work without a successful index or elaboration and return edits for the editor to apply. Library sources are left alone (the UVM library in use or configured and the files it includes, any UVM source directory, and the extension's own UVM files), including through symlinks. Until the first index finishes, a file the library includes from outside its UVM source directory is not yet known as library code. |
 | **Elaboration** | slang compiles and elaborates the whole design in a separate process and reports what a simulator's elaboration would: type errors, unknown members, wrong argument counts, missing modules or packages, bad overrides, and (from slang's analysis pass) multiple or mixed drivers and assertions without a clock (source `slang-elab`). `uvm.elaboration` runs it on save (the default), also as you type (`onChange`, about a second after the last edit, unsaved text included) or never (`off`); **UVM: Elaborate Now** runs it on demand. An error inside a macro expansion points at the macro argument you wrote, or else at the whole macro call in your file. Errors the UVM library reports on its own (with the same defines) are left out; errors your code causes inside it (a component constructor without a parent, an analysis imp whose owner has no `write()`, a wrong type parameter) are reported at the library line, naming the specialization, with your type as related information. slang's notes ("did you mean", "declared here") are related information. Between runs its diagnostics move with your edits, and those on lines you change go away until the next run. There is no error limit: up to 100 diagnostics per file and 1,000 in all are listed, and the counts include the rest. The status bar shows a spinner, then the error and warning counts; its tooltip names the UVM library, the top modules and the time taken. |
 | **Projects** | Reads simulator filelists (`-f`/`-F`, `+incdir+`, `+define+`, `-D`, `$VAR`, `-timescale` for elaboration, and unknown VCS/Xcelium/Questa options are ignored), or works with zero configuration by indexing every `.sv/.svh` file and inferring include paths (simulator output such as `work/` or `csrc/` inside the workspace is skipped, as are `uvm.exclude` globs). The UVM library is `uvm.uvmHome`, else `$UVM_HOME` (a directory without `uvm_pkg.sv` is skipped with a warning), else the project's own `uvm_pkg.sv` (in a filelist, the workspace or an include directory), else the Accellera UVM 1.2 that ships with the extension, whose files open read-only (a default for `files.readonlyInclude`). Turning off `uvm.useBundledUvm` falls back to a built-in UVM macro shim and class model. |
-| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on warnings or errors; info findings are listed but do not fail), `elab -f tb.f [--top T]` (full elaboration; exit code 1 on errors, 2 if it could not run), `graph`, `topology`, `configdb`, `stats`, all with `--json`. `lint` and `elab` accept `--sarif FILE` for SARIF 2.1.0, including info findings as notes. `--uvm-home DIR` or `--no-bundled-uvm` picks the UVM library. |
+| **CLI / CI** | `python -m uvmls lint -f tb.f` (exit code 1 on warnings or errors; info findings are listed but do not fail), `elab -f tb.f [--top T]` (full elaboration; exit code 1 on errors, 2 if it could not run), `graph`, `topology`, `configdb`, `stats`, all with `--json`, and `mcp` (below). `lint` and `elab` accept `--sarif FILE` for SARIF 2.1.0, including info findings as notes. `--uvm-home DIR` or `--no-bundled-uvm` picks the UVM library; `--exclude GLOB` leaves files out of discovery. |
+| **MCP server** | `python -m uvmls mcp DIR -f tb.f` answers an AI assistant's questions over the Model Context Protocol from the same index: classes by role, a test's topology with its factory overrides applied, the effective type of every create, config_db sets and gets with their status, lint, slang elaboration, definition, hover, references, signature help, sequences and their start sites, factory creates, the include graph, design units, macros and typedefs. Read-only, with 1-based locations, paged results and a workspace-root check on every path. The extension registers it with VS Code (`uvm.mcp.enabled`), and it runs without the IDE for Claude Code or Claude Desktop. See [MCP server](#mcp-server). |
 
 ## Formatting
 
@@ -113,6 +114,71 @@ The [sample workflow](.github/workflows/uvm-lint.yml) runs on push and pull requ
 
 For another project, check out this action alongside the project and use that local action path. The server is installed from the action's directory; the filelist and source paths remain relative to the project's checkout.
 
+## MCP server
+
+`python -m uvmls mcp [DIR] [-f tb.f ...]` speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio (newline-delimited JSON-RPC, implemented in `server/uvmls/mcp.py` without the `mcp` SDK, so the server still depends only on pyslang and pygls). An AI assistant then asks the same index the editor uses instead of guessing from grep: which classes play which UVM role, what `uvm_test_top` looks like under a test once its factory overrides apply, where a config_db field is set and read, what lint and slang's elaboration report, where a name is declared and what its hover says. It takes the other CLI commands' flags; without any it reads the `uvm.*` keys of `DIR/.vscode/settings.json` (one folder's file, a convenience, not VS Code's merge of user and workspace settings). Paths in `-f` and `-I` are relative to the directory the server starts in, as for the other commands.
+
+In VS Code the extension registers it as an MCP server definition provider: **MCP: List Servers** shows "UVM Language Server", started with the resolved `uvm.pythonPath` (or the language server's interpreter), `-m uvmls mcp <first workspace folder>` plus the `uvm` settings as flags, the folder as working directory and `PYTHONPATH` set to the server directory; the "UVM MCP" output channel logs that command line. The definition follows the settings, and `uvm.mcp.enabled` turns it off. Copilot and other agents in the editor can then call its tools.
+
+Outside the IDE, the package must be importable by the interpreter (`PYTHONPATH=.../server`, or `pip install ./server`). Claude Code, run from the testbench directory:
+
+```bash
+claude mcp add uvmls -e PYTHONPATH=/path/to/uvm-language-server/server -- /path/to/.venv/bin/python -m uvmls mcp . -f tb.f
+```
+
+Claude Desktop (`claude_desktop_config.json`) and a `.vscode/mcp.json` for a folder without the extension:
+
+```json
+{
+  "mcpServers": {
+    "uvmls": {
+      "command": "/path/to/.venv/bin/python",
+      "args": ["-m", "uvmls", "mcp", "/path/to/tb", "-f", "/path/to/tb/tb.f"],
+      "env": { "PYTHONPATH": "/path/to/uvm-language-server/server" }
+    }
+  }
+}
+```
+
+```json
+{
+  "servers": {
+    "uvmls": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/../.venv/bin/python",
+      "args": ["-m", "uvmls", "mcp", "${workspaceFolder}", "-f", "${workspaceFolder}/tb.f"],
+      "env": { "PYTHONPATH": "${workspaceFolder}/../server" }
+    }
+  }
+}
+```
+
+`tools/mcp_smoke.py` is a small client for checks by hand: `python tools/mcp_smoke.py --call topology '{"test": "alu_error_test"}' -- .venv/bin/python -m uvmls mcp examples/alu_tb -f alu_tb.f` (run from the repository root; the tests drive the server through it).
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `stats` | - | the index statistics, the UVM library in use, the index version, seconds since the last (re)index |
+| `tests` | - | every test class with package, base and location; the default test and the `run_test()` calls |
+| `classes` | `query` (substring or glob), `role`, `package`, `library`, `limit`, `offset` | qualified name, role, base class, location |
+| `class` | `name` (qualified when several packages declare it; otherwise the candidates are named) | base chain with bindings, properties with types, methods with signatures, bodies and doc comments, registration macro, subclasses, where the factory creates it |
+| `topology` | `test` | the `uvm_test_top` tree as `topology --json` gives it (`overriddenFrom`, `conditional`, `createdAt`), connections and override calls; an unknown test names the known ones |
+| `effective_type` | `test`, `file`, `line`, `limit`, `offset` | per factory create: type written, type made after the test's overrides, the override call, instance counts |
+| `config_db` | `field`, `status` (`ok`, `no-set`, `no-get`, `type-mismatch`, `dynamic`), `file`, `limit`, `offset` | rows of the cross-reference: each set and get with type, scope pattern, context, owner, method, optional, conditional |
+| `lint` | `codes`, `file`, `severity`, `limit`, `offset` | what `uvmls lint` reports, `// uvm-lint: ignore` directives applied |
+| `elaborate` | `tops` | slang's elaboration in the worker subprocess: top modules, counts, the first diagnostics (`truncated` when the display limits cut the list) |
+| `definition`, `hover`, `references`, `signature` | `file`, `line`, `col` (1-based, columns in characters) | what the editor shows there; a library file or a path outside the workspace is refused |
+| `symbols` | `query`, `definition`, `limit`, `offset` | workspace symbols (characters in order); with `definition`, an exact class or unit name's declaration |
+| `sequences` | `limit`, `offset` | sequence classes with item type and `p_sequencer`, and every `seq.start(sequencer)` site with the sequence it resolves to (`null` when it cannot, as for a macro's local) |
+| `creates` | `type`, `file`, `limit`, `offset` | every `type_id::create` with the resolved type, instance name, parent, owner and method |
+| `includes` | `file`, `limit`, `offset` | which roots reach a file, what it includes, what includes it |
+| `units` | `kind`, `library`, `limit`, `offset` | modules, interfaces, programs and packages with ports, parameters, instances, imports, `run_test()` calls |
+| `macros`, `typedefs` | `query`, `library`, `limit`, `offset` | definitions with locations |
+| `reindex` | - | rebuilds the index and returns `stats` |
+
+Resources: `uvm://stats`, `uvm://topology` and `uvm://topology/{test}`, `uvm://configdb`, `uvm://lint` (JSON) and `uvm://file/{path}` (the indexed text of a file under the workspace root).
+
+What to expect: every location has 1-based lines and character columns and a path relative to the workspace root (the CLI's `--json` keeps its 0-based byte columns). List tools take `limit` (default 200, at most 2000) and `offset` and return `items`, `total` and `truncated`. The server reads the files on disk: unsaved editor text is not visible, and the index refreshes itself when a file changes (checked before a tool call, at most once a second; a changed file re-parses the roots that include it, a file created or deleted or a changed filelist rebuilds everything, `reindex` forces it). Runtime values are not evaluated: the topology and config_db answers are the same static views as in the editor. Nothing writes files or runs code; `elaborate` compiles with slang in the `elab-worker` subprocess with the same 120 s limit as the editor, later tool calls wait for it, and `ping` is answered meanwhile. Starting costs one index (0.3 s for the example with the bundled UVM; see the performance table), and the first call after a file change pays one root re-parse. The protocol is the initialize handshake of revisions 2024-11-05 to 2025-11-25 (echoed, else 2025-11-25); the stateless 2026-07-28 revision's `server/discover` is refused so such clients fall back to it. Logs go to stderr.
+
 ## Try it
 
 ```bash
@@ -176,9 +242,11 @@ server/uvmls/
   naturaldocs.py UVM's NaturalDocs comments as Markdown (hover) or plain text (class graph)
   server.py      LSP over stdio (pygls) plus custom requests uvm/classGraph, uvm/topology, uvm/configDb
   cli.py         command line
+  mcp.py         MCP server over stdio (`python -m uvmls mcp`): JSON-RPC transport, tools and resources over the index
   sarif.py       lint and elaboration diagnostics as SARIF 2.1.0
 server/tools/gen_uvm_shim.py   regenerates the macro shim from a UVM source tree
-server/tests/                  unit tests and an end-to-end LSP test over stdio
+server/tests/                  unit tests and end-to-end LSP and MCP tests over stdio
+tools/mcp_smoke.py             a small MCP client, for the tests and for checks by hand
 client/                        VS Code extension (TypeScript); webview/diagram.ts renders ELK layouts as SVG
 examples/alu_tb/               a complete small UVM testbench (it elaborates cleanly with slang + UVM)
 ```
@@ -212,12 +280,12 @@ The synthetic project is regular and much smaller per file than a real one. Trea
 
 ## Where this stands against DVT
 
-Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this project only starts to cover: a UVM Browser, ConfigDB and Factory Overrides views, **runtime-accurate UVM elaboration** (it handles loops and conditions), an AI assistant with an agentic mode, and an MCP server.
+Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this project only starts to cover: a UVM Browser, ConfigDB and Factory Overrides views, **runtime-accurate UVM elaboration** (it handles loops and conditions), an AI assistant with an agentic mode, and an MCP server (40 tools, licensed separately; it has no config_db, factory-override or sequence tools, which `uvmls mcp` has, and ours needs no IDE).
 "Outshine DVT in every way" is not a realistic near-term target. Being better on specific axes is:
 
 1. **Speed and zero setup.** Sub-second incremental updates, and reading the simulator filelist as-is.
 2. **Visual exploration.** A live, searchable class graph and topology that update as you type, with drill-down that scales.
-3. **Open and scriptable.** CLI and JSON for CI gates, plus an index others can build on.
+3. **Open and scriptable.** CLI and JSON for CI gates, an MCP server so agents query the same index, plus an index others can build on.
 4. **Static analysis people can trust.** Every finding links to source; approximations are labelled ("conditional", "static view").
 
 ## Roadmap (suggested order)
@@ -226,13 +294,14 @@ Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this pr
 2. Topology precision: resolve `config_db` scopes against instance paths (which `set` reaches which `get`), propagate simple constant knobs (`is_active = UVM_PASSIVE`), and handle loop-created arrays of components.
 3. Sequence ↔ sequencer view (`start()`, `` `uvm_do_on ``, `p_sequencer`) and a register-model view.
 4. Rename and semantic tokens. Scale work: cache parsed roots on disk, and move the identifier/body walks to C++ (a fork of slang-server, or pyslang visitors).
-5. MCP server over the same index, so AI assistants can query real facts ("where is this agent's config set?").
+5. MCP server over the same index, so AI assistants can query real facts ("where is this agent's config set?"): shipped, see [MCP server](#mcp-server); an in-editor chat participant is a separate item.
 6. Optional full elaboration with slang when the design compiles, to replace the static topology with an exact one.
 
 ## Known limitations
 
 - Topology and config_db matching are static approximations. Runtime-computed instance names, `for` loops creating arrays, and knobs set in derived tests are shown as conditional or by expression, not evaluated.
 - References are name-based (all identifier occurrences), not type-resolved.
+- The MCP server sees the files on disk, never unsaved editor text, and answers from the same static views: runtime values, loops and conditions are reported, not evaluated. Its `references` are name-based like the editor's.
 - If a document contains identical lines, an unrelated edit can disable quick fixes for fresh diagnostics on those lines in clients that do not return diagnostic `data` with code-action requests. VS Code returns it and is not affected.
 - Code inside inactive `` `ifdef `` branches is not indexed. Defines come from the filelist and `uvm.defines`.
 - The bundled library is UVM 1.2. A project on UVM 1.1d or IEEE 1800.2 should set `uvm.uvmHome` (or `$UVM_HOME`) or list its own `uvm_pkg.sv` in the filelist; otherwise navigation and the class graph show the 1.2 declarations.
