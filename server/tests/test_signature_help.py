@@ -1598,6 +1598,7 @@ endclass
     signature(help_at(doc, 'set_drain_time(this,'), ['uvm_object obj = null', 'time drain'], 1,
               'function void set_drain_time(uvm_object obj = null, time drain)')
 
+
 def test_calls_on_a_call_result_keep_the_receiver_parameters(tmp_path):
     text = '''class holder #(type T = int);
   typedef holder #(T) this_t;
@@ -1618,6 +1619,7 @@ endclass
 '''
     assert labels_in(tmp_path, text, ['get().calc("x",', 'self_().calc("y",', 'peer.calc("z",', 'h.calc("w",']) == \
         ['function string calc(string a, int b)'] * 4
+
 
 def test_calls_in_report_macro_arguments_with_the_built_in_model(tmp_path):
     text = '''`include "uvm_macros.svh"
