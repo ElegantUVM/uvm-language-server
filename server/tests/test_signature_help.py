@@ -526,6 +526,27 @@ def test_factory_named_arguments_and_incomplete_multiline(client, tb):
         d.close()
 
 
+def test_macro_usage_arguments(client, tb):
+    d = Doc(client, os.path.join(tb, 'env/alu_env.svh'))
+    create = ['string name', 'uvm_component parent', 'string contxt = ""']
+    try:
+        d.change('`define CHILD_NAME "m_agent"\n`define MK(n) n\n' + d.text.replace(
+            'create("m_agent", this);',
+            'create(`CHILD_NAME, this);\n    m_agent = alu_agent::type_id::create(`MK("m_agent"), this);\n'
+            '    uvm_report_info("ID", "msg", UVM_LOW, `__FILE__, `__LINE__);'))
+        signature(help_at(d, 'create('), create, 0)
+        signature(help_at(d, 'create(`CHI'), create, 0)
+        signature(help_at(d, 'create(`CHILD_NAME, '), create, 1)
+        signature(help_at(d, '`MK('), create, 0)
+        signature(help_at(d, '`MK("m_agent"), '), create, 1)
+        info = help_at(d, 'UVM_LOW, ')
+        assert info['signatures'][0]['label'].startswith('function void uvm_report_info(string id,')
+        assert info['activeParameter'] == 3
+        assert help_at(d, '`__FILE__, `__LI')['activeParameter'] == 4
+    finally:
+        d.close()
+
+
 def test_named_declaration_change_in_another_buffer(client, tb):
     caller = Doc(client, os.path.join(tb, 'agent/alu_agent.svh'))
     declaration = Doc(client, os.path.join(tb, 'agent/alu_driver.svh'))

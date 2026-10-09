@@ -511,7 +511,7 @@ endclass
     made, original = [], Extractor.make_range
     with patch.object(Extractor, 'make_range', lambda self, *a: made.append(original(self, *a)) or made[-1]):
         ex.collect_source_ranges()
-    assert {r.path for r, _ in made} == {path} and len(ex.out.directives) == 2  # `include, `uvm_component_utils
+    assert {r.path for r, _ in made} == {path} and len(ex.out.directives) == 1  # `include
     assert not any(ex._line_starts.values())
     # Folding in a library file collects its root's pairs on first use.
     component = next(f for f in lib.files if f.endswith('uvm_component.svh'))

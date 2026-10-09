@@ -1578,6 +1578,7 @@ class Extractor:
         sm = self.sm
         path_of, in_library, position = self.path_of, self.in_library, self.physical_position
         directive, disabled, identifier = P.TriviaKind.Directive, P.TriviaKind.DisabledText, TK.Identifier
+        macro_usage = K.MacroUsage
         seen = set()
 
         def visit(tok):
@@ -1590,6 +1591,8 @@ class Extractor:
                 if trivia.kind != directive:
                     continue
                 syntax = trivia.syntax()
+                if syntax.kind == macro_usage:
+                    continue  # code: its arguments are as written and its expansion is parsed
                 sr = syntax.sourceRange
                 path = path_of(sr.start.buffer)
                 if path is None or in_library(path) or sr.start.buffer != sr.end.buffer or \
