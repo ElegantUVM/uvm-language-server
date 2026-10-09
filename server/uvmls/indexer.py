@@ -414,9 +414,10 @@ def physical_position(sm, loc, line_starts: dict) -> tuple[int, int]:
     if bid not in line_starts:
         try:
             text = sm.getSourceText(loc.buffer)
-            raw = text.encode("utf-8") if "`line" in text or LF_CR.search(text) else None
+            # Substring tests first: a pattern that starts with a lookbehind is tried at every offset.
+            raw = text.encode("utf-8") if "`line" in text or "\n\r" in text and LF_CR.search(text) else None
         except UnicodeDecodeError as e:
-            raw = e.object if b"`line" in e.object or LF_CR_BYTES.search(e.object) else None
+            raw = e.object if b"`line" in e.object or b"\n\r" in e.object and LF_CR_BYTES.search(e.object) else None
         # Without a `line directive, slang's (cached) line numbers are the physical ones, unless
         # an LF CR pair, one line break to slang, is two to an editor.
         line_starts[bid] = None if raw is None else [0] + [m.end() for m in re.finditer(rb"\r\n|\r|\n", raw)]
