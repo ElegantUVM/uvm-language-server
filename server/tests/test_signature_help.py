@@ -1300,6 +1300,84 @@ endpackage
     assert labels_in(tmp_path, text, ['obj.go(1', 'obj.go(2', 'mine.go(3']) == ['function void go(int right)'] * 3
 
 
+def test_nested_classes_belong_to_the_class_whose_body_declares_them(tmp_path):
+    """Two modules each declare `outer` with a nested `item`: each resolves to its own."""
+    text = '''module a;
+ class outer;
+  class item; function void go(int aa_arg); endfunction endclass
+  item obj; function void run(); obj.go(1); endfunction
+ endclass
+endmodule
+module b;
+ class outer;
+  class item; function void go(string bb_arg); endfunction endclass
+  item obj; function void run(); obj.go("ok"); endfunction
+ endclass
+endmodule
+'''
+    assert labels_in(tmp_path, text, ['obj.go(1', 'obj.go("ok"']) == \
+        ['function void go(int aa_arg)', 'function void go(string bb_arg)']
+
+
+def test_qualified_lookup_sees_only_members(tmp_path):
+    """`outer::inner::sibling` names nothing: sibling is outer's member, not inner's."""
+    text = '''class outer;
+ class sibling; static function void go(int wrong); endfunction endclass
+ class inner; endclass
+endclass
+module tb; initial outer::inner::sibling::go(1); endmodule
+'''
+    assert labels_in(tmp_path, text, ['sibling::go(']) == [None]
+
+
+def test_package_declaration_hides_what_it_reexports(tmp_path):
+    """middle's own go() is what `import middle::*` sees, not the aa::go it re-exports."""
+    text = '''package aa;
+ function void go(string wrong); endfunction
+endpackage
+package middle;
+ import aa::*;
+ export aa::*;
+ function void go(int correct); endfunction
+endpackage
+module tb; import middle::*; initial go(1); endmodule
+'''
+    assert labels_in(tmp_path, text, ['initial go(']) == ['function void go(int correct)']
+
+
+def test_reexport_follows_the_import_by_name(tmp_path):
+    """Inside middle, `import zz::go` hides the wildcard aa::go (IEEE 1800 26.3); its export
+    passes zz's go on, through `import middle::*` and as `middle::go`."""
+    text = '''package aa;
+ function void go(string wrong); endfunction
+ class item; static function void go(string wrong); endfunction endclass
+endpackage
+package zz;
+ function void go(int correct, int second); endfunction
+ class item; static function void go(int correct); endfunction endclass
+endpackage
+package middle;
+ import aa::*;
+ import zz::go;
+ import zz::item;
+ export *::*;
+endpackage
+module tb; import middle::*; initial begin go(1,2); middle::go(1,2); middle::item::go(1); end endmodule
+'''
+    assert labels_in(tmp_path, text, ['begin go(', 'middle::go(', 'item::go(']) == \
+        ['function void go(int correct, int second)'] * 2 + ['function void go(int correct)']
+
+
+def test_ambiguous_reexport_names_nothing(tmp_path):
+    """Two wildcard imports re-exported together leave `middle::go` ambiguous."""
+    text = '''package aa; function void go(int aa_arg); endfunction endpackage
+package zz; function void go(string zz_arg); endfunction endpackage
+package middle; import aa::*; import zz::*; export *::*; endpackage
+module tb; initial middle::go(1); endmodule
+'''
+    assert labels_in(tmp_path, text, ['middle::go(']) == [None]
+
+
 @pytest.mark.parametrize('imports,label', [
     ('import first::*;\nimport second::*;', None),
     ('', None),

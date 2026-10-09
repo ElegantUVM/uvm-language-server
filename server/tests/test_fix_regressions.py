@@ -134,6 +134,29 @@ def test_utils_mismatch_requires_the_replacement_end_macro(tmp_path, monkeypatch
     assert offered(w, d) == []
 
 
+def test_utils_mismatch_sees_the_base_declared_before_a_nested_one(tmp_path):
+    """`child extends base` before outer's own nested `base` extends the global component."""
+    text = """`include "uvm_macros.svh"
+import uvm_pkg::*;
+class base extends uvm_component;
+ function new(string name, uvm_component parent); super.new(name,parent); endfunction
+endclass
+class outer;
+ class child extends base;
+  `uvm_component_utils(child)
+  function new(string name, uvm_component parent); super.new(name,parent); endfunction
+ endclass
+ class base extends uvm_object;
+  function new(string name=""); super.new(name); endfunction
+ endclass
+endclass
+module tb; outer::child c; endmodule
+"""
+    w = index(tmp_path, {"t.sv": text}, bundled=True)
+    assert w.role(w.class_by_qual["outer::child"]) == "component"
+    assert findings(w, "utils-mismatch") == []
+
+
 def test_parent_fix_rechecks_argument_count_in_same_length_text(tmp_path):
     text = COMPONENT.replace('create("m_drv", this)', 'create("m_drv")')
     w = index(tmp_path, {"t.sv": text})

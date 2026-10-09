@@ -57,6 +57,32 @@ endpackage
     assert 'go' in nav.hover(path, line, col, text)
 
 
+def test_a_nested_class_is_visible_after_its_declaration(tmp_path):
+    """`child extends base` written before outer's own nested `base` extends the global one."""
+    from test_fixes import index
+    from uvmls.views import class_graph
+
+    text = '''class base;
+ function void go(int correct, int second); endfunction
+endclass
+class outer;
+ class child extends base;
+  function void run(); go(1,2); endfunction
+ endclass
+ class base;
+  function void go(string wrong); endfunction
+ endclass
+endclass
+module tb; outer::child c; endmodule
+'''
+    ws = index(tmp_path, {'t.sv': text})
+    line = text.splitlines().index('  function void run(); go(1,2); endfunction')
+    col = text.splitlines()[line].index('go(1,2)')
+    assert 'int correct, int second' in Navigator(ws).hover(str(tmp_path / 't.sv'), line, col, text)
+    assert [e['target'] for e in class_graph(ws)['edges']
+            if e['source'] == 'outer::child' and e['kind'] == 'extends'] == ['base']
+
+
 def test_types_scoped_by_a_specialization_resolve(tmp_path):
     from test_fixes import findings, index
     from uvmls import signatures
