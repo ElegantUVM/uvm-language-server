@@ -82,11 +82,18 @@ def test_agent_occurrences_and_current_buffer(doc):
     assert highlight_at(doc, "m_driver;") == expected
 
 
-@pytest.mark.parametrize("needle,offset", [("m_driver;", 8), ("m_driver    =", 8),
+@pytest.mark.parametrize("needle", ["m_driver;", "m_driver    =", "m_driver.seq_item_port"])
+def test_word_end(doc, needle):
+    # Editors ask with the cursor after the word: once it is typed, at End, after a double click.
+    assert highlight_at(doc, needle, len("m_driver")) == agent_highlights(doc.text)
+
+
+@pytest.mark.parametrize("needle,offset", [("m_driver;", 9), ("    =", 2),
     ("// m_driver", 4), ('"m_driver"', 2), ("`ifdef NEVER_DEFINED\n  int m_driver", 28)])
 def test_non_identifiers(doc, needle, offset):
     doc.change(doc.text + '\n// m_driver\n`ifdef NEVER_DEFINED\n  int m_driver;\n`endif\n')
-    assert highlight_at(doc, needle, offset) == []
+    # Nothing indexed: the editor highlights the word itself, as it does without the server.
+    assert highlight_at(doc, needle, offset) is None
 
 
 @pytest.mark.parametrize("line_directives", [False, True])
@@ -119,7 +126,7 @@ class b; int value; endclass
             ("class b; int value;", 13, "value")])
         assert highlight_at(d, "int value;", 4) == expected
         assert highlight_at(d, ".value(value)", 1) == expected
-        assert highlight_at(d, "`define GENERATED value", 18) == []
+        assert highlight_at(d, "`define GENERATED value", 18) is None
         refs = c.request("textDocument/references", {"textDocument": {"uri": d.uri},
             "position": position(source, source.index("int value;") + 4), "context": {"includeDeclaration": True}})
         assert len(refs) == len(expected) + 1
@@ -136,7 +143,7 @@ def test_position_encoding_crlf(tb, encoding):
         d.change(d.text.replace("m_driver", "/* 😀 */ m_driver").replace("\n", "\r\n").rstrip("\r\n"))
         codec = "utf-16-le" if encoding == "utf-16" else "utf-8"
         assert highlight_at(d, "m_driver;", 1, codec) == agent_highlights(d.text, codec)
-        assert highlight_at(d, "m_driver;", 8, codec) == []
+        assert highlight_at(d, "m_driver;", 8, codec) == agent_highlights(d.text, codec)
     finally:
         c.close()
 
@@ -161,7 +168,7 @@ def test_escaped_identifiers(tmp_path, encoding, offset):
         expected = highlights(text, needles, codec)
         for needle, _, word in needles:
             assert highlight_at(d, needle, offset, codec) == expected
-            assert highlight_at(d, needle, len(word), codec) == []
+            assert highlight_at(d, needle, len(word), codec) == expected
     finally:
         c.close()
 
@@ -237,8 +244,8 @@ def test_agent_keyword_pairs(doc, opening, closing):
     expected = pair_highlights(doc.text, opening, closing)
     assert highlight_at(doc, opening, 1) == expected
     assert highlight_at(doc, closing, 1) == expected
-    assert highlight_at(doc, opening, len(opening.split()[0])) == []
-    assert highlight_at(doc, closing, len(closing.split()[0])) == []
+    assert highlight_at(doc, opening, len(opening.split()[0])) == expected
+    assert highlight_at(doc, closing, len(closing.split()[0])) == expected
 
 
 @pytest.mark.parametrize("needle", ["class c", "endclass"])
@@ -256,8 +263,8 @@ def test_extern_task_keywords(client, tb):
             expected = pair_highlights(d.text, opening, closing)
             assert highlight_at(d, opening) == expected
             assert highlight_at(d, closing) == expected
-        assert highlight_at(d, "task run_phase") == []
-        assert highlight_at(d, "task drive_item") == []
+        assert highlight_at(d, "task run_phase") is None
+        assert highlight_at(d, "task drive_item") is None
     finally:
         d.close()
 
@@ -276,7 +283,7 @@ def test_nested_named_pairs_and_edits(doc):
     doc.change("\n\n" + SOURCE)
     assert highlight_at(doc, "begin : inner") == pair_highlights(doc.text, "begin : inner", "end : inner")
     doc.change("module m; initial begin : unmatched\n  int x;\nendmodule\n")
-    assert highlight_at(doc, "begin : unmatched") == []
+    assert highlight_at(doc, "begin : unmatched") is None
     assert folds(doc) == [{"startLine": 0, "endLine": 1}]
     doc.close()
     doc.text = original
@@ -290,11 +297,11 @@ def test_recovered_and_mismatched_pairs(doc):
     doc.change(original.replace("    super.build_phase(phase);\n",
                                 "    super.build_phase(phase);\n" + NESTED.replace("      end : inner\n", "")))
     for needle in ("begin : outer", "begin : inner", "end : outer"):
-        assert highlight_at(doc, needle) == []
+        assert highlight_at(doc, needle) is None
     doc.change(UNMATCHED)
     for needle, offset in [("if (b) begin", 7), ("begin : a", 0), ("end : b", 0), ("end : orphan", 0),
                            ("function void g", 0), ("endfunction : h", 0), ("class d", 0), ("endclass : e", 0)]:
-        assert highlight_at(doc, needle, offset) == []
+        assert highlight_at(doc, needle, offset) is None
     assert highlight_at(doc, "end else begin", 9) == pair_highlights(doc.text, "begin\n      y", "end\n  endfunction")
 
 
@@ -317,14 +324,14 @@ def test_nonstructural_keywords(doc, needle, offset):
     from test_folding_range import SOURCE
 
     doc.change(SOURCE)
-    assert highlight_at(doc, needle, offset) == []
+    assert highlight_at(doc, needle, offset) is None
 
 
 @pytest.mark.parametrize("source,needle", [("class c;\n int x;", "class"),
     ("function void f();\n int x;", "function"), ("task f();\n int x;", "task")])
 def test_unmatched_keywords(doc, source, needle):
     doc.change(source)
-    assert highlight_at(doc, needle) == []
+    assert highlight_at(doc, needle) is None
 
 
 @pytest.mark.parametrize("encoding", ["utf-16", "utf-8"])
@@ -377,6 +384,7 @@ def test_library_keywords_use_current_source(tmp_path):
     try:
         d = Doc(c, str(path))
         assert highlight_at(d, "class uvm_object") == pair_highlights(text, "class uvm_object", "endclass")
+        assert highlight_at(d, "value") is None  # library identifiers are not indexed
         d.change("\n" + text)
         assert highlight_at(d, "class uvm_object") == pair_highlights(d.text, "class uvm_object", "endclass")
         d.close()

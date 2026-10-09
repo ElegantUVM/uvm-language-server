@@ -891,7 +891,9 @@ def _compute_document_highlight(ls: UvmLanguageServer, params: T.DocumentHighlig
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
         ranges = ls.nav.document_highlights(path, params.position.line, _indexed_column(ls, path, params.position))
-        return [T.DocumentHighlight(_indexed_range(ls, r), T.DocumentHighlightKind.Text) for r in ranges]
+        # Nothing indexed there (a comment, a library file's identifier): None lets the editor
+        # highlight the word itself, which an empty list would stop.
+        return [T.DocumentHighlight(_indexed_range(ls, r), T.DocumentHighlightKind.Text) for r in ranges] or None
 
 
 async def folding_range(ls: UvmLanguageServer, params: T.FoldingRangeParams):

@@ -662,19 +662,40 @@ class Navigator:
         return out
 
     def document_highlights(self, path, line, col) -> list[Range]:
-        pairs = [p for p in self.ws.structures_in(path)
-                 if any((r.line, r.col) <= (line, col) < (r.end_line, r.end_col) for r in (p.opening, p.closing))]
-        if pairs:
+        """A keyword's matched pair, or the occurrences of an identifier in the file. The position
+        just after a word is on it, unless a word starts there: editors ask with the cursor there."""
+        pos = (line, col)
+        structures = self.ws.structures_in(path)
+
+        def pair_at(on):
+            pairs = [p for p in structures if on(p.opening) or on(p.closing)]
+            if not pairs:
+                return None
             pair = min(pairs, key=lambda p: (p.closing.line - p.opening.line, p.closing.col - p.opening.col))
             return [pair.opening, pair.closing]
+
+        def inside(r):
+            return (r.line, r.col) <= pos < (r.end_line, r.end_col)
+
+        def after(r):
+            return (r.end_line, r.end_col) == pos
+
+        if found := pair_at(inside):
+            return found
+        ended = None
         for idx in self.ws.indices.values():
             if path not in idx.files:
                 continue
             for name, ranges in idx.identifiers.items():
-                if any(r.path == path and (r.line, r.col) <= (line, col) < (r.end_line, r.end_col)
-                       for r in ranges):
-                    return self.occurrences(name, path)
-        return []
+                for r in ranges:
+                    if r.path == path:
+                        if inside(r):
+                            return self.occurrences(name, path)
+                        if ended is None and after(r):
+                            ended = name
+        if found := pair_at(after):
+            return found
+        return self.occurrences(ended, path) if ended is not None else []
 
     def folding_ranges(self, path) -> list[tuple[int, int, str | None]]:
         """(start, end, kind) of a file's folds, outer before inner on a shared start. Syntax and
