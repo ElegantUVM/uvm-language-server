@@ -52,7 +52,7 @@ def agent_folds(text):
                     fold(text, "function new", "endfunction"),
                     fold(text, "function void build_phase", "endfunction"),
                     fold(text, "function void connect_phase", "endfunction"),
-                    fold(text, "begin", "    end\n")])
+                    fold(text, "UVM_ACTIVE) begin", "    end\n")])
 
 
 @pytest.mark.parametrize("caps,present", [({}, False), (CAPS, True),
@@ -166,10 +166,76 @@ def test_line_directives_inside_folds(doc):
 def test_nested_named_procedural_and_generated_blocks(doc):
     doc.change(SOURCE)
     assert folds(doc) == source_folds(SOURCE)
-    doc.change(SOURCE.replace("      end : inner", "      // closing token removed"))
-    result = folds(doc)
-    assert len(result) < len(source_folds(SOURCE))
-    assert all(r["endLine"] > r["startLine"] for r in result)
+    # The inner begin is given `end : outer` and the outer begin no end: neither block folds.
+    text = SOURCE.replace("      end : inner", "      // closing token removed")
+    doc.change(text)
+    assert folds(doc) == ordered([fold(text, "class c", "endclass\n"), fold(text, "function void f", "  endfunction"),
+                                  fold(text, "begin : proc", "end : proc"), fold(text, "begin : gen", "end : gen")])
+
+
+NESTED = "    begin : outer\n      begin : inner\n        int q;\n        q = 1;\n      end : inner\n    end : outer\n"
+
+
+def test_removed_inner_end_in_build_phase(doc):
+    original = doc.text
+    text = original.replace("    super.build_phase(phase);\n", "    super.build_phase(phase);\n" + NESTED)
+    doc.change(text)
+    assert folds(doc) == ordered(agent_folds(text) + [fold(text, "begin : outer", "end : outer"),
+                                                      fold(text, "begin : inner", "end : inner")])
+    # slang pairs `begin : inner` with `end : outer` and the outer begin with no end.
+    text = original.replace("    super.build_phase(phase);\n",
+                            "    super.build_phase(phase);\n" + NESTED.replace("      end : inner\n", ""))
+    doc.change(text)
+    assert folds(doc) == agent_folds(text)
+    # The outer begin has no end, and what it holds keeps its own.
+    text = original.replace("    super.build_phase(phase);\n",
+                            "    super.build_phase(phase);\n" + NESTED.replace("    end : outer\n", ""))
+    doc.change(text)
+    assert folds(doc) == ordered(agent_folds(text) + [fold(text, "begin : inner", "end : inner")])
+
+
+UNMATCHED = '''class c;
+  function void f();
+    if (a) begin
+      if (b) begin
+        x = 1;
+      // inner end deleted
+    end else begin
+      y = 1;
+    end
+  endfunction
+endclass
+module m;
+  initial begin : a
+    x = 1;
+  end : b
+  initial begin
+    x = 1;
+  end : orphan
+endmodule
+class d;
+  function void g();
+    x = 1;
+  endfunction : h
+endclass : e
+'''
+
+
+def test_unlabelled_missing_end_and_mismatched_labels(doc):
+    doc.change(UNMATCHED)
+    # `if (b) begin` is given the end before `else`; the else block keeps the end below it.
+    assert folds(doc) == ordered([fold(UNMATCHED, "class c", "endclass"),
+                                  fold(UNMATCHED, "function void f", "endfunction"),
+                                  fold(UNMATCHED, "end else begin", "    end\n  endfunction")])
+
+
+def test_unclosed_begin_keeps_blocks_it_holds(doc):
+    # While a new begin waits for its end, the blocks after it keep their folds.
+    text = ("class c;\n  function void f();\n    begin\n    x = 1;\n    if (x) begin\n      y = 1;\n"
+            "    end\n  endfunction\nendclass\n")
+    doc.change(text)
+    assert folds(doc) == ordered([fold(text, "class c", "endclass"), fold(text, "function", "endfunction"),
+                                  fold(text, "if (x) begin", "    end")])
 
 
 @pytest.mark.parametrize("source,expected", [

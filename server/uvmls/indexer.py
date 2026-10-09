@@ -35,7 +35,14 @@ SHIM_BUFFER_NAME = "<uvm-macro-shim>"
 UVM_MACROS_PRELUDE = "<uvm-macros-prelude>"
 
 FUNC_DECLS = (K.FunctionDeclaration, K.TaskDeclaration)
-STRUCTURE_KINDS = (K.ClassDeclaration, *FUNC_DECLS, K.SequentialBlockStatement, K.GenerateBlock)
+# A structure's matched keywords: kind -> (opening, closing, names, end name), as attribute paths.
+STRUCTURES = {
+    K.ClassDeclaration: ("classKeyword", "endClass", ("name",), "endBlockName"),
+    **{k: ("prototype.keyword", "end", ("prototype.name",), "endBlockName") for k in FUNC_DECLS},
+    K.SequentialBlockStatement: ("begin", "end", ("blockName", "label"), "endBlockName"),
+    K.GenerateBlock: ("begin", "end", ("beginName", "label"), "endName"),
+}
+STRUCTURE_KINDS = frozenset(STRUCTURES)
 # Syntax that holds none of them: a library's walk for folds skips it (most of its nodes).
 NO_STRUCTURE_KINDS = frozenset([K.ExpressionStatement, K.DataDeclaration, K.FunctionPrototype, K.ConditionalPredicate,
                                 K.ReturnStatement, K.ParameterDeclarationStatement, K.TypedefDeclaration,
@@ -428,6 +435,32 @@ def physical_position(sm, loc, line_starts: dict) -> tuple[int, int]:
     return line, loc.offset - starts[line]
 
 
+def _attribute(node, path: str):
+    for name in path.split("."):
+        node = getattr(node, name, None)
+        if node is None:
+            break
+    return node
+
+
+def _label(x) -> str | None:
+    """The name a structure's label, block name or (scoped) declaration name gives it."""
+    if x is None:
+        return None
+    tok = x if isinstance(x, Token) else getattr(x, "name", None)
+    if not isinstance(tok, Token):
+        tok = x.getLastToken()  # `alu_driver::run_phase` ends `endtask : run_phase`
+    if tok is None or tok.isMissing:
+        return None
+    return tok.valueText or None
+
+
+def _family(closer) -> TK:
+    """What a closing keyword closes: `join_any` and `join_none` close what `join` does."""
+    k = closer.kind
+    return TK.JoinKeyword if k in (TK.JoinAnyKeyword, TK.JoinNoneKeyword) else k
+
+
 def _raw_length(trivia) -> int:
     """Length in bytes of a piece of trivia as it is in the file."""
     try:
@@ -546,6 +579,8 @@ class Extractor:
         self._paths: dict[int, str | None] = {}
         self._line_starts: dict[int, list[int] | None] = {}
         self._argument_calls: set[Range] = set()
+        self._suspect: set[tuple[int, int]] = set()  # openers whose closer slang's recovery may have taken
+        self._sources: dict[int, bytes] = {}
 
     # -- locations -----------------------------------------------------------
 
@@ -1601,20 +1636,55 @@ class Extractor:
             self.out.ignores[path] = lines
 
     def structural_pair(self, node):
-        if node.kind == K.ClassDeclaration:
-            opening, closing = node.classKeyword, node.endClass
-        elif node.kind in FUNC_DECLS:
-            opening, closing = node.prototype.keyword, node.end
-        elif node.kind in (K.SequentialBlockStatement, K.GenerateBlock):
-            opening, closing = node.begin, node.end
-        else:
+        opening_path, closing_path, names, end_name = STRUCTURES[node.kind]
+        opening, closing = _attribute(node, opening_path), _attribute(node, closing_path)
+        if opening is None or closing is None or opening.isMissing:
             return
-        if opening.isMissing or closing.isMissing:
+        if closing.isMissing:
+            self.suspect_within(node, _family(closing))
             return
+        end = _label(_attribute(node, end_name))
+        if end is not None and end != next(filter(None, (_label(_attribute(node, p)) for p in names)), None):
+            return  # `end : b` does not close `begin : a`
         a, b = self.keyword_range(opening), self.keyword_range(closing)
-        if a is not None and b is not None and a.path == b.path and \
-                (a.end_line, a.end_col) <= (b.line, b.col):
-            self.out.structures.append(StructuralPair(a, b))
+        if a is None or b is None or a.path != b.path or (a.end_line, a.end_col) > (b.line, b.col):
+            return
+        loc = opening.location
+        if (loc.buffer.id, loc.offset) in self._suspect and self.indent(loc) != self.indent(closing.location):
+            return
+        self.out.structures.append(StructuralPair(a, b))
+
+    def suspect_within(self, node, family):
+        """Recovery gives a missing closer's job to one inside: with the inner end of `begin begin
+        end` removed, the inner begin is paired with the outer end. Which pair inside took a closer
+        is not known: one whose closer is not indented as its opener is taken to be it."""
+        stack = [node]
+        while stack:
+            n = stack.pop()
+            for c in n:
+                if not isinstance(c, Node):
+                    continue
+                if c.kind in STRUCTURE_KINDS:
+                    opening_path, closing_path, _, _ = STRUCTURES[c.kind]
+                    opening, closing = _attribute(c, opening_path), _attribute(c, closing_path)
+                    if opening is not None and closing is not None and _family(closing) == family:
+                        self._suspect.add((opening.location.buffer.id, opening.location.offset))
+                stack.append(c)
+
+    def source_bytes(self, buffer) -> bytes:
+        bid = buffer.id
+        if bid not in self._sources:
+            try:
+                self._sources[bid] = self.sm.getSourceText(buffer).encode("utf-8")
+            except UnicodeDecodeError as e:
+                self._sources[bid] = e.object
+        return self._sources[bid]
+
+    def indent(self, loc) -> bytes:
+        """The white space that starts the line holding a location."""
+        data = self.source_bytes(loc.buffer)
+        line = data[max(data.rfind(b"\n", 0, loc.offset), data.rfind(b"\r", 0, loc.offset)) + 1:loc.offset]
+        return line[:len(line) - len(line.lstrip(b" \t"))]
 
     def collect_structures(self) -> list[StructuralPair]:
         stack = [self.tree.root]

@@ -283,6 +283,21 @@ def test_nested_named_pairs_and_edits(doc):
     assert highlight_at(doc, "class alu_agent") == pair_highlights(original, "class alu_agent", "endclass")
 
 
+def test_recovered_and_mismatched_pairs(doc):
+    from test_folding_range import NESTED, UNMATCHED
+
+    original = doc.text
+    doc.change(original.replace("    super.build_phase(phase);\n",
+                                "    super.build_phase(phase);\n" + NESTED.replace("      end : inner\n", "")))
+    for needle in ("begin : outer", "begin : inner", "end : outer"):
+        assert highlight_at(doc, needle) == []
+    doc.change(UNMATCHED)
+    for needle, offset in [("if (b) begin", 7), ("begin : a", 0), ("end : b", 0), ("end : orphan", 0),
+                           ("function void g", 0), ("endfunction : h", 0), ("class d", 0), ("endclass : e", 0)]:
+        assert highlight_at(doc, needle, offset) == []
+    assert highlight_at(doc, "end else begin", 9) == pair_highlights(doc.text, "begin\n      y", "end\n  endfunction")
+
+
 def test_same_line_nested_pairs(doc):
     doc.change("module m; initial begin begin\n  int x;\nend end\nendmodule\n")
     expected = highlights(doc.text, [("begin begin", 0, "begin"), ("end end", 4, "end")])
