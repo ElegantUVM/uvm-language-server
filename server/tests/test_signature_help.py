@@ -1181,6 +1181,125 @@ endprogram
         ['function void go(string unit_arg)', 'function void solo(int solo_arg)']
 
 
+def test_package_typedef_hides_imported_class(tmp_path):
+    """A package's own typedef comes before a class a wildcard import brings in (IEEE 1800 26.3)."""
+    text = '''package imported;
+ class item; function void go(int wrong); endfunction endclass
+endpackage
+package p;
+ import imported::*;
+ class actual; function void go(int right); endfunction endclass
+ typedef actual item;
+ class user;
+  item obj;
+  function void run(); obj.go(1); endfunction
+ endclass
+endpackage
+'''
+    assert labels_in(tmp_path, text, ['obj.go(']) == ['function void go(int right)']
+
+
+@pytest.mark.parametrize('argument', ['holder #(pair #(T))', 'holder #(.T(pair #(T)))'])
+def test_composite_argument_keeps_lexical_bindings(tmp_path, argument):
+    """T in a generic class's `pair #(T)`, named or positional, means the specialization's argument
+    where that was written: pb::thing, not the pa::thing the generic class sees."""
+    text = '''package pa;
+class pair #(type T=int); T item; endclass
+class holder #(type T=int); T item; endclass
+class thing; function void go(int wrong); endfunction endclass
+class gen #(type T=int); ARGUMENT h; endclass
+endpackage
+package pb;
+import pa::*;
+class thing; function void go(int right); endfunction endclass
+class user;
+ gen #(thing) g;
+ function void run(); g.h.item.item.go(1); endfunction
+endclass
+endpackage
+module tb; pb::user u; endmodule
+'''.replace('ARGUMENT', argument)
+    assert labels_in(tmp_path, text, ['item.item.go(']) == ['function void go(int right)']
+
+
+@pytest.mark.parametrize('scope', ['wrap#(string)', 'W'])
+def test_scoped_typedef_keeps_owner_specialization(tmp_path, scope):
+    """`wrap #(string)::item_t`, written out or through a parameter bound to it, names the
+    typedef's target with wrap's parameters bound."""
+    text = '''class item #(type T=int);
+ function void go(T right); endfunction
+endclass
+class wrap #(type T=int);
+ typedef item#(T) item_t;
+endclass
+class user #(type W=wrap#(string));
+ SCOPE::item_t obj;
+ function void run(); obj.go("ok"); endfunction
+endclass
+module tb;
+ user u;
+ SCOPE_T::item_t obj;
+ initial obj.go("ok");
+endmodule
+'''.replace('SCOPE_T', 'wrap#(string)').replace('SCOPE', scope)
+    assert labels_in(tmp_path, text, ['run(); obj.go(', 'initial obj.go(']) == \
+        ['function void go(string right)'] * 2
+
+
+def test_package_function_return_resolves_in_its_package(tmp_path):
+    """A package function's return type names what the package declares."""
+    text = '''package p;
+ class item; function void go(int right); endfunction endclass
+ function item get(); return null; endfunction
+endpackage
+module tb;
+ initial p::get().go(1);
+endmodule
+'''
+    assert labels_in(tmp_path, text, ['p::get().go(']) == ['function void go(int right)']
+
+
+@pytest.mark.parametrize('call', ['go(1)', 'middle::item::go(1)'])
+def test_package_reexports(tmp_path, call):
+    """A package's export makes what it imports visible through it (IEEE 1800 26.6): a function
+    by wildcard import of the re-exporting package, and a class qualified by its name."""
+    text = '''package p;
+ function void go(int right); endfunction
+ class item; static function void go(int right); endfunction endclass
+endpackage
+package middle;
+ import p::go;
+ import p::item;
+ export p::go;
+ export p::item;
+endpackage
+module tb;
+ import middle::*;
+ initial CALL;
+endmodule
+'''.replace('CALL', call)
+    assert labels_in(tmp_path, text, ['initial ' + call[:-2]]) == ['function void go(int right)']
+
+
+def test_nested_classes_resolve_in_their_lexical_owner(tmp_path):
+    """A nested class is a member of its outer class (IEEE 1800 8.25): another class's nested
+    class of the same name is no candidate in the outer class, its subclasses or `outer::inner`."""
+    text = '''package p;
+ class a;
+  class inner; function void go(int right); endfunction endclass
+  inner obj;
+  function void run(); obj.go(1); endfunction
+ endclass
+ class b;
+  class inner; function void go(int wrong); endfunction endclass
+ endclass
+ class sub extends a; function void run2(); obj.go(2); endfunction endclass
+ class other; a::inner mine; function void run3(); mine.go(3); endfunction endclass
+endpackage
+'''
+    assert labels_in(tmp_path, text, ['obj.go(1', 'obj.go(2', 'mine.go(3']) == ['function void go(int right)'] * 3
+
+
 @pytest.mark.parametrize('imports,label', [
     ('import first::*;\nimport second::*;', None),
     ('', None),
