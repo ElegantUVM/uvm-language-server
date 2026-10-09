@@ -19,7 +19,7 @@ GAP_RE = re.compile(r"(?:\s+|//[^\r\n]*|/\*.*?\*/|`(?![A-Za-z_]))*", re.S)
 def call_at(ws, path, line, col):
     if path not in ws._signature_texts:
         ft = FileText(path, ws.texts.get(path, ""))
-        directives = sorted(span for r in ws.directives_by_file.get(path, ()) if (span := ft.span(r)) is not None)
+        directives = sorted(span for r in ws.directives_in(path) if (span := ft.span(r)) is not None)
         ends = {}
         for a, b in directives:
             ends[a] = max(ends.get(a, a), b)

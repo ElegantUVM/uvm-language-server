@@ -357,7 +357,7 @@ class FileIndex:
     folds: list[FoldRegion] = field(default_factory=list)
     invocations: list[CallSite] = field(default_factory=list)
     directives: list[Range] = field(default_factory=list)  # with disabled text; not macro usages
-    structures_pending: bool = False  # a library root's structures and folds, collected on first use
+    structures_pending: bool = False  # structures, folds and directives are collected on first use
     named_argument_labels: set[Range] = field(default_factory=set)
     ignores: dict[str, dict[int, list[str]]] = field(default_factory=dict)  # file -> line -> lint codes ignored there
     library: bool = False

@@ -81,7 +81,7 @@ def test_structural_pairs_are_plain_source_tokens(tmp_path):
 
     path = tmp_path / "structure.sv"
     path.write_text(SOURCE)
-    idx = Indexer([], {}, use_shim=True).parse(str(path))
+    idx = Indexer([], {}, use_shim=True).parse(str(path), complete=True)
     lines = SOURCE.splitlines()
     found = []
     for pair in idx.structures:
@@ -91,7 +91,7 @@ def test_structural_pairs_are_plain_source_tokens(tmp_path):
         found.append((lines[a.line][a.col:a.end_col], lines[b.line][b.col:b.end_col]))
     assert sorted(found) == sorted([("class", "endclass"), ("function", "endfunction"),
         ("function", "endfunction"), ("module", "endmodule")] + [("begin", "end")] * 5)
-    idx = Indexer([], {}, use_shim=True).parse(str(path), {str(path): "class c;\n int value;\n"})
+    idx = Indexer([], {}, use_shim=True).parse(str(path), {str(path): "class c;\n int value;\n"}, complete=True)
     assert idx.structures == []
 
 
@@ -134,9 +134,9 @@ endclass
     path = tmp_path / "line.sv"
     ix = Indexer([], {}, use_shim=True)
     path.write_bytes(source.replace(b"`line", b"//   "))
-    expected = ix.parse(str(path))
+    expected = ix.parse(str(path), complete=True)
     path.write_bytes(source)
-    idx = ix.parse(str(path))
+    idx = ix.parse(str(path), complete=True)
     assert {"c", "value", "f"} <= set(idx.identifiers)
     assert idx.identifiers == expected.identifiers
     assert idx.structures == expected.structures
@@ -166,7 +166,7 @@ def test_lf_cr_is_two_line_breaks(tmp_path, eol):
         tables.append(any(starts.values()))
         return found
     with patch.object(indexer, "physical_position", position):
-        idx = Indexer([], {}, use_shim=True).parse(str(path))
+        idx = Indexer([], {}, use_shim=True).parse(str(path), complete=True)
     assert any(tables) == (eol != "\r\n\r\n")
     ft = FileText(str(path), text)
     spans = {name: [text[slice(*ft.span(r))] for r in ranges] for name, ranges in idx.identifiers.items()}
@@ -189,7 +189,7 @@ typedef int t_foo;
 ''')
     root = tmp_path / "top.sv"
     root.write_text('package p1;\n`include "common.svh"\nendpackage\npackage p2;\n`include "common.svh"\nendpackage\n')
-    idx = Indexer([str(tmp_path)], {}, use_shim=True).parse(str(root))
+    idx = Indexer([str(tmp_path)], {}, use_shim=True).parse(str(root), complete=True)
     header = str(tmp_path / "common.svh")
     assert len([p for p in idx.structures if p.opening.path == header]) == 4
     assert sorted((f.start, f.end, f.kind) for f in idx.folds if f.path == header) == [
@@ -208,7 +208,7 @@ typedef int t_foo;
 def test_comment_folds_in_physical_lines(tmp_path, data, expected):
     path = tmp_path / "comments.sv"
     path.write_bytes(data)
-    idx = Indexer([], {}, use_shim=True).parse(str(path))
+    idx = Indexer([], {}, use_shim=True).parse(str(path), complete=True)
     assert sorted((f.start, f.end, f.kind) for f in idx.folds) == expected
 
 
@@ -246,7 +246,7 @@ endclass
 endclass
 '''
     path.write_text(source)
-    idx = Indexer([], {}, use_shim=True).parse(str(path))
+    idx = Indexer([], {}, use_shim=True).parse(str(path), complete=True)
     [pair] = idx.structures
     assert (pair.opening.line, pair.closing.line) == (8, 13)
 
@@ -484,7 +484,7 @@ endclass
     ws = index(tmp_path, {'one.sv': '`include "body.svh"', 'two.sv': '`include "body.svh"', 'body.svh': text})
     path = str(tmp_path / 'body.svh')
     ft = FileText(path, text)
-    assert [text[slice(*ft.span(r))] for r in ws.directives_by_file[path]] == [
+    assert [text[slice(*ft.span(r))] for r in ws.directives_in(path)] == [
         '`ifdef ABSENT\n   , .b(2)\n', '`endif']
     assert call_at(ws, path, 5, 8) is None
     assert call_at(ws, path, 7, 8)[1:] == (1, 'a')
@@ -534,7 +534,7 @@ endclass
     path = str(tmp_path / 't.sv')
     ft = FileText(path, text)
     spans = []
-    for start, end in sorted(ft.span(r) for r in ws.directives_by_file[path]):
+    for start, end in sorted(ft.span(r) for r in ws.directives_in(path)):
         if spans and spans[-1][1] == start:
             start = spans.pop()[0]
         spans.append((start, end))
@@ -566,12 +566,19 @@ endclass
     # A user root ranges only its own text: none of the UVM headers' many `defines, and no line
     # table where slang's line numbers are already the physical ones.
     path = str(tmp_path / 't.sv')
+    user = ws.indices[path]
+    assert user.structures_pending and user.structures == user.folds == user.directives == []
     ex = Extractor(*ws.indexer._tree(path, {}, False), path, False, {}, ws.indexer.library_dirs)
     made, original = [], Extractor.make_range
     with patch.object(Extractor, 'make_range', lambda self, *a: made.append(original(self, *a)) or made[-1]):
-        ex.collect_source_ranges()
+        ex.collect_identifiers()
+        ex.collect_structures()
     assert {r.path for r, _ in made} == {path} and len(ex.out.directives) == 1  # `include
     assert not any(ex._line_starts.values())
+    # Folding in a user file collects its root's pairs, folds and directives on first use.
+    assert Navigator(ws).folding_ranges(path) and not user.structures_pending
+    assert user.structures and user.folds and len(user.directives) == 1
+
     # Folding in a library file collects its root's pairs on first use.
     component = next(f for f in lib.files if f.endswith('uvm_component.svh'))
     assert Navigator(ws).folding_ranges(component)
@@ -620,7 +627,7 @@ def test_library_fold_walk_skips_only_structureless_syntax(tmp_path, source):
         if n.kind in STRUCTURE_KINDS:
             full.structural_pair(n)
         stack.extend(c for c in n if isinstance(c, SyntaxNode))
-    pruned, folds = Extractor(*built, root, True, {}, ws.indexer.library_dirs).collect_structures()
+    pruned, folds, _ = Extractor(*built, root, True, {}, ws.indexer.library_dirs).collect_structures()
     assert len(full.out.structures) > (1000 if source == "library" else 15)
     assert sorted(pruned, key=repr) == sorted(full.out.structures, key=repr)
     assert folds
@@ -635,11 +642,11 @@ def test_library_fold_walk_sees_directives_inside_skipped_syntax(tmp_path):
             "endfunction\n`endif\n")
     ws = index(tmp_path, {"t.sv": text})
     root = str(tmp_path / "t.sv")
-    _, folds = Extractor(*ws.indexer._tree(root, {}, True), root, True, {}, ws.indexer.library_dirs).collect_structures()
+    _, folds, _ = Extractor(*ws.indexer._tree(root, {}, True), root, True, {}, ws.indexer.library_dirs).collect_structures()
     # The `ifdef inside the expression would otherwise close the outer `ifndef's branch.
     expected = [(0, 15, "branch"), (2, 14, None), (5, 6, "branch"), (7, 8, "branch"), (11, 12, "comment")]
     assert sorted((f.start, f.end, f.kind) for f in folds) == expected
-    assert sorted((f.start, f.end, f.kind) for f in ws.indices[root].folds) == expected
+    assert sorted((f.start, f.end, f.kind) for f in ws.folds_in(root)) == expected
 
 
 def test_an_open_buffer_with_a_lone_surrogate_does_not_stop_indexing(tmp_path):

@@ -262,6 +262,7 @@ class Workspace:
         self._folding_cache: dict = {}
         self.structures_by_file = _PerFile(self, "structures", lambda p: p.opening.path, lambda p: p)
         self.folds_by_file = _PerFile(self, "folds", lambda f: f.path, lambda f: f)
+        self._structured: set[str] = set()  # the files whose roots' structures were collected
         self.identifiers_by_file: dict[str, list[tuple[str, Range]]] = {}
         self.texts: dict[str, str] = {}
         self.lines: dict[str, list[str]] = {}
@@ -452,28 +453,36 @@ class Workspace:
 
     def structures_in(self, path: str) -> list:
         """A file's structural pairs."""
-        self._collect_library_structures(path)
+        self._collect_structures(path)
         return self.structures_by_file.get(path, [])
 
     def folds_in(self, path: str) -> list:
-        self._collect_library_structures(path)
+        self._collect_structures(path)
         return self.folds_by_file.get(path, [])
 
-    def _collect_library_structures(self, path: str):
-        """A library root's pairs and folds are collected when one of its files first asks: user
-        code never needs them."""
-        if path not in self.library_files:
+    def directives_in(self, path: str) -> list:
+        """A file's directive ranges, with the text they disable."""
+        self._collect_structures(path)
+        return self.directives_by_file.get(path, [])
+
+    def _collect_structures(self, path: str):
+        """A root's pairs, folds and directives are collected when one of its files first asks:
+        few of a project's files are ever folded or edited, and a re-parse of their roots there
+        costs less than walking every token of every root at each (re)index."""
+        if path in self._structured:
             return
+        self._structured.add(path)
         for root in self.roots_for(path):
             idx = self.indices[root]
             if idx.structures_pending:
-                idx.structures, idx.folds = self.indexer.structures(root, self.overrides)
+                idx.structures, idx.folds, idx.directives = self.indexer.structures(root, self.overrides, idx.library)
                 idx.structures_pending = False
-                for kind in ("structures", "folds"):
+                for kind in ("structures", "folds", "directives"):
                     self._grouped.pop((id(idx), kind), None)
                 for name in idx.files:  # merged again, now with this root's records
                     self.structures_by_file.pop(name, None)
                     self.folds_by_file.pop(name, None)
+                    self.directives_by_file.pop(name, None)
 
     def _records(self, idx, kind: str, path_of) -> dict[str, list]:
         """A root's records of one kind by file, kept while the root's index is unchanged."""

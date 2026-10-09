@@ -118,6 +118,7 @@ QUALIFIER_TOKENS = {
 }
 LINE_COMMENT, BLOCK_COMMENT = P.TriviaKind.LineComment, P.TriviaKind.BlockComment
 END_OF_LINE, WHITESPACE, DIRECTIVE = P.TriviaKind.EndOfLine, P.TriviaKind.Whitespace, P.TriviaKind.Directive
+DISABLED_TEXT = P.TriviaKind.DisabledText
 # The region markers that SystemVerilog extensions give VS Code: `// #region` or `// region`.
 REGION_RE = re.compile(rb"//\s*#?(end)?region\b")
 TRIVIA_MARK = re.compile(rb"`|/[/*]")
@@ -593,21 +594,28 @@ class Indexer:
             os.path.isfile(os.path.join(d, "uvm_macros.svh")) for d in self.include_dirs)
 
     def parse(self, root: str, overrides: dict[str, str] | None = None,
-              library: bool = False) -> FileIndex:
+              library: bool = False, complete: bool = False) -> FileIndex:
+        """A root's index; with `complete`, also the structures, folds and directives that
+        indexing otherwise leaves for the first request (structures())."""
         overrides = overrides or {}
         built = self._tree(root, overrides, library)
         if isinstance(built, FileIndex):
             return built
-        return Extractor(*built, root, library, overrides, self.library_dirs).run()
+        extractor = Extractor(*built, root, library, overrides, self.library_dirs)
+        idx = extractor.run()
+        if complete:
+            extractor.collect_structures()
+        return idx
 
-    def structures(self, root: str, overrides: dict[str, str] | None = None
-                   ) -> tuple[list[StructuralPair], list[FoldRegion]]:
-        """A library root's structural pairs and folds, which indexing leaves for the first request."""
+    def structures(self, root: str, overrides: dict[str, str] | None = None, library: bool = False
+                   ) -> tuple[list[StructuralPair], list[FoldRegion], list[Range]]:
+        """A root's structural pairs, folds and directive ranges, which indexing leaves for the
+        first request: a walk of every token, which most roots are never asked about."""
         overrides = overrides or {}
-        built = self._tree(root, overrides, True)
+        built = self._tree(root, overrides, library)
         if isinstance(built, FileIndex):
-            return [], []
-        return Extractor(*built, root, True, overrides, self.library_dirs).collect_structures()
+            return [], [], []
+        return Extractor(*built, root, library, overrides, self.library_dirs).collect_structures()
 
     def _tree(self, root: str, overrides: dict[str, str], library: bool):
         """(syntax tree, source manager), or the index of a root that cannot be read."""
@@ -892,14 +900,13 @@ class Extractor:
         self.collect_diagnostics()
         self.collect_includes()
         self.collect_macros()
-        if self.library:
-            self.out.structures_pending = True  # walked when one of its files first needs them
-        else:
-            self.collect_source_ranges()
-            self.drop_repeated_inclusions()
+        if not self.library:
+            self.collect_identifiers()
+            self.drop_repeated_inclusions(("invocations",))
+        self.out.structures_pending = True  # walked when one of its files first needs them
         return self.out
 
-    def drop_repeated_inclusions(self):
+    def drop_repeated_inclusions(self, kinds: tuple[str, ...]):
         """A header included twice without a guard is walked once per inclusion, at the same
         ranges: keep one of each of its records."""
         seen_paths, repeated = set(), set()
@@ -910,9 +917,10 @@ class Extractor:
         repeated.discard(None)
         if not repeated:
             return
-        for name, key_of in (("structures", lambda s: s.opening), ("invocations", lambda c: c.opening),
-                             ("directives", lambda r: r), ("folds", lambda f: f)):
-            kept, seen = [], set()
+        key_ofs = {"structures": lambda s: s.opening, "invocations": lambda c: c.opening,
+                   "directives": lambda r: r, "folds": lambda f: f}
+        for name in kinds:
+            key_of, kept, seen = key_ofs[name], [], set()
             for record in getattr(self.out, name):
                 key = key_of(record)
                 if key.path in repeated:
@@ -1832,19 +1840,35 @@ class Extractor:
         return self._foldable[bid]
 
     def fold_trivia(self, tok):
-        """For the library's walk: the folds the trivia before a token makes."""
+        """The folds the trivia before a token makes, and (in user code) the directive ranges."""
         trivia = tok.trivia
-        after, comments = 0, False
+        after, comments = 0, False  # where the trivia after the last directive start; any comments
+        prev = None  # (index, start) of the directive just before
+        sm, directives = self.sm, self.out.directives
         for i, t in enumerate(trivia):
             k = t.kind
-            if k is DIRECTIVE:
-                after, comments = i + 1, False
-                syntax = t.syntax()
-                sr = syntax.sourceRange
-                if path := self.foldable(sr.start):
-                    self.directive_folds(syntax, path, sr)
-            elif k is LINE_COMMENT or k is BLOCK_COMMENT:
-                comments = True
+            if k is not DIRECTIVE:
+                if k is LINE_COMMENT or k is BLOCK_COMMENT:
+                    comments = True
+                continue
+            after, comments = i + 1, False
+            syntax = t.syntax()
+            sr = syntax.sourceRange
+            path = self.foldable(sr.start)
+            if path is not None:
+                self.directive_folds(syntax, path, sr)
+            if self.library or syntax.kind == K.MacroUsage:
+                continue  # code: its arguments are as written and its expansion is parsed
+            if path is None or sr.start.buffer != sr.end.buffer or sm.isMacroLoc(sr.end):
+                prev = None
+                continue
+            if prev is not None and prev[1].buffer == sr.start.buffer and \
+                    any(t.kind is DISABLED_TEXT for t in syntax.getFirstToken().trivia):
+                # pyslang 12 ends a directive that skips text where the next one starts; 11 ends
+                # it at its last token and leaves the rest, blank or not, before the next one.
+                directives[prev[0]] = self.make_range(prev[1], sr.start)[0]
+            directives.append(self.make_range(sr.start, sr.end)[0])
+            prev = (len(directives) - 1, sr.start)
         if comments and (path := self.foldable(tok.location)):
             self.comment_folds(tok.location, trivia[after:], path)
 
@@ -1941,7 +1965,29 @@ class Extractor:
                     self.add_fold(path, ordered[first], line, "comment")
                     first = i + 1
 
-    def collect_structures(self) -> tuple[list[StructuralPair], list[FoldRegion]]:
+    def collect_structures(self) -> tuple[list[StructuralPair], list[FoldRegion], list[Range]]:
+        """Structural pairs, folds and (in user code) directive ranges. User code is walked whole,
+        for the bracket folds inside statements too; the library's walk skips the tokens of syntax
+        that cannot hold a keyword structure, a comment or a directive."""
+        if self.library:
+            self.walk_library_structures()
+        else:
+            folds = {**dict.fromkeys(STRUCTURE_KINDS, self.structural_pair), **dict.fromkeys(BODIES, self.body_fold)}
+            fold_trivia = self.fold_trivia
+
+            def visit(n):
+                if isinstance(n, Token):
+                    fold_trivia(n)
+                elif (fold := folds.get(n.kind)) is not None:
+                    fold(n)
+            self.tree.root.visit(visit)
+        self.finish_folds()
+        if not self.library:
+            self.drop_repeated_inclusions(("structures", "directives", "folds"))
+        self.out.structures_pending = False
+        return self.out.structures, self.out.folds, self.out.directives
+
+    def walk_library_structures(self):
         stack = [self.tree.root]
         while stack:
             n = stack.pop()
@@ -1964,55 +2010,18 @@ class Extractor:
             children = [c for c in n if c is not None]
             children.reverse()  # in source order: `ifdef branches pair up as they come
             stack.extend(children)
-        self.finish_folds()
-        return self.out.structures, self.out.folds
 
-    def collect_source_ranges(self):
-        """Identifiers, structural pairs, folds and directives, in one pass over the tree."""
-        ids, directives = self.out.identifiers, self.out.directives
+    def collect_identifiers(self):
+        """Every identifier written in user code, by name: one visit per token, kept as cheap as
+        it can be since every root pays for it at each (re)index."""
+        ids = self.out.identifiers
         sm = self.sm
         path_of, in_library, position = self.path_of, self.in_library, self.physical_position
-        directive, disabled, identifier = P.TriviaKind.Directive, P.TriviaKind.DisabledText, TK.Identifier
-        macro_usage = K.MacroUsage
+        identifier = TK.Identifier
         seen = set()
-        folds = {**dict.fromkeys(STRUCTURE_KINDS, self.structural_pair), **dict.fromkeys(BODIES, self.body_fold)}
 
         def visit(tok):
-            if not isinstance(tok, Token):
-                fold = folds.get(tok.kind)
-                if fold is not None:
-                    fold(tok)
-                return
-            trivia_list = tok.trivia
-            prev = None  # (index, start) of the directive just before
-            after, comments = 0, False  # where the trivia after the last directive start; any comments
-            for i, trivia in enumerate(trivia_list):
-                k = trivia.kind
-                if k is not directive:
-                    if k is LINE_COMMENT or k is BLOCK_COMMENT:
-                        comments = True
-                    continue
-                after, comments = i + 1, False
-                syntax = trivia.syntax()
-                sr = syntax.sourceRange
-                path = self.foldable(sr.start)
-                if path is not None:
-                    self.directive_folds(syntax, path, sr)
-                if syntax.kind == macro_usage:
-                    continue  # code: its arguments are as written and its expansion is parsed
-                if path is None or sr.start.buffer != sr.end.buffer or sm.isMacroLoc(sr.end):
-                    prev = None
-                    continue
-                if prev is not None and prev[1].buffer == sr.start.buffer and \
-                        any(t.kind == disabled for t in syntax.getFirstToken().trivia):
-                    # pyslang 12 ends a directive that skips text where the next one starts; 11 ends
-                    # it at its last token and leaves the rest, blank or not, before the next one.
-                    directives[prev[0]] = self.make_range(prev[1], sr.start)[0]
-                directives.append(self.make_range(sr.start, sr.end)[0])
-                prev = (len(directives) - 1, sr.start)
-            if comments and (path := self.foldable(tok.location)):
-                self.comment_folds(tok.location, trivia_list[after:], path)
-            if tok.kind != identifier:
+            if not isinstance(tok, Token) or tok.kind is not identifier:
                 return
             loc = tok.location
             if sm.isMacroLoc(loc):
@@ -2031,4 +2040,3 @@ class Extractor:
             line, col = position(loc)
             ids.setdefault(tok.valueText, []).append(Range(path, line, col, line, col + len(tok.rawText)))
         self.tree.root.visit(visit)
-        self.finish_folds()
