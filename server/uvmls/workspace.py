@@ -27,6 +27,7 @@ from .uvm import (
 BUILTIN_TYPES = {"string", "bit", "logic", "reg", "int", "integer", "byte", "shortint", "longint", "time",
                  "real", "realtime", "shortreal", "chandle", "event", "void"}
 TYPE_HEAD_RE = re.compile(r"^\s*(?:(\w+)\s*::\s*)?(\w+)\s*(#\s*\((.*)\))?\s*$", re.DOTALL)
+NAMED_ARG_RE = re.compile(r"^\.(\w+)\((.*)\)$")
 
 
 @dataclass
@@ -88,9 +89,16 @@ class Bound(str):
         return Bound, (str(self), self.scope, self.spec, self.formal)
 
 
-def _carry(value: str, source: str) -> str:
-    """`value`, derived from `source`, resolving where `source` was written."""
-    return value if isinstance(value, Bound) or not isinstance(source, Bound) else Bound(value, source.scope)
+def _named_arg(arg: str) -> tuple[str, str] | None:
+    """`.T(pair #(T))` -> ('T', 'pair #(T)'), the inner type meaning what the whole argument did."""
+    m = NAMED_ARG_RE.match(arg)
+    if m is None:
+        return None
+    inner = m.group(2)
+    if isinstance(arg, Bound):
+        formal = NAMED_ARG_RE.match(arg.formal) if arg.formal else None
+        inner = Bound(inner, arg.scope, arg.spec, formal.group(2) if formal else None)
+    return m.group(1), inner
 
 
 def _arg_key(arg: str):
@@ -107,6 +115,8 @@ def _bind(text: str, bindings: dict[str, str]) -> str:
     value = substitute_params(text, bindings)
     if isinstance(value, Bound) or not isinstance(text, Bound):
         return value
+    if value == text:
+        return text  # nothing bound: still the type it names
     shown = value
     if any(getattr(v, "formal", None) for v in bindings.values()):
         shown = substitute_params(text, {k: getattr(v, "formal", None) or v for k, v in bindings.items()})
@@ -163,9 +173,8 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
     positional = [a for a in args if not a.startswith(".")]
     named = {}
     for a in args:
-        m = re.match(r"^\.(\w+)\((.*)\)$", a)
-        if m:
-            named[m.group(1)] = _carry(m.group(2), a)
+        if (named_arg := _named_arg(a)) is not None:
+            named[named_arg[0]] = named_arg[1]
     for i, (pname, default) in enumerate(params):
         if pname in named:
             val = bind(named[pname], outer)
@@ -877,6 +886,9 @@ class Workspace:
         value = _bind(text, bindings)
         if not isinstance(text, Bound) or value is text or value.spec is not None or str(value) == text:
             return value
+        if (named := _named_arg(text)) is not None:  # .T(pair #(T)) binds T to the inner type
+            inner = self._bind_type(named[1], bindings, strict, depth, members)
+            return Bound(f".{named[0]}({inner})", text.scope, getattr(inner, "spec", None), value.formal)
         parsed = parse_type_text(text)
         if not parsed or not parsed[2]:
             return value
