@@ -164,7 +164,7 @@ class Navigator:
         if meth is not None:
             for v in meth.args + meth.locals:
                 if v.name == name:
-                    return [Target(v, owner=cls)]
+                    return [Target(v, owner=cls if cls is not None else unit)]
         if cls is not None:
             hit = ws.find_member(cls, name)
             if hit is not None:
@@ -226,9 +226,13 @@ class Navigator:
         if t.spec is not None and isinstance(t.obj, (ClassInfo, Typedef, str)):
             return t.spec
         if isinstance(t.obj, Variable):
-            ctx = t.owner if isinstance(t.owner, ClassInfo) else None
             if t.obj.type is None:
                 return None
+            if isinstance(t.owner, DesignUnit):  # a package, module or interface item
+                package, imports = self._package_scope(None, t.owner)
+                return ws.resolve_type_ref(t.obj.type, None, t.bindings, strict, package=package,
+                                           imports=imports, near=t.obj.range)
+            ctx = t.owner if isinstance(t.owner, ClassInfo) else None
             return ws.resolve_type_ref(t.obj.type, ctx, t.bindings, strict)
         if t.owner is not None and isinstance(t.obj, (Method, Typedef, str)):
             return ws.member_type_spec(t.owner, t.obj, t.bindings or {}, strict=strict)

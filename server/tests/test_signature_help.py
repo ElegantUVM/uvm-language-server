@@ -814,3 +814,55 @@ endpackage
 '''
     [label] = labels_in(tmp_path, text, ['::create('], bundled=True)
     assert label == 'function pcomp#(byte) create(string name, uvm_component parent, string contxt = "")'
+
+
+def test_receivers_declared_outside_classes(tmp_path):
+    text = '''package p;
+class box;
+  function new(string n, int w = 1); endfunction
+  function void f(int a, int b); endfunction
+endclass
+box pv;
+function void pf();
+  box lb;
+  lb = new("x", 2);
+  lb.f(1, 2);
+  pv.f(7, 8);
+endfunction
+endpackage
+module m;
+  import p::*;
+  box mb;
+  task t(); box tb; tb.f(9, 10); endtask
+  initial begin
+    mb = new("y", 3);
+    mb.f(5, 6);
+  end
+endmodule
+'''
+    f, ctor = 'function void f(int a, int b)', 'function new(string n, int w = 1)'
+    assert labels_in(tmp_path, text, ['lb = new("x",', 'lb.f(1,', 'pv.f(7,', 'mb = new("y",', 'mb.f(5,', 'tb.f(9,']) == \
+        [ctor, f, f, ctor, f, f]
+
+
+@pytest.mark.parametrize('unit_scope', [False, True])
+def test_tb_top_calls(client, tb, unit_scope):
+    """A testbench top importing inside the module, or at file ($unit) scope before it."""
+    d = Doc(client, os.path.join(tb, 'tb', 'tb_top.sv'))
+    imports = '  import uvm_pkg::*;\n  import alu_test_pkg::*;\n  import alu_pkg::*;\n'
+    text = d.text.replace('  import uvm_pkg::*;\n  import alu_test_pkg::*;\n', imports + '  uvm_root r;\n  alu_seq_item it;\n')
+    text = text.replace('    run_test("alu_random_test");', '    r.set_timeout(10);\n    it = new("it");\n'
+                        '    it.set_name("y");\n    uvm_top.print_topology();\n    run_test("alu_random_test");')
+    if unit_scope:
+        text = imports.replace('  ', '') + text.replace(imports, '')
+    try:
+        d.change(text)
+        signature(help_at(d, 'uvm_config_db #(virtual alu_if)::set(null,'),
+                  ['uvm_component cntxt', 'string inst_name', 'string field_name', 'virtual alu_if value'], 1)
+        signature(help_at(d, '    run_test('), ['string test_name = ""'], label='task run_test(string test_name = "")')
+        signature(help_at(d, 'r.set_timeout('), ['time timeout', 'bit overridable = 1'])
+        signature(help_at(d, 'it = new('), ['string name = "alu_seq_item"'])
+        signature(help_at(d, 'it.set_name('), ['string name'])
+        signature(help_at(d, 'uvm_top.print_topology('), ['uvm_printer printer = null'])
+    finally:
+        d.close()

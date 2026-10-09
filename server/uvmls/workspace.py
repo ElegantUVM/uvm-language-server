@@ -599,9 +599,10 @@ class Workspace:
         return self.resolve_spec(name, scope, args, ctx, strict=strict, **where)
 
     def resolve_type_ref(self, ref: TypeRef, ctx: ClassInfo | None = None, bindings: dict[str, str] | None = None,
-                         strict: bool = False) -> Spec | None:
+                         strict: bool = False, **where) -> Spec | None:
         """Resolve an indexed type reference with the type parameters in scope bound. The structured
-        reference keeps scopes such as `cls #(4)::inner_t` that the type text cannot."""
+        reference keeps scopes such as `cls #(4)::inner_t` that the type text cannot. Outside a
+        class, `where` gives the package, imports and position that see the reference."""
         bindings = bindings or {}
         if ref.scope is None and ref.name in bindings:
             return self.resolve_type_text(bindings[ref.name], ctx, strict=strict)
@@ -614,7 +615,7 @@ class Workspace:
                 parsed = parse_type_text(bindings[scope])
                 scope = "::".join(p for p in parsed[:2] if p) if parsed else scope
         args = [self._bind_arg(a, ctx, bindings, strict) for a in ref.args]
-        return self.resolve_spec(ref.name, scope, args, ctx, strict=strict)
+        return self.resolve_spec(ref.name, scope, args, ctx, strict=strict, **where)
 
     def _bind_arg(self, arg: str, ctx: ClassInfo | None, bindings: dict[str, str], strict: bool) -> str:
         """A type argument written in `ctx` with its parameters bound. A typedef member of the
