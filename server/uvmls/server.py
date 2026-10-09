@@ -21,6 +21,7 @@ from pygls.uris import from_fs_path
 
 from . import __version__, elab, fixes, formatting, indexer, naturaldocs, signatures
 from .documents import Workspace as LspWorkspace
+from .elab import ELAB_TIMEOUT, PACKAGE_PARENT
 from .lints import lint
 from .model import Diag, Range, utf8_prefix
 from .navigation import Navigator
@@ -34,8 +35,6 @@ DEBOUNCE_SECONDS = 0.25
 ELAB_MODES = ("off", "onSave", "onChange")
 ELAB_SAVE_DELAY = 0.3  # coalesces a "Save All"
 ELAB_CHANGE_DELAY = 1.0  # after the last edit, in onChange mode
-ELAB_TIMEOUT = 120.0
-PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SYMBOL_KINDS = {
     "class": T.SymbolKind.Class, "interface": T.SymbolKind.Interface,

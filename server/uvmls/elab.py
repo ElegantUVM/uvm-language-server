@@ -35,6 +35,8 @@ NOTE_RE = re.compile(r"^(.+?):(\d+):(\d+): note: (.*)$")
 HEADER_EXTENSIONS = (".svh", ".vh", ".svi")
 MAX_PER_FILE = 100  # diagnostics listed per file, and in all, unless the request says listAll; the counts include the rest
 MAX_LISTED = 1000
+ELAB_TIMEOUT = 120.0  # how long the language server and the MCP server let the worker run
+PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # on the worker's PYTHONPATH
 
 
 # -- requests ------------------------------------------------------------------
