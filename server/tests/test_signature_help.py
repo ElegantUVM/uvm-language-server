@@ -659,6 +659,29 @@ def test_unfinished_call_reaches_the_next_token(doc, eol, call, needle, active):
                   active)
 
 
+@pytest.mark.parametrize('eol', ['\n', '\r\n'])
+@pytest.mark.parametrize('call,needle,active', [
+    ('f(1, `ONE', '`ONE', 1),
+    ('f(1, `ONE  ', '`ONE  ', 1),
+    ('f(1, `ONE\n        ', '`ONE\n        ', 1),
+    ('f(`TWO ', '`TWO ', 1),
+    ('f(1, `PAIR(2, 3) ', '`PAIR(2, 3) ', 2),
+    ('f(1, `WRAP(`ONE)\n  ', '`WRAP(`ONE)\n  ', 1),
+    ('f(1, `__LINE__ ', '`__LINE__ ', 1),
+    ('f(1, `ONE);\n    ', '`ONE);\n    ', None),
+])
+def test_unfinished_call_ends_after_its_last_macro_usage(doc, eol, call, needle, active):
+    # The last statement, ending in what a macro writes: its text ends where the usage does.
+    doc.change(('`define ONE 9\n`define TWO 1, 2\n`define PAIR(x, y) x, y\n`define WRAP(x) x\n' +
+                SOURCE.replace('CALL', call)).replace('\n', eol))
+    found = help_at(doc, needle.replace('\n', eol))
+    if active is None:
+        assert found is None
+    else:
+        signature(found, ['input byte a', 'input byte b', 'output bit[3:0] bits[]', 'const ref string text = "T,a"'],
+                  active)
+
+
 def test_public_typedef_is_not_ambiguous_with_another_class_member(doc):
     text = SOURCE.replace('class child extends base #(byte);', '''typedef base #(string) public_t;
 class unrelated;

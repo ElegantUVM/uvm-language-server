@@ -617,6 +617,19 @@ class Extractor:
             loc = sm.getOriginalLoc(loc) if sm.isMacroArgLoc(loc) else sm.getExpansionRange(loc).end
         return loc
 
+    def usage_extent_end(self, loc, node):
+        """Where the outermost macro usage whose expansion holds a location ends as written, past
+        a function-like usage's `)`, at which its expansion range ends. `node` holds the usage's
+        first expanded token, whose trivia records the usage."""
+        start = self.sm.getFullyExpandedLoc(loc)
+        for tok in reversed(iter_tokens(node)):
+            for trivia in tok.trivia:
+                if trivia.kind == P.TriviaKind.Directive and (syntax := trivia.syntax()).kind == K.MacroUsage:
+                    sr = syntax.sourceRange
+                    if sr.start.buffer == start.buffer and sr.start.offset == start.offset:
+                        return sr.end
+        return self.usage_end(loc)
+
     def keyword_range(self, tok, arguments=False) -> Range | None:
         """plain_range of a keyword or delimiter, which cannot span lines; with `arguments`, also
         where a macro argument spells it."""
@@ -1253,6 +1266,8 @@ class Extractor:
             # half of a CRLF line end.
             last = parent.getLastToken()
             end = last.location if last.isMissing else last.range.end
+            if self.sm.isMacroLoc(end):
+                end = self.usage_extent_end(end, parent)
             boundary = self.make_range(self.file_loc(parent.getFirstToken().location)[0], self.file_loc(end)[0])[0]
             if boundary is None:
                 return
