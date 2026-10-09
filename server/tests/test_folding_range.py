@@ -52,7 +52,10 @@ def agent_folds(text):
                     fold(text, "function new", "endfunction"),
                     fold(text, "function void build_phase", "endfunction"),
                     fold(text, "function void connect_phase", "endfunction"),
-                    fold(text, "UVM_ACTIVE) begin", "    end\n")])
+                    fold(text, "UVM_ACTIVE) begin", "    end\n"),
+                    # A one-statement body folds with its if, as indentation folding did.
+                    span(text, "if (!uvm_config_db", "`uvm_fatal"),
+                    span(text, "if (m_cfg.is_active == UVM_ACTIVE)\n", "m_driver.seq_item_port")])
 
 
 @pytest.mark.parametrize("caps,present", [({}, False), (CAPS, True),
@@ -87,6 +90,7 @@ def test_driver_extern_bodies(client, tb):
         expected = [fold(text, "class alu_driver", "endclass"),
                     fold(text, "function new", "endfunction"),
                     fold(text, "function void build_phase", "endfunction"),
+                    span(text, "if (!uvm_config_db", "`uvm_fatal"),
                     fold(text, "task alu_driver::run_phase", "endtask"),
                     fold(text, "forever begin", "  end\n"),
                     fold(text, "task alu_driver::drive_item", "endtask"),
@@ -443,6 +447,8 @@ def constructs_folds(t):
     return ordered([
         span(t, "/*", " */", "comment"), span(t, "// Function", "// A NaturalDocs", "comment"),
         span(t, "`define SHOW", "b);"), fold(t, "program", "endprogram"), fold(t, "fork", "join_any"),
+        fold(t, "initial\n    fork", "join_any"), fold(t, "always_comb", "endcase"),
+        span(t, '  initial\n    $display("other")', '$display("other")'),
         fold(t, "package", "endpackage"), fold(t, "typedef enum", "} op_e"), fold(t, "typedef struct", "} pair_t"),
         fold(t, "class item #(", ") extends"), fold(t, ") extends", "  endclass"),
         fold(t, "constraint", "    }"), fold(t, "function void f(", "    );"), fold(t, "    );", "endfunction"),
@@ -466,6 +472,74 @@ def test_folds_of_every_construct(tmp_path):
         assert folds(d) == constructs_folds(CONSTRUCTS)
         d.change("\n" + CONSTRUCTS)
         assert folds(d) == constructs_folds(d.text)
+    finally:
+        c.close()
+
+
+BODIES = '''`define SHOW(a, b) begin $display(a, b); end
+module bodies;
+  always @(posedge clk)
+    if (rst)
+      q <= 0;
+    else if (en)
+      q <= d;
+    else
+      q <= q;
+  always_comb
+    case (x)
+      1:
+        y = 1;
+      default: y = 2;
+    endcase
+  initial begin
+    foreach (a[i])
+      a[i] = 0;
+    for (int i = 0;
+         i < 2;
+         i++) begin
+      b = 1;
+    end
+    if (a)
+      begin
+        x = 1;
+      end
+    else
+      `SHOW("msg",
+            x)
+    do
+      x++;
+    while (x < 3);
+    if (c) x = 1;
+    if (d)
+      x = 1; else x = 2;
+  end
+  if (N > 1)
+    assign w = 1;
+  else
+    assign w = 0;
+  for (genvar g = 0; g < 2; g++)
+    assign v[g] = 1;
+endmodule
+'''
+
+
+def test_bodies_without_begin(tmp_path):
+    path = tmp_path / "bodies.sv"
+    path.write_text(BODIES)
+    c = start(str(tmp_path), capabilities=CAPS, settings={"useBundledUvm": False, "elaboration": "off"})
+    t = BODIES
+    try:
+        # What indentation folding gave: a body on a later line folds with its header, through the
+        # line before a block body's closer; a body on the header's line folds by itself.
+        assert folds(Doc(c, str(path))) == ordered([
+            fold(t, "module", "endmodule"), span(t, "always @", "q <= q;"), span(t, "if (rst)", "q <= 0;"),
+            span(t, "else if (en)", "q <= d;"), span(t, "    else\n      q <= q", "q <= q;"),
+            fold(t, "always_comb", "endcase"), fold(t, "case (x)", "endcase"), span(t, "1:\n", "y = 1;"),
+            fold(t, "initial begin", "  end\n  if (N"), span(t, "foreach", "a[i] = 0;"),
+            fold(t, "for (int i", "    end\n"), fold(t, "i++) begin", "    end\n"),
+            fold(t, "if (a)\n      begin", "      end\n"), fold(t, "begin\n        x = 1", "      end\n"),
+            span(t, "else\n      `SHOW", "x)"), span(t, "do\n", "x++;"), span(t, "if (N > 1)", "assign w = 1;"),
+            span(t, "  else\n    assign w = 0", "assign w = 0;"), span(t, "for (genvar", "assign v[g] = 1;")])
     finally:
         c.close()
 

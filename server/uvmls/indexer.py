@@ -70,6 +70,17 @@ BRACKETS = {
                             K.ReplicatedAssignmentPattern, K.ConcatenationExpression, K.RangeList)},
 }
 STRUCTURE_KINDS = frozenset(STRUCTURES) | frozenset(BRACKETS)
+# Statements with a body, which need no begin: kind -> (body, what may follow it on its last line).
+BODIES = {
+    K.ConditionalStatement: ("statement", "elseClause.elseKeyword"),
+    K.IfGenerate: ("block", "elseClause.elseKeyword"),
+    K.DoWhileStatement: ("statement", "whileKeyword"),
+    **{k: ("statement", None) for k in (K.ForLoopStatement, K.ForeachLoopStatement, K.LoopStatement, K.ForeverStatement,
+                                        K.WaitStatement, K.TimingControlStatement, K.AlwaysBlock, K.AlwaysCombBlock,
+                                        K.AlwaysFFBlock, K.AlwaysLatchBlock, K.InitialBlock, K.FinalBlock)},
+    **{k: ("clause", None) for k in (K.ElseClause, K.StandardCaseItem, K.DefaultCaseItem)},
+    K.LoopGenerate: ("block", None),
+}
 # Syntax that holds no keyword pair: a library's walk for folds skips it (most of its nodes), with
 # what its lists (a prototype's arguments, a call's) and its trivia after the first token would fold.
 NO_STRUCTURE_KINDS = frozenset([K.ExpressionStatement, K.DataDeclaration, K.FunctionPrototype, K.ConditionalPredicate,
@@ -1733,6 +1744,31 @@ class Extractor:
         else:
             self.add_fold(a.path, a.line, b.line - 1)
 
+    def body_fold(self, node):
+        """A statement whose body starts on a later line folds through it, as indentation folding
+        did (`if (a)` and the line under it), or to the line before the closer of a block body."""
+        body_path, after_path = BODIES[node.kind]
+        body, first = _attribute(node, body_path), node.getFirstToken()
+        if body is None or first is None or (path := self.foldable(first.location)) is None:
+            return
+        head = body.getFirstToken()
+        if head is None or head.isMissing:
+            return
+        sm, buffer, start = self.sm, first.location.buffer, self.physical_position(first.location)[0]
+        loc = sm.getFullyExpandedLoc(head.location) if sm.isMacroLoc(head.location) else head.location
+        if loc.buffer != buffer or self.physical_position(loc)[0] <= start:
+            return  # a body that starts on the header's line folds by itself
+        closing = _attribute(body, STRUCTURES[body.kind][1]) if body.kind in STRUCTURES else None
+        if closing is not None and not closing.isMissing and not sm.isMacroLoc(closing.location):
+            last, visible = closing.location, True
+        else:
+            after = _attribute(node, after_path)
+            last = self.usage_end(body.getLastToken().location)
+            visible = after is not None and not after.isMissing and after.location.buffer == buffer and \
+                self.physical_position(after.location)[0] == self.physical_position(last)[0]
+        if last.buffer == buffer:
+            self.add_fold(path, start, self.physical_position(last)[0] - visible)
+
     def suspect_within(self, node, family):
         """Recovery gives a missing closer's job to one inside: with the inner end of `begin begin
         end` removed, the inner begin is paired with the outer end. Which pair inside took a closer
@@ -1903,6 +1939,8 @@ class Extractor:
             k = n.kind
             if k in STRUCTURE_KINDS:
                 self.structural_pair(n)
+            elif k in BODIES:
+                self.body_fold(n)
             elif k in NO_STRUCTURE_KINDS:
                 first = n.getFirstToken()
                 if first is not None:
@@ -1925,11 +1963,13 @@ class Extractor:
         directive, disabled, identifier = P.TriviaKind.Directive, P.TriviaKind.DisabledText, TK.Identifier
         macro_usage = K.MacroUsage
         seen = set()
+        folds = {**dict.fromkeys(STRUCTURE_KINDS, self.structural_pair), **dict.fromkeys(BODIES, self.body_fold)}
 
         def visit(tok):
             if not isinstance(tok, Token):
-                if tok.kind in STRUCTURE_KINDS:
-                    self.structural_pair(tok)
+                fold = folds.get(tok.kind)
+                if fold is not None:
+                    fold(tok)
                 return
             trivia_list = tok.trivia
             prev = None  # (index, start) of the directive just before
