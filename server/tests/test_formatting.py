@@ -15,6 +15,7 @@ import pytest
 from test_code_actions import Doc, applied
 from test_lsp import Client
 from conftest import EXAMPLE
+from uvmls.indexer import SHIM_FILE
 from uvmls.project import BUNDLED_UVM
 
 CAPABILITIES = {"textDocument": {"formatting": {}, "rangeFormatting": {}}}
@@ -349,6 +350,15 @@ def test_ineligible_documents(clients, fake, tmp_path, uri):
         uri = Path(BUNDLED_UVM, "uvm_pkg.sv").as_uri()
     assert c.request("textDocument/formatting", {
         "textDocument": {"uri": uri}, "options": {"tabSize": 2, "insertSpaces": True}}) == []
+    assert not fake.record.exists()
+
+
+@pytest.mark.parametrize("bundled", [False, True])
+def test_macro_shim_is_library(clients, fake, tmp_path, bundled):
+    (tmp_path / "t.sv").write_text('`include "uvm_macros.svh"\nmodule m; endmodule\n')
+    c = clients(tmp_path, {"path": str(fake.path)}, initialize_index=True, useBundledUvm=bundled)
+    shim = Doc(c, SHIM_FILE)
+    assert format_doc(shim) == format_range(shim, (0, 0), (1, 0)) == []
     assert not fake.record.exists()
 
 

@@ -717,8 +717,10 @@ def _library_source(ls: UvmLanguageServer, path: str) -> bool:
         return True
     cfg = ls.config()
     sources = ls.ws.sources
-    # Discovery may still be running or describe the previous project settings.
-    dirs = (sources.uvm_dir if sources else None, _uvm_src_dir(cfg.uvm_home), _uvm_src_dir(cfg.env_uvm_home))
+    # Discovery may still be running or describe the previous project settings. The shim is this
+    # server's own UVM macro stand-ins.
+    dirs = (indexer.SHIM_DIR, sources.uvm_dir if sources else None, _uvm_src_dir(cfg.uvm_home),
+            _uvm_src_dir(cfg.env_uvm_home))
     return any(p.startswith(root + os.sep) for d in dirs if d for root in {d, os.path.realpath(d)}
                for p in names)
 
