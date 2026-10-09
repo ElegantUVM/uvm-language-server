@@ -297,7 +297,7 @@ class Workspace:
         self._role_cache: dict[str, str] = {}
         self._spec_cache: dict = {}
         self._formals: dict = {}
-        self._visible_packages: dict = {}
+        self._reach: dict = {}
         self._import_scopes: dict = {}
         self._roots_by_file: dict[str, set[str]] | None = None
         self._include_sites: dict[str, list[Range]] | None = None
@@ -524,29 +524,28 @@ class Workspace:
             cached = self._grouped[key] = (idx, by_path)
         return cached[1]
 
-    def visible_packages(self, imports) -> set[str]:
-        """What `imports` make visible, with what their packages re-export (IEEE 1800 26.6):
-        'p' for all of package p, 'p::x' for its x alone."""
-        key = tuple(imports)
-        if key not in self._visible_packages:
-            out, todo = set(), list(imports)
-            while todo:
-                p = todo.pop()
-                if p in out:
-                    continue
-                out.add(p)
-                package, _, name = p.partition("::")
-                for u in self.units_by_name.get(package, ()):
-                    if u.kind != "package":
-                        continue
-                    for e in u.exports:
-                        for q in (u.imports if e == "*" else [e]):
-                            if not name or q.endswith("::" + name):
-                                todo.append(q)
-                            elif "::" not in q:
-                                todo.append(f"{q}::{name}")
-            self._visible_packages[key] = out
-        return self._visible_packages[key]
+    def reach(self, package: str, name: str, seen: tuple = ()) -> list[str]:
+        """The packages whose `name` the identifier `package::name` denotes: `package` itself when
+        it declares one (or is not indexed), else those its imports reach, by name before by
+        wildcard, that it exports (IEEE 1800 26.6); more than one is an ambiguity."""
+        key = (package, name)
+        if key not in self._reach:
+            out, unit = [package], self.find_unit(package, "package")
+            if unit is not None and package not in seen and not self._declares(unit, name):
+                suffix = "::" + name
+                named = [i[:-len(suffix)] for i in unit.imports if i.endswith(suffix)]
+                sources = named or [i for i in unit.imports if "::" not in i]
+                out = list(dict.fromkeys(
+                    p for q in sources if any(e in ("*", q, q + suffix) for e in unit.exports)
+                    for p in self.reach(q, name, (*seen, package))))
+            self._reach[key] = out
+        return self._reach[key]
+
+    def _declares(self, unit: DesignUnit, name: str) -> bool:
+        """Whether package `unit` declares `name` itself, which hides what it imports."""
+        return any(c.package == unit.name and not c.outer_class for c in self.classes_by_name.get(name, ())) or \
+            any(t.package == unit.name and t.owner_class is None for t in self.typedefs_by_name.get(name, ())) or \
+            any(v.name == name for v in unit.variables) or any(m.name == name for m in unit.methods)
 
     @staticmethod
     def import_order(name: str, package: str | None, imports) -> list[list[str]]:
@@ -556,24 +555,18 @@ class Workspace:
                 [p for p in imports if "::" not in p]]
 
     def import_scopes(self, name: str, package: str | None, imports) -> list[list[str]]:
-        """As import_order, with the packages whose `name` an import reaches through a re-export
-        (IEEE 1800 26.6) added to that import's level."""
+        """As import_order, each import standing for the packages whose `name` it reaches (its
+        own, or through its re-exports)."""
         key = (name, package, tuple(imports))
         if key not in self._import_scopes:
             own, named, wildcard = self.import_order(name, package, imports)
-            suffix = "::" + name
-            by_name = self.visible_packages([f"{p}{suffix}" for p in named])
-            visible = self.visible_packages(wildcard)
-            self._import_scopes[key] = [
-                own,
-                list(dict.fromkeys(named + sorted(q[:-len(suffix)] for q in by_name if q.endswith(suffix)))),
-                list(dict.fromkeys(wildcard + sorted(q.split("::")[0] for q in visible
-                                                     if "::" not in q or q.endswith(suffix))))]
+            self._import_scopes[key] = [own, *(list(dict.fromkeys(p for q in level for p in self.reach(q, name)))
+                                              for level in (named, wildcard))]
         return self._import_scopes[key]
 
     def provides(self, scope: str, name: str, package: str | None) -> bool:
         """Whether `scope::name` reaches a declaration of `package`: its own, or one it re-exports."""
-        return package == scope or any(package in level for level in self.import_scopes(name, scope, [scope]))
+        return package == scope or package in self.reach(scope, name)
 
     def unit_at(self, rng: Range, packages: bool = False) -> DesignUnit | None:
         """The module, interface or program (or package) around a position, in its file or
