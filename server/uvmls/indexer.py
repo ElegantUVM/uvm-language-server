@@ -1122,6 +1122,8 @@ class Extractor:
                             v.direction = (compact(getattr(st.header, "constKeyword", None)) + " " +
                                            compact(st.header.direction)).strip()
                             v.dimensions = compact(d.dimensions)
+                            if not v.type_text:
+                                v.type_text = "logic"
                             meth.args.append(v)
         if not self.library and not self.in_library(meth.range.path):
             ctx = BodyCtx(owner, meth.name)

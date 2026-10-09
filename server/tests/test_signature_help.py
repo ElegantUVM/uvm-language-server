@@ -765,6 +765,18 @@ endclass
     signature(help_at(doc, '; f(a,'), formals, 1, kind + ' f(' + ', '.join(formals) + ')')
 
 
+def test_implicit_formal_types(doc):
+    doc.change('''class C;
+ task t1; input a; input [3:0] b; output c; inout signed d; endtask
+ function void f2(input a, input [3:0] b, output c, inout signed d); endfunction
+ task test(); logic x; t1(1, 2, x, x); f2(1, 2, x, x); endtask
+endclass
+''')
+    formals = ['input logic a', 'input [3:0] b', 'output logic c', 'inout signed d']
+    signature(help_at(doc, 't1(1,'), formals, 1, 'task t1(' + ', '.join(formals) + ')')
+    signature(help_at(doc, 'f2(1,'), formals, 1, 'function void f2(' + ', '.join(formals) + ')')
+
+
 def hints_in(tmp_path, text, needles, bundled=False):
     """(label, active formal) at the end of each needle, resolved in process on a one-file workspace."""
     from test_fixes import index
