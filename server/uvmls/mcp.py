@@ -22,13 +22,16 @@ import threading
 import time
 from urllib.parse import unquote
 
-from . import __version__
-from .cli import _workspace
-from .elab import uvm_label
-from .model import Range, utf8_prefix
-from .navigation import Navigator
+from . import __version__, naturaldocs, signatures
+from .cli import _workspace, findings
+from .elab import ELAB_TIMEOUT, PACKAGE_PARENT, displayed, request_for, skip_reason, uvm_label
+from .indexer import SHIM_FILE
+from .model import ClassInfo, CreateCall, Range, SeqStart, Variable, utf8_prefix
+from .navigation import Navigator, expr_at
 from .project import ProjectConfig, is_bundled, norm
-from .workspace import Workspace
+from .uvm import ROLE_ORDER
+from .views import config_db_report, effective_type, list_tests, topology
+from .workspace import Spec, Workspace
 
 log = logging.getLogger("uvmls.mcp")
 
@@ -132,6 +135,15 @@ PAGE = {
     "offset": _integer("items to skip"),
 }
 LIBRARY = _boolean("include the UVM library's own declarations (default: the testbench's only)")
+QUERY = _string("a substring of the name, or a glob such as alu_* (case-insensitive)")
+FILE = _string("only this file, relative to the workspace root")
+POSITION = {
+    "file": _string("a file of the testbench, relative to the workspace root (or absolute under it)"),
+    "line": _integer("1-based line", 1),
+    "col": _integer("1-based column, in characters", 1),
+}
+AT = ("file", "line", "col")
+TEST = _string("the test class (default: the one run_test() names, else a leaf test)")
 TYPES = {"string": str, "integer": int, "boolean": bool, "array": list}
 
 
@@ -145,6 +157,91 @@ TOOLS = [
     _tool("stats", "Index statistics",
           "Counts of classes, files and roots, the UVM library in use, the index version and the time "
           "since the last (re)index.", {}),
+    _tool("tests", "Test classes",
+          "Every test class (a uvm_test descendant) with its package, base class and location, the "
+          "default test (what run_test() names, else a leaf test) and the run_test() calls.", {}),
+    _tool("classes", "Find classes",
+          "Classes of the testbench matched by name, UVM role or package: qualified name, role, base "
+          "class and location. The UVM library's own classes are left out unless library is true.",
+          {"query": QUERY, "role": _string("only classes with this UVM role", ROLE_ORDER),
+           "package": _string("only classes of this package"), "library": LIBRARY, **PAGE}),
+    _tool("class", "Describe a class",
+          "One class's declaration: base chain with type parameters bound, properties with their types, "
+          "methods with signatures and doc comments, factory registration, subclasses, and where the "
+          "factory creates it.",
+          {"name": _string("the class name, qualified (pkg::cls) when several packages declare it")}, ("name",)),
+    _tool("topology", "Component topology",
+          "The uvm_test_top component tree a test builds, from the type_id::create calls of the test and "
+          "everything it inherits, with the test's factory overrides applied (overriddenFrom names the "
+          "type written), components created under an if marked conditional, TLM connections and the "
+          "override calls. A static view: loops and runtime values are not evaluated.", {"test": TEST}),
+    _tool("effective_type", "Effective type of factory creates",
+          "For every factory create a test reaches: the type written, the type the factory makes after "
+          "the test's overrides, the override call that applies (null when none), and how many instances "
+          "the create makes.",
+          {"test": TEST, "file": FILE, "line": _integer("only the create on this 1-based line (needs file)", 1),
+           **PAGE}),
+    _tool("config_db", "config_db cross-reference",
+          "uvm_config_db and uvm_resource_db sets and gets grouped by field, each call with its type, "
+          "scope pattern (inst), context, owner class and method, and the field's status: ok, no-set (a "
+          "get nothing sets), no-get, type-mismatch (a get of another type than the field's sets) or "
+          "dynamic (a field name that is not a literal, one row per call).",
+          {"field": _string("only fields matching this substring or glob"),
+           "status": _string("only rows with this status", ["ok", "no-set", "no-get", "type-mismatch", "dynamic"]),
+           "file": FILE, **PAGE}),
+    _tool("lint", "Lint findings",
+          "The UVM lint findings and parse problems of the testbench's files (never the library's) as "
+          "`uvmls lint` reports them: code, severity, message and location. `// uvm-lint: ignore code` "
+          "directives in the files apply.",
+          {"codes": {"type": "array", "items": {"type": "string"}, "description": "only these codes"},
+           "file": FILE, "severity": _string("only this severity", ["error", "warning", "info", "hint"]), **PAGE}),
+    _tool("elaborate", "Elaborate with slang",
+          "Compile and elaborate the whole design with slang in a subprocess and report what a "
+          "simulator's elaboration would: type errors, unknown members, wrong argument counts, missing "
+          "modules or packages. Returns the top modules, counts and the first diagnostics (truncated when "
+          f"the display limits cut the list); it is stopped after {ELAB_TIMEOUT:.0f} s. Other tool calls "
+          "wait for it; ping does not.",
+          {"tops": {"type": "array", "items": {"type": "string"}, "description": "top modules (default: slang picks)"}}),
+    _tool("definition", "Go to definition",
+          "Where the identifier at a position is declared; a config_db field literal goes to the field's "
+          "sets (from a get) or gets (from a set).", POSITION, AT),
+    _tool("hover", "Hover text",
+          "What the editor's hover shows at a position: the declaration, the type with its UVM role, and "
+          "the doc comment (UVM's NaturalDocs comments as Markdown; a method without one shows the doc of "
+          "the method it overrides, with its source).", POSITION, AT),
+    _tool("references", "References",
+          "Every occurrence of the identifier at a position in the testbench's files, by name (not "
+          "type-resolved), declarations included.", {**POSITION, **PAGE}, AT),
+    _tool("symbols", "Workspace symbols",
+          "Classes, design units, typedefs and (with a query) methods whose name has the query's "
+          "characters in order; with definition true and a class's exact name (qualified, or bare when "
+          "one class has it), just that declaration.",
+          {"query": _string("characters to find in order; empty lists every class, unit and typedef"),
+           "definition": _boolean("resolve the query as an exact class or design unit name"), **PAGE}, ("query",)),
+    _tool("signature", "Signature help",
+          "The method called around a position: its label, formals, the active parameter and its doc "
+          "comment, as the editor's parameter hints show them.", POSITION, AT),
+    _tool("sequences", "Sequences and where they start",
+          "Sequence classes with their item type and p_sequencer type, and every seq.start(sequencer) "
+          "call: the sequence class the receiver resolves to (null when it cannot be resolved), the "
+          "sequencer expression, and the class and method that start it.", PAGE),
+    _tool("creates", "Factory creates",
+          "Every type_id::create call of the testbench: the type created (resolved and as written), the "
+          "instance name, the parent expression, and the class and method that make it.",
+          {"type": _string("only creates of this type (substring or glob)"), "file": FILE, **PAGE}),
+    _tool("includes", "Include graph",
+          "Which root files reach a file, what it includes and what includes it; without a file, that "
+          "for every file of the testbench.", {"file": FILE, **PAGE}),
+    _tool("units", "Design units",
+          "Modules, interfaces, programs and packages with their ports, parameters, instances, imports "
+          "and run_test() calls.",
+          {"kind": _string("only this kind", ["module", "interface", "program", "package"]), "library": LIBRARY, **PAGE}),
+    _tool("macros", "Macro definitions",
+          "`define macros of the testbench (and of the UVM library with library true) with their "
+          "parameters and location.", {"query": QUERY, "library": LIBRARY, **PAGE}),
+    _tool("typedefs", "Typedefs",
+          "Typedefs of the testbench with their target type, package or owning class, and location.",
+          {"query": QUERY, "library": LIBRARY, **PAGE}),
     _tool("reindex", "Rebuild the index",
           "Parse every file again (the files on disk change the index on their own; this forces it) and "
           "return the statistics.", {}),
@@ -154,8 +251,16 @@ TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
 RESOURCES = [
     {"uri": "uvm://stats", "name": "stats", "title": "Index statistics", "mimeType": "application/json",
      "description": "what the stats tool returns"},
+    {"uri": "uvm://topology", "name": "topology", "title": "Component topology of the default test",
+     "mimeType": "application/json", "description": "what the topology tool returns without a test"},
+    {"uri": "uvm://configdb", "name": "configdb", "title": "config_db cross-reference",
+     "mimeType": "application/json", "description": "every row of the config_db tool"},
+    {"uri": "uvm://lint", "name": "lint", "title": "Lint findings", "mimeType": "application/json",
+     "description": "every finding of the lint tool"},
 ]
 RESOURCE_TEMPLATES = [
+    {"uriTemplate": "uvm://topology/{test}", "name": "topology-of-test", "title": "Component topology of a test",
+     "mimeType": "application/json", "description": "what the topology tool returns for the test"},
     {"uriTemplate": "uvm://file/{path}", "name": "file", "title": "An indexed file's text",
      "mimeType": "text/plain", "description": "the text the index holds for a file under the workspace root"},
 ]
@@ -359,6 +464,12 @@ class McpServer:
                 return {"contents": [{"uri": uri, "mimeType": "text/plain", "text": self.ws.texts[path]}]}
             if kind == "stats" and not tail:
                 data = self.tool_stats({})
+            elif kind == "topology":
+                data = self.tool_topology({"test": tail} if tail else {})
+            elif kind == "configdb" and not tail:
+                data = self.tool_config_db({"limit": MAX_LIMIT})
+            elif kind == "lint" and not tail:
+                data = self.tool_lint({"limit": MAX_LIMIT})
             else:
                 raise RpcError(RESOURCE_NOT_FOUND, f"unknown resource: {uri}")
         except ToolError as e:
@@ -447,14 +558,16 @@ class McpServer:
         candidates = [norm(file)] if os.path.isabs(file) else [norm(os.path.join(r, file)) for r in self.roots]
         inside = [p for p in candidates if any(p == r or p.startswith(r + os.sep) for r in self.roots)]
         if not inside:
-            raise ToolError(f"outside the workspace: {file}")
+            library = any(p in self.ws.library_files or is_bundled(p) for p in candidates)
+            raise ToolError(f"outside the workspace: {file}" + (
+                " (a UVM library file; only the testbench's own files can be asked about)" if library else ""))
         for path in inside:
             if path in self.ws.texts or path in self.ws.library_files:
                 return path
         raise ToolError(f"not indexed: {file}")
 
     def is_library(self, path: str) -> bool:
-        return path in self.ws.library_files or is_bundled(path)
+        return path in self.ws.library_files or is_bundled(path) or os.path.normpath(path) == SHIM_FILE
 
     def _page(self, found: list, args: dict, build=lambda x: x) -> dict:
         limit = min(args.get("limit", DEFAULT_LIMIT), MAX_LIMIT)
@@ -475,6 +588,421 @@ class McpServer:
         self.indexed_at = time.time()
         self._restamp()
         return self.tool_stats(args)
+
+    # -- tools: classes ------------------------------------------------------
+
+    def _class_item(self, cls: ClassInfo) -> dict:
+        return {"qualname": cls.qualname, "name": cls.name, "package": cls.package, "role": self.ws.role(cls),
+                "base": cls.base.text if cls.base else None, "library": cls.library, "location": self.loc(cls.range)}
+
+    def _find_class(self, name: str) -> ClassInfo:
+        ws = self.ws
+        if "::" in name:
+            cls = ws.class_by_qual.get(name)
+            if cls is None:
+                raise ToolError(f"no class {name}")
+            return cls
+        found = ws.classes_by_name.get(name, [])
+        if not found:
+            raise ToolError(f"no class {name}")
+        if len(found) > 1:
+            raise ToolError(f"{name} is declared more than once: {', '.join(sorted(c.qualname for c in found))}; "
+                            "give the qualified name")
+        return found[0]
+
+    def _creates(self) -> list[tuple[ClassInfo, CreateCall, Spec | None]]:
+        """Every factory create of the testbench's classes with the type it resolves to, as the
+        topology resolves them, in file order."""
+        ws = self.ws
+        out = []
+        for cls in ws.classes:
+            if cls.library:
+                continue
+            for cr in ws.calls_of(cls).creates:
+                if cr.kind != "factory":
+                    continue
+                spec = None
+                if cr.type is not None:
+                    spec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls)
+                elif cr.target_base:
+                    hit = ws.find_member(cls, cr.target_base)
+                    if hit and isinstance(hit[1], Variable):
+                        spec = ws.member_type_spec(*hit)
+                out.append((cls, cr, spec))
+        out.sort(key=lambda t: (t[1].range.path, t[1].range.line, t[1].range.col))
+        return out
+
+    def tool_tests(self, args: dict) -> dict:
+        ws = self.ws
+        info = list_tests(ws)
+        tests = sorted((c for c in ws.classes if not c.library and ws.role(c) == "test"), key=lambda c: c.name)
+        return {"items": [self._class_item(c) for c in tests], "total": len(tests), "truncated": False,
+                "default": info["default"], "runTest": info["runTest"]}
+
+    def tool_classes(self, args: dict) -> dict:
+        ws = self.ws
+        query, role, package = args.get("query"), args.get("role"), args.get("package")
+        found = [c for c in ws.classes
+                 if (args.get("library") or not c.library) and _matches(query, c.name, c.qualname)
+                 and (role is None or ws.role(c) == role) and (package is None or c.package == package)]
+        found.sort(key=lambda c: (c.library, c.qualname))
+        return self._page(found, args, self._class_item)
+
+    def tool_class(self, args: dict) -> dict:
+        ws, nav = self.ws, self.nav
+        cls = self._find_class(args["name"])
+        methods = []
+        for m in cls.methods:
+            if m.generated:
+                continue
+            impl = ws.impls.get((cls.qualname, m.name)) if m.is_prototype else None
+            doc, source = nav.method_doc(m, cls)
+            methods.append({"name": m.name, "kind": m.kind, "signature": m.signature, "qualifiers": m.qualifiers,
+                            "prototype": m.is_prototype, "location": self.loc(m.range),
+                            "body": self.loc(impl.range) if impl is not None else None,
+                            "doc": naturaldocs.markdown(doc) if doc else "",
+                            "docFrom": f"{source.qualname}::{m.name}" if source is not None else None})
+        return {
+            **self._class_item(cls), "kind": cls.kind, "virtual": cls.is_virtual,
+            "params": [{"name": p.name, "default": p.default, "isType": p.is_type} for p in cls.params],
+            "chain": [{"name": e.spec.name, "class": e.spec.cls.qualname if e.spec.cls else None,
+                       "library": bool(e.spec.cls and e.spec.cls.library),
+                       "bindings": {k: str(v) for k, v in e.bindings.items()}} for e in ws.chain(cls)],
+            "registration": cls.registration, "registrationMacro": cls.registration_macro,
+            "declaration": self.loc(cls.decl_range),
+            "properties": [{"name": v.name, "type": v.type_text, "kind": v.kind, "qualifiers": v.qualifiers,
+                            "generated": v.generated, "location": self.loc(v.range),
+                            "doc": naturaldocs.plain(v.doc) if v.doc else ""}
+                           for v in cls.properties if not v.generated or v.name == "p_sequencer"],
+            "methods": methods,
+            "typedefs": [{"name": t.name, "target": t.target_text, "location": self.loc(t.range)} for t in cls.typedefs],
+            "constraints": [{"name": n, "location": self.loc(r)} for n, r in cls.constraints],
+            "covergroups": [{"name": n, "location": self.loc(r)} for n, r in cls.covergroups],
+            "subclasses": [{"qualname": c.qualname, "location": self.loc(c.range)}
+                           for c in ws.subclasses.get(cls.qualname, [])],
+            "createdBy": [{"owner": owner.qualname, "method": cr.method, "instName": cr.inst_name,
+                           "parent": cr.parent_expr, "location": self.loc(cr.range)}
+                          for owner, cr, spec in self._creates() if spec is not None and spec.cls is cls],
+            "doc": naturaldocs.markdown(cls.doc) if cls.doc else "",
+        }
+
+    # -- tools: topology and config_db ---------------------------------------
+
+    @staticmethod
+    def _unknown_test(test: str, tests: list[str]) -> str:
+        return f"unknown test {test}; known tests: {', '.join(tests) or 'none'}"
+
+    def tool_topology(self, args: dict) -> dict:
+        test = args.get("test")
+        data = topology(self.ws, test)
+        if data["root"] is None and test:
+            raise ToolError(self._unknown_test(test, data["tests"]))
+        return self.convert(data)
+
+    def tool_effective_type(self, args: dict) -> dict:
+        test = args.get("test")
+        found = effective_type(self.ws, test)
+        if found.topology["root"] is None and test:
+            raise ToolError(self._unknown_test(test, found.topology["tests"]))
+        path = self.path_of(args["file"]) if "file" in args else None
+        line = args.get("line")
+        if line is not None and path is None:
+            raise ToolError("line needs file")
+        items = []
+        for rng in sorted(found, key=lambda r: (r.path, r.line, r.col)):
+            if path is not None and rng.path != path or line is not None and not rng.line + 1 <= line <= rng.end_line + 1:
+                continue
+            for e in found[rng]:
+                ov = e.override
+                items.append({"create": self.loc(rng), "original": e.original, "effective": e.effective,
+                              "override": {"kind": ov.kind, "original": ov.original, "override": ov.override,
+                                           "instPath": ov.inst_path, "owner": ov.owner, "method": ov.method,
+                                           "location": self.loc(ov.range)} if ov is not None else None,
+                              "instances": e.instances, "count": found.counts[rng]})
+        return {**self._page(items, args), "test": found.topology["test"]}
+
+    def _config_entry(self, e: dict) -> dict:
+        return {"op": e["op"], "db": e["db"], "type": e["type"], "canon": e["canon"], "context": e["context"],
+                "inst": e["inst"], "instLiteral": e["instLiteral"], "field": e["field"], "value": e["value"],
+                "owner": e["owner"], "method": e["method"], "optional": e["optional"],
+                "conditional": e["conditional"], "location": self.loc_of(e)}
+
+    def _config_row(self, row: dict) -> dict:
+        return {"field": row["field"], "status": row["status"], "types": row["types"],
+                "sets": [self._config_entry(e) for e in row["sets"]],
+                "gets": [self._config_entry(e) for e in row["gets"]]}
+
+    def tool_config_db(self, args: dict) -> dict:
+        report = config_db_report(self.ws)
+        field, status = args.get("field"), args.get("status")
+        path = self.path_of(args["file"]) if "file" in args else None
+        rows = list(report["fields"])
+        rows += [{"field": e["field"], "status": "dynamic", "types": [e["type"]],
+                  "sets": [e] if e["op"] == "set" else [], "gets": [e] if e["op"] != "set" else []}
+                 for e in report["dynamic"]]
+        rows = [r for r in rows if _matches(field, r["field"]) and (status is None or r["status"] == status)
+                and (path is None or any(e["file"] == path for e in r["sets"] + r["gets"]))]
+        return self._page(rows, args, self._config_row)
+
+    def tool_lint(self, args: dict) -> dict:
+        codes, severity = args.get("codes"), args.get("severity")
+        path = self.path_of(args["file"]) if "file" in args else None
+        diags = [d for d in findings(self.ws) if (not codes or d.code in codes)
+                 and (severity is None or d.severity == severity) and (path is None or d.range.path == path)]
+        return self._page(diags, args, lambda d: {
+            "code": d.code, "severity": d.severity, "message": d.message, "source": d.source,
+            "location": self.loc(d.range), "related": [{"message": m, "location": self.loc(r)} for r, m in d.related]})
+
+    # -- tools: elaboration --------------------------------------------------
+
+    async def tool_elaborate(self, args: dict) -> dict:
+        ws = self.ws
+        reason = skip_reason(ws)
+        if reason:
+            raise ToolError(f"elaboration skipped: {reason}")
+        request = request_for(ws, tops=args.get("tops") or ())
+        result = await self._run_worker(request)
+        listed, more = displayed(result.get("diagnostics") or [])
+        counts = result.get("counts") or {}
+
+        def at(d: dict) -> dict | None:
+            return self.location(d["file"], d["line"], d["col"], d["endLine"], d["endCol"]) if d.get("file") else None
+
+        return {"error": result.get("error"), "tops": result.get("tops") or [], "counts": counts,
+                "seconds": result.get("seconds"), "uvm": uvm_label(ws.sources),
+                "diagnostics": [{"code": d["code"], "severity": d["severity"], "message": d["message"], "location": at(d),
+                                 "related": [{"message": n["message"], "location": at({**n, "endLine": n["line"], "endCol": n["col"]})}
+                                             for n in d.get("related") or []]} for d in listed],
+                "truncated": bool(more or counts.get("omitted"))}
+
+    async def _run_worker(self, request: dict) -> dict:
+        """`python -m uvmls elab-worker` on the request, as the language server's run_worker does:
+        pyslang holds the GIL while it compiles, so it must not compile in this process."""
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [PACKAGE_PARENT] + [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p])
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "uvmls", "elab-worker", str(os.getpid()), str(ELAB_TIMEOUT),
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, env=env)
+        except OSError as e:
+            return {"error": f"cannot start {sys.executable}: {e}"}
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(json.dumps(request).encode()), ELAB_TIMEOUT)
+        except asyncio.TimeoutError:
+            return {"error": f"it took longer than {ELAB_TIMEOUT:.0f} s and was stopped"}
+        finally:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+        if err.strip():
+            log.info("elaboration worker: %s", err.decode(errors="replace")[-4000:])
+        try:
+            return json.loads(out)
+        except ValueError:
+            return {"error": f"the worker exited with status {proc.returncode}"}
+
+    # -- tools: navigation ---------------------------------------------------
+
+    def _position(self, args: dict) -> tuple[str, str, int, int]:
+        """(path, text, line, column) of a position argument, 0-based with the column in
+        characters, in a file of the testbench's own (the index keeps no text of the library's)."""
+        path = self.path_of(args["file"])
+        if path not in self.ws.texts:
+            raise ToolError(f"{args['file']} is a library file; only the testbench's own files can be asked about")
+        lines = self.ws.lines_of(path)
+        line = args["line"] - 1
+        if line >= len(lines):
+            raise ToolError(f"{args['file']} has {len(lines)} lines, not {args['line']}")
+        return path, self.ws.texts[path], line, min(args["col"] - 1, len(lines[line]))
+
+    def _byte_column(self, path: str, line: int, col: int) -> int:
+        """The index's UTF-8 byte column of a character column, which the config_db lookups and
+        signature help take (definition, hover and references take the character column)."""
+        return len(self.ws.lines_of(path)[line][:col].encode("utf-8", "surrogatepass"))
+
+    def tool_definition(self, args: dict) -> dict:
+        path, text, line, col = self._position(args)
+        ranges = self.nav.config_db_definition(path, line, self._byte_column(path, line, col)) or \
+            self.nav.definition(path, line, col, text)
+        return {"locations": [self.loc(r) for r in ranges]}
+
+    def tool_hover(self, args: dict) -> dict:
+        path, text, line, col = self._position(args)
+        found = self.nav.config_db_hover(path, line, self._byte_column(path, line, col))
+        md = found[0] if found else self.nav.hover(path, line, col, text)
+        return {"markdown": md or None}
+
+    def tool_references(self, args: dict) -> dict:
+        path, text, line, col = self._position(args)
+        return self._page(self.nav.references(path, line, col, text), args, self.loc)
+
+    def _symbol(self, s: dict) -> dict:
+        return {"name": s["name"], "kind": s["kind"], "container": s["container"], "library": s["library"],
+                "location": self.loc(s["range"])}
+
+    def tool_symbols(self, args: dict) -> dict:
+        ws = self.ws
+        query = args["query"]
+        if args.get("definition"):
+            cls = ws.class_by_qual.get(query)
+            if cls is None and len(ws.classes_by_name.get(query, [])) == 1:
+                cls = ws.classes_by_name[query][0]
+            if cls is not None:
+                item = {"name": cls.name, "kind": "class", "container": cls.package or "", "library": cls.library,
+                        "range": cls.range}
+                return {"items": [self._symbol(item)], "total": 1, "truncated": False}
+            unit = ws.find_unit(query)
+            if unit is not None:
+                item = {"name": unit.name, "kind": unit.kind, "container": "", "library": unit.library, "range": unit.range}
+                return {"items": [self._symbol(item)], "total": 1, "truncated": False}
+        return self._page(self.nav.workspace_symbols(query), args, self._symbol)
+
+    def tool_signature(self, args: dict) -> dict:
+        path, text, line, col = self._position(args)
+        found = signatures.signature(self.nav, path, line, self._byte_column(path, line, col))
+        if found is None:
+            return {"signature": None}
+        target, method, label, formals, active = found
+        doc, source = self.nav.method_doc(method, target.owner)
+        owner = target.owner
+        return {"signature": {
+            "label": label, "formals": formals, "active": active, "method": method.name, "kind": method.kind,
+            "owner": owner.qualname if isinstance(owner, ClassInfo) else getattr(owner, "name", owner),
+            "doc": naturaldocs.markdown(doc) if doc else "",
+            "docFrom": f"{source.qualname}::{method.name}" if source is not None else None,
+            "location": self.loc(method.range)}}
+
+    # -- tools: sequences, creates, includes, units, macros, typedefs --------
+
+    def _receiver_class(self, start: SeqStart) -> str | None:
+        """The sequence class `seq` names in `seq.start(...)`, through the method's locals and
+        arguments and the class's members."""
+        ws, nav = self.ws, self.nav
+        path = start.range.path
+        lines = ws.lines_of(path) if path in ws.texts else []
+        if start.range.line >= len(lines):
+            return None
+        line = lines[start.range.line]
+        head = len(utf8_prefix(line, start.range.col))
+        at = line.find(start.receiver, head)
+        end = (at if at >= 0 else head) + len(start.receiver)
+        for t in nav.resolve_expr(path, start.range.line, end, expr_at(line, end)):
+            if isinstance(t.obj, ClassInfo):
+                return t.obj.qualname
+            spec = nav.type_of(t)
+            if spec is not None and spec.cls is not None:
+                return spec.cls.qualname
+        return None
+
+    def _seq_starts(self) -> list[dict]:
+        out = []
+        for cls in self.ws.classes:
+            if cls.library:
+                continue
+            for s in self.ws.calls_of(cls).seq_starts:
+                out.append({"sequence": self._receiver_class(s), "receiver": s.receiver, "sequencerExpr": s.sequencer,
+                            "owner": s.owner, "method": s.method, "location": self.loc(s.range)})
+        out.sort(key=lambda s: (s["location"]["file"], s["location"]["line"], s["location"]["col"]))
+        return out
+
+    def tool_sequences(self, args: dict) -> dict:
+        ws = self.ws
+        starts = self._seq_starts()
+
+        def item(cls: ClassInfo) -> dict:
+            req = None
+            for e in ws.chain(cls):
+                if e.spec.name == "uvm_sequence":
+                    bound = e.bindings.get("REQ")
+                    req = str(bound) if bound is not None else (e.spec.args[0] if e.spec.args else None)
+                    break
+            return {**self._class_item(cls), "item": req,
+                    "pSequencer": next((v.type_text for v in cls.properties if v.name == "p_sequencer"), None),
+                    "starts": [s for s in starts if s["sequence"] == cls.qualname]}
+
+        seqs = sorted((c for c in ws.classes if not c.library and ws.role(c) == "sequence"), key=lambda c: c.qualname)
+        return {**self._page(seqs, args, item), "starts": starts}
+
+    def tool_creates(self, args: dict) -> dict:
+        type_query = args.get("type")
+        path = self.path_of(args["file"]) if "file" in args else None
+        items = []
+        for cls, cr, spec in self._creates():
+            if path is not None and cr.range.path != path:
+                continue
+            resolved = spec.cls.qualname if spec is not None and spec.cls is not None else spec.name if spec else None
+            written = cr.type.text if cr.type is not None else None
+            if not _matches(type_query, resolved, written, spec.cls.name if spec is not None and spec.cls else None):
+                continue
+            items.append({"type": resolved, "written": written, "instName": cr.inst_name, "nameExpr": cr.name_expr,
+                          "parent": cr.parent_expr, "target": cr.target, "owner": cls.qualname, "method": cr.method,
+                          "conditional": cr.conditional, "condition": cr.condition, "inLoop": cr.in_loop,
+                          "location": self.loc(cr.range)})
+        return self._page(items, args)
+
+    def _include_edges(self) -> tuple[dict, dict]:
+        """(including file -> [(target, site)], target -> [(including file, site)]), each `include once."""
+        forward: dict[str, list] = {}
+        backward: dict[str, list] = {}
+        seen = set()
+        for idx in self.ws.indices.values():
+            for src, sites in idx.includes.items():
+                for target, site in sites:
+                    if (target, site) in seen:
+                        continue
+                    seen.add((target, site))
+                    forward.setdefault(src, []).append((target, site))
+                    backward.setdefault(target, []).append((src, site))
+        return forward, backward
+
+    def tool_includes(self, args: dict) -> dict:
+        ws = self.ws
+        forward, backward = self._include_edges()
+        if "file" in args:
+            path = self.path_of(args["file"])
+            return {"file": self.relative(path), "roots": [self.relative(r) for r in ws.roots_for(path)],
+                    "library": path in ws.library_files,
+                    "includes": [{"file": self.relative(t), "location": self.loc(site)} for t, site in forward.get(path, [])],
+                    "includedBy": [{"file": self.relative(s), "location": self.loc(site)} for s, site in backward.get(path, [])]}
+        files = sorted(ws.files() - ws.library_files)
+        return self._page(files, args, lambda f: {
+            "file": self.relative(f), "roots": [self.relative(r) for r in ws.roots_for(f)],
+            "includes": [self.relative(t) for t, _ in forward.get(f, [])],
+            "includedBy": sorted({self.relative(s) for s, _ in backward.get(f, [])})})
+
+    def tool_units(self, args: dict) -> dict:
+        kind = args.get("kind")
+        units = sorted((u for u in self.ws.units if (args.get("library") or not u.library) and (kind is None or u.kind == kind)),
+                       key=lambda u: (u.kind, u.name))
+        return self._page(units, args, lambda u: {
+            "name": u.name, "kind": u.kind, "library": u.library, "location": self.loc(u.range),
+            "params": [{"name": p.name, "default": p.default, "isType": p.is_type} for p in u.params],
+            "ports": [{"name": v.name, "type": v.type_text, "direction": v.direction} for v in u.ports],
+            "instances": [{"module": i.module, "name": i.name, "location": self.loc(i.range)} for i in u.instances],
+            "runTests": [{"test": name, "location": self.loc(r)} for name, r in u.run_tests],
+            "imports": u.imports})
+
+    def tool_macros(self, args: dict) -> dict:
+        query = args.get("query")
+        found = sorted(((name, m) for name, defs in self.ws.macros_by_name.items() for m in defs
+                        if _matches(query, name) and (args.get("library") or not self.is_library(m.range.path))),
+                       key=lambda nm: (nm[0], nm[1].range.path, nm[1].range.line))
+        return self._page(found, args, lambda nm: {
+            "name": nm[0], "params": nm[1].params, "library": self.is_library(nm[1].range.path),
+            "location": self.loc(nm[1].range)})
+
+    def tool_typedefs(self, args: dict) -> dict:
+        query = args.get("query")
+        found = sorted((t for name, tds in self.ws.typedefs_by_name.items() for t in tds
+                        if _matches(query, name) and (args.get("library") or not self.is_library(t.range.path))),
+                       key=lambda t: (t.name, t.range.path, t.range.line))
+        return self._page(found, args, lambda t: {
+            "name": t.name, "target": t.target_text, "package": t.package, "ownerClass": t.owner_class,
+            "library": self.is_library(t.range.path), "location": self.loc(t.range)})
 
 
 def serve(args) -> int:
