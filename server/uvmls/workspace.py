@@ -78,6 +78,14 @@ def _carry(value: str, source: str) -> str:
     return value if isinstance(value, Bound) or not isinstance(source, Bound) else Bound(value, source.scope)
 
 
+def _arg_key(arg: str):
+    """What a type argument means: its text, scope and display, or the type it already names."""
+    if not isinstance(arg, Bound):
+        return arg
+    spec = arg.spec
+    return arg, arg.scope, arg.formal, spec and (spec.key, tuple(map(_arg_key, spec.args)))
+
+
 @dataclass
 class CallSet:
     creates: list[CreateCall] = field(default_factory=list)
@@ -585,7 +593,7 @@ class Workspace:
         if args:
             here = Scope.of(ctx, package, imports, site)
             args = [a if isinstance(a, Bound) else Bound(a, here) for a in args]
-        cache_key = (name, scope, tuple((a, a.scope, a.spec is None) for a in args), ctx.qualname if ctx else None,
+        cache_key = (name, scope, tuple(map(_arg_key, args)), ctx.qualname if ctx else None,
                      package, tuple(imports), strict, near, members)
         if depth == 0 and cache_key in self._spec_cache:
             return self._spec_cache[cache_key]

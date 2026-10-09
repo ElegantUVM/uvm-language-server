@@ -1276,3 +1276,17 @@ endpackage
 '''.replace('MID', mid).replace('TOP', top)
     assert labels_in(tmp_path, text, ['i.go(', 'o.go(']) == \
         [label and 'function void go(int a)' for label in labels]
+
+
+@pytest.mark.parametrize('order', [1, -1])
+def test_generic_class_labels_do_not_depend_on_request_order(tmp_path, order):
+    """A formal's default and the same argument written out are different bindings."""
+    text = '''class base #(type T = int);
+  base #(T) nxt;
+  base #(int) fixed;
+  function void f(T a); endfunction
+  function void g(); fixed.f(2); nxt.f(1); endfunction
+endclass
+'''
+    assert labels_in(tmp_path, text, ['fixed.f(', 'nxt.f('][::order]) == \
+        ['function void f(int a)', 'function void f(T a)'][::order]
