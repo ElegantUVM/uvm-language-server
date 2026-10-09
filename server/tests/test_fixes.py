@@ -595,6 +595,9 @@ def ctor_findings(tmp_path, text, **cfg):
      "the factory passes a uvm_component as argument 2 of drv's constructor, but 'parent' is drv"),
     ("function new(string name, uvm_component parent);", "function new(int name, uvm_component parent);",
      "the factory passes a string as argument 1 of drv's constructor, but 'name' is int"),
+    ("function new(string name, uvm_component parent);",
+     "function new; input name; input parent; int name; uvm_component parent;",
+     "the factory passes a string as argument 1 of drv's constructor, but 'name' is int"),
     ('function new(string name = "item");', 'function new(string name = "item", int k);',
      "the factory constructs item with new(name); give 'k' a default value"),
     ('function new(string name = "item");', "function new();",
@@ -609,6 +612,8 @@ def test_factory_ctor_reports_what_the_factory_cannot_call(tmp_path, old, new, m
 @pytest.mark.parametrize("old,new", [
     ("function new(string name, uvm_component parent);", "function new(string name, uvm_component parent, int k = 1);"),
     ("function new(string name, uvm_component parent);", "function new(string name = \"d\", uvm_object parent = null);"),
+    ("function new(string name, uvm_component parent);",  # non-ANSI, typed in the body
+     "function new; input name; input parent; string name; uvm_component parent;"),
     ("`uvm_component_utils(drv)", "`uvm_component_utils(drv)\n  `uvm_new_func"),  # the macro's own
     ("class drv extends", "virtual class drv extends"),
     ("`uvm_component_utils(drv)", "`uvm_object_utils(drv)"),  # utils-mismatch, fixed first

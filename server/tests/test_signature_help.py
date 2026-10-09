@@ -870,6 +870,18 @@ endclass
     signature(help_at(doc, 'f2(1,'), formals, 1, 'function void f2(' + ', '.join(formals) + ')')
 
 
+def test_non_ansi_formal_typed_by_a_body_declaration(doc):
+    doc.change('''class C;
+ task t3; output x; input y; input [3:0] z; input int w; int x; string y; logic [3:0] z; endtask
+ function byte f4; input a; byte a; return a; endfunction
+ task test(); int x; t3(x, "s", 1, 2); void'(f4(1)); endtask
+endclass
+''')
+    formals = ['output int x', 'input string y', 'input logic[3:0] z', 'input int w']
+    signature(help_at(doc, 't3(x,'), formals, 1, 'task t3(' + ', '.join(formals) + ')')
+    signature(help_at(doc, 'f4('), ['input byte a'], 0, 'function byte f4(input byte a)')
+
+
 def hints_in(tmp_path, text, needles, bundled=False):
     """(label, active formal) at the end of each needle, resolved in process on a one-file workspace."""
     from test_fixes import index

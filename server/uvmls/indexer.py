@@ -1146,10 +1146,16 @@ class Extractor:
         meth.is_prototype = False
         meth.non_ansi = decl.prototype.portList is None
         if meth.non_ansi:
+            # A port declared without a data type takes it from a body declaration of its name.
+            declared = {d.name.valueText: st.type for st in decl.items if st.kind == K.DataDeclaration
+                        for d in nodes(st.declarators)}
             for st in decl.items:
                 if st.kind == K.PortDeclaration and st.header is not None:
+                    dtype = getattr(st.header, "dataType", None)
                     for d in nodes(st.declarators):
-                        v = self.variable(d, "argument", getattr(st.header, "dataType", None), compact(st), [])
+                        own = declared.get(d.name.valueText, dtype) if dtype is None or \
+                            dtype.kind == K.ImplicitType else dtype
+                        v = self.variable(d, "argument", own, compact(st), [])
                         if v:
                             v.direction = (compact(getattr(st.header, "constKeyword", None)) + " " +
                                            compact(st.header.direction)).strip()
