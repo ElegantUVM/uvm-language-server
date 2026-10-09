@@ -381,6 +381,18 @@ def test_missing_binary_is_retried_without_reindexing(clients, tmp_path, monkeyp
     fake.called()
 
 
+def test_removed_directory_runs_in_nearest_existing_one(clients, fake, tmp_path):
+    proj = tmp_path / "proj"
+    (proj / "sub" / "deeper").mkdir(parents=True)
+    c = clients(proj, {"path": str(fake.path)})
+    doc = document(c, proj / "sub" / "deeper")
+    shutil.rmtree(proj / "sub")
+    doc.change("// BAD unsaved\n")
+    assert applied(doc.text, format_doc(doc)) == "// good unsaved\n"
+    assert fake.called()["cwd"] == str(proj)
+    assert not (proj / "sub").exists()
+
+
 def test_spawn_failure(clients, fake, tmp_path):
     fake.path.write_text("#!/nonexistent/interpreter\n")
     c = clients(tmp_path, {"path": str(fake.path)})

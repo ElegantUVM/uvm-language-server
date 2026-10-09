@@ -43,6 +43,15 @@ def executable(path: str, roots: list[str]) -> str | None:
     return expanded if os.path.isfile(expanded) and os.access(expanded, os.X_OK) else None
 
 
+def working_directory(path: str) -> str:
+    """The document's directory, or its nearest existing ancestor: an open buffer outlives a
+    directory removed under it, and Verible reads the buffer from stdin."""
+    directory = os.path.dirname(path)
+    while not os.path.isdir(directory) and os.path.dirname(directory) != directory:
+        directory = os.path.dirname(directory)
+    return directory
+
+
 def normalize(source: str, output: bytes) -> str:
     text = output.decode("utf-8")
     if not text:
@@ -133,7 +142,7 @@ class Formatter:
         timed_out = False
         # Shield startup so cancellation cannot lose a child created before the await resumes.
         spawn = asyncio.ensure_future(asyncio.create_subprocess_exec(
-            *argv, cwd=os.path.dirname(path), stdin=asyncio.subprocess.PIPE,
+            *argv, cwd=working_directory(path), stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             start_new_session=os.name == "posix"))
         try:
