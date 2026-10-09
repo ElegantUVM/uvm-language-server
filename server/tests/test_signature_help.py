@@ -719,3 +719,98 @@ endclass
 '''.replace('KIND', kind).replace('ENDING', ending))
     formals = ['const ref int a', 'const ref int others[]', 'ref int c', 'output byte b']
     signature(help_at(doc, '; f(a,'), formals, 1, kind + ' f(' + ', '.join(formals) + ')')
+
+
+def labels_in(tmp_path, text, needles, bundled=False):
+    """Signature labels at the end of each needle, resolved in process on a one-file workspace."""
+    from test_fixes import index
+    from uvmls import signatures
+    from uvmls.navigation import Navigator
+
+    ws = index(tmp_path, {'t.sv': text}, bundled=bundled)
+    nav, path, out = Navigator(ws), str(tmp_path / 't.sv'), []
+    for needle in needles:
+        prefix = text[:text.index(needle) + len(needle)]
+        found = signatures.signature(nav, path, prefix.count('\n'), len(prefix.rsplit('\n', 1)[-1]))
+        out.append(found and found[2])
+    return out
+
+
+def test_type_arguments_resolve_where_the_specialization_is_written(tmp_path):
+    text = '''package a;
+class holder #(type T = int);
+  T item;
+endclass
+endpackage
+package b;
+import a::*;
+class thing;
+  function new(string n = "x"); endfunction
+  function void go(int x, int y); endfunction
+endclass
+class user extends holder #(thing);
+  holder #(thing) h;
+  function void t();
+    item.go(1, 2);
+    h.item.go(3, 4);
+    item = new("q");
+    h.item = new("r");
+  endfunction
+endclass
+endpackage
+'''
+    go, ctor = 'function void go(int x, int y)', 'function new(string n = "x")'
+    assert labels_in(tmp_path, text, ['item.go(1,', 'h.item.go(3,', 'item = new(', 'h.item = new(']) == \
+        [go, go, ctor, ctor]
+
+
+def test_sequence_and_driver_items_in_another_package(client, tb):
+    """`req`/`rsp` are typed by REQ/RSP of the UVM base, bound to an item of the agent package."""
+    seq = Doc(client, os.path.join(tb, 'seq', 'alu_sequences.svh'))
+    drv = Doc(client, os.path.join(tb, 'agent', 'alu_driver.svh'))
+    try:
+        seq.change(seq.text.replace('      start_item(req);', '      start_item(req);\n'
+                                    '      req.copy(req);\n      req.set_name("x");\n      req = new("r");', 1))
+        signature(help_at(seq, 'req.copy('), ['uvm_object rhs'], label='function void copy(uvm_object rhs)')
+        signature(help_at(seq, 'req.set_name('), ['string name'])
+        signature(help_at(seq, 'req = new('), ['string name = "alu_seq_item"'])
+        drv.change(drv.text.replace('    drive_item(req);', '    drive_item(req);\n'
+                                    '    rsp = new("rsp");\n    rsp.set_id_info(req);\n    req.compare(rsp);'))
+        signature(help_at(drv, 'rsp = new('), ['string name = "alu_seq_item"'])
+        signature(help_at(drv, 'rsp.set_id_info('), ['uvm_sequence_item item'])
+        signature(help_at(drv, 'req.compare('), ['uvm_object rhs', 'uvm_comparer comparer = null'])
+    finally:
+        seq.close()
+        drv.close()
+
+
+def test_registry_of_a_this_type_registration_binds_the_class(client, tb, tmp_path):
+    d = Doc(client, os.path.join(tb, 'agent', 'alu_agent.svh'))
+    try:
+        formals = ['string name', 'uvm_component parent', 'string contxt = ""']
+        sig = signature(help_at(d, 'alu_sequencer::type_id::create('), formals)
+        assert sig['label'].startswith('function uvm_sequencer#(alu_seq_item,alu_seq_item) create(')
+        offset = d.text.index('alu_sequencer::type_id::create(') + len('alu_sequencer::type_id::cr')
+        prefix = d.text[:offset]
+        [where] = client.request('textDocument/typeDefinition', {
+            'textDocument': {'uri': d.uri},
+            'position': {'line': prefix.count('\n'), 'character': len(prefix.rsplit('\n', 1)[-1])}})
+        assert where['uri'].endswith('/uvm_sequencer.svh')
+    finally:
+        d.close()
+    text = '''`include "uvm_macros.svh"
+package p;
+import uvm_pkg::*;
+class pcomp #(type T = int) extends uvm_component;
+  typedef pcomp #(T) this_type;
+  `uvm_component_param_utils(this_type)
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class env extends uvm_env;
+  pcomp #(byte) pc;
+  function void build_phase(uvm_phase phase); pc = pcomp #(byte)::type_id::create("pc", this); endfunction
+endclass
+endpackage
+'''
+    [label] = labels_in(tmp_path, text, ['::create('], bundled=True)
+    assert label == 'function pcomp#(byte) create(string name, uvm_component parent, string contxt = "")'

@@ -44,6 +44,38 @@ class ChainEntry:
     bindings: dict[str, str]  # type parameter -> argument text for this level
 
 
+@dataclass(frozen=True)
+class Scope:
+    """Where a type is written, which decides what its names refer to."""
+
+    ctx: ClassInfo | None = field(default=None, compare=False)
+    package: str | None = None
+    imports: tuple[str, ...] = ()
+    near: Range | None = None
+    qualname: str | None = None  # ctx's, which tells scopes apart
+
+    @classmethod
+    def of(cls, ctx: ClassInfo | None, package=None, imports=None, near=None) -> "Scope":
+        return cls(ctx, package if package is not None else ctx.package if ctx else None,
+                   tuple(imports if imports is not None else ctx.imports if ctx else ()),
+                   near or (ctx.range if ctx else None), ctx.qualname if ctx else None)
+
+
+class Bound(str):
+    """A type argument's text and the scope that wrote it, where its names resolve: a
+    specialization's arguments mean what they meant where it was written, not in the class."""
+
+    def __new__(cls, text: str, scope: Scope, spec: Spec | None = None):
+        out = super().__new__(cls, text)
+        out.scope, out.spec = scope, spec
+        return out
+
+
+def _carry(value: str, source: str) -> str:
+    """`value`, derived from `source`, resolving where `source` was written."""
+    return value if isinstance(value, Bound) or not isinstance(source, Bound) else Bound(value, source.scope)
+
+
 @dataclass
 class CallSet:
     creates: list[CreateCall] = field(default_factory=list)
@@ -93,12 +125,12 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
     for a in args:
         m = re.match(r"^\.(\w+)\((.*)\)$", a)
         if m:
-            named[m.group(1)] = m.group(2)
+            named[m.group(1)] = _carry(m.group(2), a)
     for i, (pname, default) in enumerate(params):
         if pname in named:
-            val = substitute_params(named[pname], outer)
+            val = _carry(substitute_params(named[pname], outer), named[pname])
         elif i < len(positional):
-            val = substitute_params(positional[i], outer)
+            val = _carry(substitute_params(positional[i], outer), positional[i])
         else:
             val = substitute_params(default, out)
         out[pname] = val
@@ -509,11 +541,16 @@ class Workspace:
         lookup sees only what is visible at `near` (by default the context class)."""
         if depth > 8:
             return None
-        args = list(args or [])
         package = package if package is not None else ctx.package if ctx else None
         imports = imports if imports is not None else ctx.imports if ctx else ()
-        near = (near or (ctx.range if ctx else None)) if strict else None
-        cache_key = (name, scope, tuple(args), ctx.qualname if ctx else None, package, tuple(imports), strict, near)
+        site = near or (ctx.range if ctx else None)
+        near = site if strict else None
+        args = list(args or [])
+        if args:
+            here = Scope.of(ctx, package, imports, site)
+            args = [a if isinstance(a, Bound) else Bound(a, here) for a in args]
+        cache_key = (name, scope, tuple((a, a.scope, a.spec is None) for a in args), ctx.qualname if ctx else None,
+                     package, tuple(imports), strict, near)
         if depth == 0 and cache_key in self._spec_cache:
             return self._spec_cache[cache_key]
         result: Spec | None = None
@@ -548,11 +585,18 @@ class Workspace:
         return None
 
     def resolve_type_text(self, text: str, ctx: ClassInfo | None = None, strict: bool = False) -> Spec | None:
+        """Resolve type text written in `ctx`; a bound argument resolves where it was written."""
+        where = {}
+        if isinstance(text, Bound):
+            if text.spec is not None:
+                return text.spec
+            ctx = text.scope.ctx
+            where = {"package": text.scope.package, "imports": text.scope.imports, "near": text.scope.near}
         parsed = parse_type_text(text)
         if not parsed:
             return None
         scope, name, args = parsed
-        return self.resolve_spec(name, scope, args, ctx, strict=strict)
+        return self.resolve_spec(name, scope, args, ctx, strict=strict, **where)
 
     def resolve_type_ref(self, ref: TypeRef, ctx: ClassInfo | None = None, bindings: dict[str, str] | None = None,
                          strict: bool = False) -> Spec | None:
@@ -563,10 +607,29 @@ class Workspace:
             return self.resolve_type_text(bindings[ref.name], ctx, strict=strict)
         scope = ref.scope
         if scope in bindings:  # T::inner_t
-            parsed = parse_type_text(bindings[scope])
-            scope = "::".join(p for p in parsed[:2] if p) if parsed else scope
-        args = [substitute_params(a, bindings) for a in ref.args]
+            outer = self.resolve_type_text(bindings[scope], ctx, strict=strict)
+            if outer is not None and outer.cls is not None:
+                scope = outer.cls.qualname
+            else:
+                parsed = parse_type_text(bindings[scope])
+                scope = "::".join(p for p in parsed[:2] if p) if parsed else scope
+        args = [self._bind_arg(a, ctx, bindings, strict) for a in ref.args]
         return self.resolve_spec(ref.name, scope, args, ctx, strict=strict)
+
+    def _bind_arg(self, arg: str, ctx: ClassInfo | None, bindings: dict[str, str], strict: bool) -> str:
+        """A type argument written in `ctx` with its parameters bound. A typedef member of the
+        class (`this_type`) means nothing elsewhere: it becomes the type it names."""
+        value = substitute_params(arg, bindings)
+        if ctx is None or value != arg or not any(t.owner_class for t in self.typedefs_by_name.get(arg, ())):
+            return value
+        hit = self.find_member(ctx, arg, bindings)
+        if hit is None or not isinstance(hit[1], Typedef):
+            return value
+        spec = self.member_type_spec(hit[0], hit[1], hit[2], strict)
+        if spec is None or spec.cls is None:
+            return value
+        text = spec.cls.name + ("#(" + ",".join(spec.args) + ")" if spec.args else "")
+        return Bound(text, Scope.of(ctx), spec)
 
     def base_spec(self, cls: ClassInfo, bindings: dict[str, str] | None = None) -> Spec | None:
         """The base class; `extends BASE` follows what the type parameter BASE is bound to

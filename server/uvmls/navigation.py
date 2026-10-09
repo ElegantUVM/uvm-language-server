@@ -13,7 +13,7 @@ from .indexer import SHIM_FILE
 from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable, utf8_prefix
 from .uvm import builtin_params
 from .views import config_db_report, mismatched, norm_type
-from .workspace import Spec, Workspace, bind_params
+from .workspace import Bound, Scope, Spec, Workspace, bind_params
 
 WORD = re.compile(r"[A-Za-z0-9_$]")
 # What the utils and field macros generate in a user class; other generated methods are API
@@ -127,8 +127,9 @@ class Navigator:
             return found
         cls, meth, unit = ws.enclosing(path, line, col)
         segs, seps = ce.segments, ce.seps
+        near = Range(path, line, col, line, col)
         current = self.resolve_first(segs[0], cls, meth, unit, scoped=bool(seps) and seps[0] == "::", strict=strict,
-                                     near=Range(path, line, col, line, col))
+                                     near=near)
         for i in range(len(segs)):
             if i:
                 if strict and len(current) != 1:
@@ -137,8 +138,16 @@ class Navigator:
                     return self.global_member_search(segs[i]) if i == len(segs) - 1 else []
                 current = self.step(current[0], segs[i], seps[i - 1], cls, strict=strict)
             if ce.args and ce.args[i] and len(current) == 1 and current[0].spec is not None:
-                current[0].spec = replace(current[0].spec, args=ce.args[i])
+                here = Scope.of(cls, *self._package_scope(cls, unit), near)
+                current[0].spec = replace(current[0].spec, args=[Bound(a, here) for a in ce.args[i]])
         return current
+
+    @staticmethod
+    def _package_scope(cls, unit) -> tuple[str | None, list[str]]:
+        """The package and imports that code in a class, or else in a design unit, sees."""
+        if cls is not None:
+            return cls.package, list(cls.imports)
+        return (unit.name if unit.kind == "package" else None, list(unit.imports)) if unit else (None, [])
 
     def resolve_first(self, name: str, cls, meth, unit, scoped: bool, strict: bool = False,
                       near: Range | None = None) -> list[Target]:
@@ -164,8 +173,7 @@ class Navigator:
                 hit = ws.find_member(c, name)
                 if hit is not None:
                     return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
-        package = cls.package if cls else (unit.name if unit and unit.kind == "package" else None)
-        imports = list(cls.imports) if cls else (list(unit.imports) if unit else [])
+        package, imports = self._package_scope(cls, unit)
         found = ws.find_class(name, package, imports, strict=strict, near=near)
         if found is not None:
             return [Target(found, spec=Spec(found.name, found))]
