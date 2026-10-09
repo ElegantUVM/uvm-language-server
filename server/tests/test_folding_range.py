@@ -541,6 +541,46 @@ def test_crossing_intervals_and_shared_start():
                                                    (11, 15, None), (12, 14, "region")]
 
 
+def test_crossing_check_matches_pairwise_check():
+    import random
+    import time
+
+    from uvmls.model import FoldRegion
+    from uvmls.navigation import CROSSING_FOLDS, Navigator
+    from uvmls.workspace import Workspace
+
+    def pairwise(folds):
+        kinds = {}
+        for f in sorted(folds, key=lambda f: f.kind in CROSSING_FOLDS):
+            kinds.setdefault((f.start, f.end), f.kind)
+        out, ends = [], []
+        for start, end in sorted((p for p, k in kinds.items() if k not in CROSSING_FOLDS), key=lambda p: (p[0], -p[1])):
+            while ends and start > ends[-1]:
+                ends.pop()
+            if not ends or end <= ends[-1]:
+                out.append((start, end))
+                ends.append(end)
+        for start, end in sorted(p for p, k in kinds.items() if k in CROSSING_FOLDS):
+            if not any(a < start <= b < end or start < a <= end < b for a, b in out):
+                out.append((start, end))
+        return [(a, b, kinds[a, b]) for a, b in sorted(out, key=lambda p: (p[0], -p[1]))]
+
+    rng, w = random.Random(7), Workspace()
+    for _ in range(3000):
+        lines = rng.randint(2, 25)
+        starts = [rng.randrange(lines) for _ in range(rng.randint(0, 14))]
+        folds = [FoldRegion("a.sv", a, rng.randint(a + 1, lines), rng.choice([None, None, "comment", "branch", "region"]))
+                 for a in starts]
+        w.folds_by_file["a.sv"] = folds
+        assert Navigator(w).folding_ranges("a.sv") == pairwise(folds)
+    # Each of 4000 `ifdef branches around a class with two methods: a sweep, not a check against every fold.
+    w.folds_by_file["a.sv"] = [FoldRegion("a.sv", *f) for i in range(0, 40000, 10)
+                               for f in ((i, i + 8, "branch"), (i + 1, i + 7), (i + 2, i + 3), (i + 5, i + 6))]
+    start = time.perf_counter()
+    assert len(Navigator(w).folding_ranges("a.sv")) == 16000
+    assert time.perf_counter() - start < 1
+
+
 def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
     import asyncio
     import threading

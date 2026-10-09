@@ -22,6 +22,32 @@ UTILS_METHODS = {"get_type", "get_object_type", "create", "get_type_name", "__m_
 CROSSING_FOLDS = {"branch", "region"}  # folds that need not nest with the syntax around them
 
 
+def _nested(spans) -> list[tuple[int, int]]:
+    """(start, end) spans, outer first on a shared start, less each that crosses one kept before it."""
+    out, ends = [], []
+    for start, end in sorted(spans, key=lambda p: (p[0], -p[1])):
+        while ends and start > ends[-1]:
+            ends.pop()
+        if ends and end > ends[-1]:
+            continue
+        out.append((start, end))
+        ends.append(end)
+    return out
+
+
+def _start_inside(nested, spans) -> set[int]:
+    """The indexes of the spans that start inside one of `nested`, which nest, and end after it."""
+    found, ends = set(), []
+    for start, neg_end, i in sorted([(a, -b, -1) for a, b in nested] + [(a, -b, i) for i, (a, b) in enumerate(spans)]):
+        while ends and start > ends[-1]:
+            ends.pop()
+        if i < 0:
+            ends.append(-neg_end)
+        elif ends and -neg_end > ends[-1]:
+            found.add(i)
+    return found
+
+
 @dataclass
 class Target:
     obj: object
@@ -704,19 +730,13 @@ class Navigator:
         kinds: dict[tuple[int, int], str | None] = {}
         for f in sorted(self.ws.folds_in(path), key=lambda f: f.kind in CROSSING_FOLDS):
             kinds.setdefault((f.start, f.end), f.kind)
-        out, ends = [], []
-        syntax = sorted((p for p, k in kinds.items() if k not in CROSSING_FOLDS), key=lambda p: (p[0], -p[1]))
-        for start, end in syntax:
-            while ends and start > ends[-1]:
-                ends.pop()
-            if ends and end > ends[-1]:
-                continue  # Different preprocessing roots can disagree about nesting.
-            out.append((start, end))
-            ends.append(end)
-        for start, end in sorted(p for p, k in kinds.items() if k in CROSSING_FOLDS):
-            if not any(a < start <= b < end or start < a <= end < b for a, b in out):
-                out.append((start, end))
-        out.sort(key=lambda p: (p[0], -p[1]))
+        # Different preprocessing roots can disagree about nesting.
+        syntax = _nested(p for p, k in kinds.items() if k not in CROSSING_FOLDS)
+        crossing = [p for p, k in kinds.items() if k in CROSSING_FOLDS]
+        # One that starts inside syntax and ends after it, or (mirrored) starts before and ends inside.
+        dropped = _start_inside(syntax, crossing) | \
+            _start_inside([(-b, -a) for a, b in syntax], [(-b, -a) for a, b in crossing])
+        out = _nested(syntax + [p for i, p in enumerate(crossing) if i not in dropped])
         return [(start, end, kinds[start, end]) for start, end in out]
 
     # -- completion ------------------------------------------------------------
