@@ -66,11 +66,13 @@ def call_at(ws, path, line, col):
     if ";" in prefix or re.search(r"\b(?:endfunction|endtask|endclass)\b", prefix):
         return None
     slots = argument_spans(masked, 0, len(masked))
-    active = sum(end <= (line, col) for end in call.commas) if call.closing else \
+    slot = sum(end <= (line, col) for end in call.commas) if call.closing else \
         sum(b < at for _, b in slots)
+    # Commas a macro writes separate arguments too, though the text does not show them.
+    active = slot + sum(end <= (line, col) for end in call.macro_commas)
     name = call.names[active] if active < len(call.names) else None
-    if active < len(slots):
-        a, b = slots[active]
+    if slot < len(slots):
+        a, b = slots[slot]
         argument = masked[a:b].lstrip()
         if argument.startswith("."):
             label = re.match(r"\.\s*([A-Za-z_$][\w$]*)\s*\(", argument)

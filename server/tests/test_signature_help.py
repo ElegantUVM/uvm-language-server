@@ -784,6 +784,35 @@ endclass
     signature(help_at(doc, '.a('), ['int a = 0', 'int b = 0', 'int c = 0'])
 
 
+@pytest.mark.parametrize('call,needle,active', [
+    ('f(`TWO, 3);', 'f(`TWO, ', 2),
+    ('f(`TWO, 3', 'f(`TWO, ', 2),
+    ('f(`TWO, .c(3));', '.c(', 2),
+    ('f(`TWO, .a(3));', '.a(', 0),
+    ('f(`ONE, 3);', 'f(`ONE, ', 1),
+    ('f(`PAIR(1, 2), 3);', '), ', 2),
+    ('f(`WRAP(`TWO), 3);', '), ', 2),
+    ('f(`NESTED, 3);', 'f(`NESTED, ', 2),
+    ('f(`TWO);', 'f(`TW', 0),
+    ('f(`TWO);', 'f(`TWO', 1),
+    ('`WRAP(f(`TWO, 3));', 'f(`TWO, ', 2),
+])
+def test_commas_a_macro_writes(doc, call, needle, active):
+    doc.change('''`define TWO 1, 2
+`define ONE 9
+`define PAIR(x, y) x, y
+`define WRAP(x) x
+`define NESTED `TWO
+class C;
+ function void f(int a = 0, int b = 0, int c = 0); endfunction
+ function void test();
+ CALL
+ endfunction
+endclass
+'''.replace('CALL', call))
+    signature(help_at(doc, needle), ['int a = 0', 'int b = 0', 'int c = 0'], active)
+
+
 @pytest.mark.parametrize('kind,ending', [('function void', 'endfunction'), ('task', 'endtask')])
 def test_non_ansi_const_ref(doc, kind, ending):
     doc.change('''class C;

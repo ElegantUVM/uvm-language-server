@@ -137,6 +137,7 @@ class CallSite:
     boundary: Range | None  # the enclosing statement of a call missing its `)`
     target: str | None = None  # assignment target of a bare new
     commas: tuple[tuple[int, int], ...] = ()  # where each top-level comma ends
+    macro_commas: tuple[tuple[int, int], ...] = ()  # where the macro usage writing each other one ends
     names: tuple[str | None, ...] = ()  # each argument's name, when any is named
 
 

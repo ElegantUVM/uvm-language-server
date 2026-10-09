@@ -610,6 +610,13 @@ class Extractor:
             loc = sm.getOriginalLoc(loc)
         return loc
 
+    def usage_end(self, loc):
+        """Where the macro usage whose expansion holds a location ends, as written."""
+        sm = self.sm
+        while sm.isMacroLoc(loc):
+            loc = sm.getOriginalLoc(loc) if sm.isMacroArgLoc(loc) else sm.getExpansionRange(loc).end
+        return loc
+
     def keyword_range(self, tok, arguments=False) -> Range | None:
         """plain_range of a keyword or delimiter, which cannot span lines; with `arguments`, also
         where a macro argument spells it."""
@@ -1254,15 +1261,20 @@ class Extractor:
         segs = tuple((s.name, tuple(s.args), s.sep) for s in call_segments(head))
         target = self.assignment_target(node) if node.kind == K.NewClassExpression else None
         call = CallSite(rng, segs, opening, closing, boundary, target)
-        commas, names = [], []
+        commas, macro_commas, names = [], [], []
         for arg in arguments.parameters:
             if isinstance(arg, Token):
+                if arg.kind != TK.Comma:
+                    continue
                 comma = self.keyword_range(arg, True)
-                if arg.kind == TK.Comma and comma is not None:
+                if comma is not None:
                     commas.append((comma.end_line, comma.end_col))
+                elif self.path_of((end := self.usage_end(arg.location)).buffer) == opening.path:
+                    macro_commas.append(self.physical_position(end))
             else:
                 names.append(arg.name.valueText if arg.kind == K.NamedArgument else None)
         call.commas, call.names = tuple(commas), tuple(names) if any(names) else ()
+        call.macro_commas = tuple(macro_commas)
         self.out.invocations.append(call)
 
     def assignment_target(self, node) -> str | None:
