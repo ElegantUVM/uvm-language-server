@@ -1290,3 +1290,24 @@ endclass
 '''
     assert labels_in(tmp_path, text, ['fixed.f(', 'nxt.f('][::order]) == \
         ['function void f(int a)', 'function void f(T a)'][::order]
+
+
+def test_generic_class_parameters_inside_composite_arguments(tmp_path):
+    """Inside a generic class, its parameters stay unbound in a composite or expression argument."""
+    text = '''class holder #(type X = int); endclass
+class base #(type T = int, int W = 8);
+  base #(holder #(T), W + 1) comp;
+  function void f(T a, bit [W-1:0] b); endfunction
+  function void g(); comp.f(null, 0); endfunction
+endclass
+class child #(type U = byte, int N = 2) extends base #(holder #(U), N*2);
+  function void h(); f(null, 1); super.f(null, 2); endfunction
+endclass
+class user;
+  child #(shortint, 3) c;
+  function void k(); c.f(null, 3); endfunction
+endclass
+'''
+    own, sub = 'function void f(holder#(T) a, bit[W+1-1:0] b)', 'function void f(holder#(U) a, bit[N*2-1:0] b)'
+    assert labels_in(tmp_path, text, ['comp.f(', '(); f(', 'super.f(', 'c.f(']) == \
+        [own, sub, sub, 'function void f(holder#(shortint) a, bit[3*2-1:0] b)']

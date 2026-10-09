@@ -64,8 +64,8 @@ class Scope:
 class Bound(str):
     """A type argument's text and the scope that wrote it, where its names resolve: a
     specialization's arguments mean what they meant where it was written, not in the class.
-    `formal` names the parameter when this is the default of one the class's own body reads,
-    which no specialization binds there."""
+    `formal` is how a generic class's own body writes it when that names the class's parameters,
+    which no specialization binds there: `T` for T's default, `holder #(T)` for holder #(int)."""
 
     def __new__(cls, text: str, scope: Scope, spec: Spec | None = None, formal: str | None = None):
         out = super().__new__(cls, text)
@@ -84,6 +84,18 @@ def _arg_key(arg: str):
         return arg
     spec = arg.spec
     return arg, arg.scope, arg.formal, spec and (spec.key, tuple(map(_arg_key, spec.args)))
+
+
+def _bind(text: str, bindings: dict[str, str]) -> str:
+    """`text` with `bindings` substituted, resolving where `text` was written, and keeping how a
+    generic class's body writes it when the bindings are its own parameters."""
+    value = substitute_params(text, bindings)
+    if isinstance(value, Bound) or not isinstance(text, Bound):
+        return value
+    shown = value
+    if any(getattr(v, "formal", None) for v in bindings.values()):
+        shown = substitute_params(text, {k: getattr(v, "formal", None) or v for k, v in bindings.items()})
+    return Bound(value, text.scope, formal=shown if shown != value else None)
 
 
 @dataclass
@@ -138,9 +150,9 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
             named[m.group(1)] = _carry(m.group(2), a)
     for i, (pname, default) in enumerate(params):
         if pname in named:
-            val = _carry(substitute_params(named[pname], outer), named[pname])
+            val = _bind(named[pname], outer)
         elif i < len(positional):
-            val = _carry(substitute_params(positional[i], outer), positional[i])
+            val = _bind(positional[i], outer)
         else:
             val = substitute_params(default, out)
         out[pname] = val
@@ -700,7 +712,11 @@ class Workspace:
         """A type argument written in `ctx` with its parameters bound. A typedef member of the
         class (`this_type`) means nothing elsewhere: it becomes the type it names."""
         value = substitute_params(arg, bindings)
-        if ctx is None or value != arg or not any(t.owner_class for t in self.typedefs_by_name.get(arg, ())):
+        if ctx is None or isinstance(value, Bound):
+            return value
+        if value != arg:
+            return _bind(Bound(arg, Scope.of(ctx)), bindings)
+        if not any(t.owner_class for t in self.typedefs_by_name.get(arg, ())):
             return value
         hit = self.find_member(ctx, arg, bindings, strict)
         if hit is None or not isinstance(hit[1], Typedef):
