@@ -418,19 +418,27 @@ class Workspace:
                             self.structures_by_file.setdefault(pair.opening.path, []).append(pair)
         return self.structures_by_file.get(path, [])
 
-    def visible_packages(self, imports) -> list[str]:
-        """Wildcard-imported packages and the packages they re-export (`export p::*`, `export *::*`)."""
+    def visible_packages(self, imports) -> set[str]:
+        """What `imports` make visible, with what their packages re-export (IEEE 1800 26.6):
+        'p' for all of package p, 'p::x' for its x alone."""
         key = tuple(imports)
         if key not in self._visible_packages:
-            out, todo = [], [p for p in imports if "::" not in p]
+            out, todo = set(), list(imports)
             while todo:
-                p = todo.pop(0)
-                if p not in out:
-                    out.append(p)
-                    for u in self.units_by_name.get(p, ()):
-                        if u.kind == "package":
-                            todo += [q for q in u.exports if q != "*"] + \
-                                [q for q in u.imports if "::" not in q and "*" in u.exports]
+                p = todo.pop()
+                if p in out:
+                    continue
+                out.add(p)
+                package, _, name = p.partition("::")
+                for u in self.units_by_name.get(package, ()):
+                    if u.kind != "package":
+                        continue
+                    for e in u.exports:
+                        for q in (u.imports if e == "*" else [e]):
+                            if not name or q.endswith("::" + name):
+                                todo.append(q)
+                            elif "::" not in q:
+                                todo.append(f"{q}::{name}")
             self._visible_packages[key] = out
         return self._visible_packages[key]
 
@@ -470,10 +478,14 @@ class Workspace:
         if not cands:
             return None
 
+        name = cands[0].name
+
         def imported(imports):  # by name, by wildcard
-            _, named, wildcard = self.import_order(cands[0].name, None, imports)
+            _, named, wildcard = self.import_order(name, None, imports)
+            by_name = self.visible_packages([f"{p}::{name}" for p in named])
             packages = self.visible_packages(wildcard)
-            return [c for c in cands if c.package in named], [c for c in cands if c.package in packages]
+            return [c for c in cands if f"{c.package}::{name}" in by_name], \
+                [c for c in cands if c.package in packages or f"{c.package}::{name}" in packages]
 
         named, wildcard = imported(imports)
         if package:

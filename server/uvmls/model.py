@@ -288,7 +288,7 @@ class DesignUnit:
     run_tests: list[tuple[str, Range]] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)  # 'p' for `import p::*`, 'p::x' for `import p::x`
     unit_imports: list[str] = field(default_factory=list)  # the $unit ones before it, which start imports
-    exports: list[str] = field(default_factory=list)  # re-exported packages; * for export *::*
+    exports: list[str] = field(default_factory=list)  # as imports are; * for export *::*
     library: bool = False
     doc: str = ""
 

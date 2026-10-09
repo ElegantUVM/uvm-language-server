@@ -1244,3 +1244,35 @@ endpackage
     line = text.splitlines().index('  function void t(); v.f(1, 2); endfunction')
     nav = Navigator(index(tmp_path, {'t.sv': text}))
     assert [r.line for r in nav.definition(str(tmp_path / 't.sv'), line, 23, text)] == [1]
+
+
+@pytest.mark.parametrize('mid,top,labels', [
+    ('import base::item; export *::*;', 'import mid::*;', ['go', None]),
+    ('import base::*; export *::*;', 'import mid::*;', ['go', 'go']),
+    ('import base::item; export base::item;', 'import mid::*;', ['go', None]),
+    ('import base::*; export base::*;', 'import mid::item;', ['go', None]),
+    ('import base::*; export *::*;', 'import mid::item;', ['go', None]),
+    ('import base::item; export base::item;', 'import mid::item;', ['go', None]),
+    ('import base::item;', 'import mid::*;', [None, None]),
+])
+def test_names_a_package_re_exports(tmp_path, mid, top, labels):
+    """`export *::*` exports names imported by name too, and an exported name can be imported by
+    name from the package that exports it (IEEE 1800 26.6)."""
+    text = '''package base;
+class item; function void go(int a); endfunction endclass
+class other; function void go(int a); endfunction endclass
+endpackage
+package mid;
+MID
+endpackage
+package top;
+TOP
+class c;
+  item i;
+  other o;
+  function void t(); i.go(1); o.go(2); endfunction
+endclass
+endpackage
+'''.replace('MID', mid).replace('TOP', top)
+    assert labels_in(tmp_path, text, ['i.go(', 'o.go(']) == \
+        [label and 'function void go(int a)' for label in labels]

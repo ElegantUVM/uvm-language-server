@@ -777,7 +777,7 @@ class Extractor:
                 if unit is not None:
                     unit.imports.append(import_name(item))
         elif k == K.PackageExportDeclaration and unit is not None:
-            unit.exports += [item.package.valueText for item in nodes(m.items)]
+            unit.exports += [import_name(item) for item in nodes(m.items)]
         elif k == K.PackageExportAllDeclaration and unit is not None:
             unit.exports.append("*")
         elif k in FUNC_DECLS:
