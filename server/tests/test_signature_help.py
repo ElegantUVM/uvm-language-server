@@ -1358,3 +1358,14 @@ endclass
 endpackage
 '''
     assert labels_in(tmp_path, text, ['item.go(']) == ['function void go(int a)']
+
+
+def test_bound_arguments_copy_and_pickle():
+    import copy
+    import pickle
+    from uvmls.workspace import Bound, Scope
+
+    arg = Bound('holder #(int)', Scope(package='p', imports=('q',)), formal='holder #(T)')
+    assert copy.copy(arg) is arg and copy.deepcopy({'T': arg})['T'] is arg
+    back = pickle.loads(pickle.dumps(arg))
+    assert (back, back.scope, back.spec, back.formal) == ('holder #(int)', arg.scope, None, 'holder #(T)')

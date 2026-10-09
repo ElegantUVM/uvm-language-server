@@ -72,6 +72,16 @@ class Bound(str):
         out.scope, out.spec, out.formal = scope, spec, formal
         return out
 
+    # Immutable, and its scope holds a class: copies share it.
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __reduce__(self):
+        return Bound, (str(self), self.scope, self.spec, self.formal)
+
 
 def _carry(value: str, source: str) -> str:
     """`value`, derived from `source`, resolving where `source` was written."""
