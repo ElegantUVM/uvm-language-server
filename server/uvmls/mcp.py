@@ -426,7 +426,9 @@ class McpServer:
         raise RpcError(METHOD_NOT_FOUND, f"method not found: {method}")
 
     async def _call(self, params: dict) -> dict:
-        name, arguments = params.get("name"), params.get("arguments") or {}
+        name, arguments = params.get("name"), params.get("arguments")
+        if arguments is None:
+            arguments = {}
         tool = TOOLS_BY_NAME.get(name)
         if tool is None:
             raise RpcError(INVALID_PARAMS, f"unknown tool: {name}")
