@@ -1195,3 +1195,22 @@ endpackage
     assert labels_in(tmp_path, text, ['set_arbitration(', 'parent); super.new('], bundled=True) == \
         ['function void set_arbitration(UVM_SEQ_ARB_TYPE val)',
          'function new(string name, uvm_component parent = null)']
+
+
+def test_circular_ancestry_ends(tmp_path):
+    """While being typed, A's base can be B's typedef and B's base A's: indexing and help end."""
+    text = '''package p;
+class real_t; function void go(int a); endfunction endclass
+class holder; typedef real_t x_t; endclass
+class A extends B::t;
+  typedef x_t u;
+  function void f(); go(1); endfunction
+endclass
+class B extends A::u; typedef x_t t; endclass
+class D extends holder;
+  x_t v;
+  function void f(); v.go(2); endfunction
+endclass
+endpackage
+'''
+    assert labels_in(tmp_path, text, ['(); go(', 'v.go(']) == [None, 'function void go(int a)']

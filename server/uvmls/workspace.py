@@ -186,6 +186,7 @@ class Workspace:
         self.last_index_seconds = 0.0
         self._include_candidates: tuple[tuple, dict[str, list[str]],
                                          dict[str, tuple[int, int, int] | None]] | None = None
+        self._chaining: set[int] = set()  # classes whose ancestors are being found
         self._clear_maps()
 
     # -- building ------------------------------------------------------------
@@ -712,6 +713,16 @@ class Workspace:
         """The class followed by all its ancestors, with type parameter bindings. A strict chain
         ends at a base class the lookup cannot see or tell from another of its name."""
         entries = [ChainEntry(Spec(cls.name, cls), bindings if bindings is not None else self.formals(cls))]
+        if id(cls) in self._chaining:
+            return entries  # its ancestors depend on its own members: A extends B::t, B extends A::u
+        self._chaining.add(id(cls))
+        try:
+            self._ancestors(cls, entries, strict)
+        finally:
+            self._chaining.discard(id(cls))
+        return entries
+
+    def _ancestors(self, cls: ClassInfo, entries: list[ChainEntry], strict: bool):
         seen = {cls.qualname}
         cur, bindings = cls, entries[0].bindings
         while cur is not None and cur.base is not None:
@@ -737,7 +748,6 @@ class Workspace:
                     args = [bindings.get(p, p) for p, _ in builtin_params(name)]
                     name = parent
                 break
-        return entries
 
     def formals(self, cls: ClassInfo) -> dict[str, str]:
         """A class's parameters as its own body sees them: unbound, resolving as their defaults."""
