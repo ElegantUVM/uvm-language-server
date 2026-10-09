@@ -239,6 +239,22 @@ def test_unclosed_begin_keeps_blocks_it_holds(doc):
                                   fold(text, "if (x) begin", "    end")])
 
 
+CASE_ITEMS = ("module m;\n  always @* begin\n    case (x)\n      1: begin\n           y = 1;\n           z = 1;\n"
+              "         end\n      2: begin\n           y = 2;\n           z = 2;\n         end\n    endcase\n"
+              "\tif (y) begin\n\t  q = 1;\n        end\n  end\nendmodule\n")
+
+
+@pytest.mark.parametrize("typed", ["", "    if (a) begin\n"])
+def test_unclosed_begin_keeps_blocks_lined_up_with_their_begin(doc, typed):
+    # A case item's end under its begin, and an end indented with spaces under a tab-indented if.
+    text = CASE_ITEMS.replace("    case", typed + "    case")
+    doc.change(text)
+    inner = [fold(text, "1: begin", "         end"), fold(text, "2: begin", "         end", after="1: begin"),
+             fold(text, "if (y) begin", "        end")]
+    assert folds(doc) == ordered([fold(text, "module", "endmodule"), fold(text, "case", "endcase"), *inner,
+                                  *([] if typed else [fold(text, "always", "  end\nendmodule")])])
+
+
 @pytest.mark.parametrize("source,expected", [
     ("class missing;\n  int value;\n", []),
     ("module m; initial begin\n  int value;\nendmodule\n", [{"startLine": 0, "endLine": 1}]),

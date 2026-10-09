@@ -1705,7 +1705,8 @@ class Extractor:
         if opening is None or closing is None or opening.isMissing:
             return
         if closing.isMissing:
-            self.suspect_within(node, _family(closing))
+            if (opening.location.buffer.id, opening.location.offset) not in self._suspect:
+                self.suspect_within(node, _family(closing))  # else a walk for an outer one did
             return
         end = _label(_attribute(node, end_name))
         if end is not None and end != next(filter(None, (_label(_attribute(node, p)) for p in names)), None):
@@ -1714,7 +1715,7 @@ class Extractor:
         if a is None or b is None or a.path != b.path or (a.end_line, a.end_col) > (b.line, b.col):
             return
         loc = opening.location
-        if (loc.buffer.id, loc.offset) in self._suspect and self.indent(loc) != self.indent(closing.location):
+        if (loc.buffer.id, loc.offset) in self._suspect and not self.lined_up(loc, closing.location):
             return
         if not keyword:
             if b.line - 1 > a.line:
@@ -1732,12 +1733,13 @@ class Extractor:
     def suspect_within(self, node, family):
         """Recovery gives a missing closer's job to one inside: with the inner end of `begin begin
         end` removed, the inner begin is paired with the outer end. Which pair inside took a closer
-        is not known: one whose closer is not indented as its opener is taken to be it."""
+        is not known: one whose closer does not line up with its opener is taken to be it."""
+        keywords = family not in (TK.CloseParenthesis, TK.CloseBrace)
         stack = [node]
         while stack:
             n = stack.pop()
             for c in n:
-                if not isinstance(c, Node):
+                if not isinstance(c, Node) or keywords and c.kind in NO_STRUCTURE_KINDS:
                     continue
                 if c.kind in STRUCTURE_KINDS:
                     opening_path, closing_path = (STRUCTURES.get(c.kind) or BRACKETS[c.kind])[:2]
@@ -1755,11 +1757,17 @@ class Extractor:
                 self._sources[bid] = e.object
         return self._sources[bid]
 
-    def indent(self, loc) -> bytes:
-        """The white space that starts the line holding a location."""
+    def line_before(self, loc) -> bytes:
         data = self.source_bytes(loc.buffer)
-        line = data[_line_start(data, loc.offset):loc.offset]
-        return line[:len(line) - len(line.lstrip(b" \t"))]
+        return data[_line_start(data, loc.offset):loc.offset]
+
+    def lined_up(self, opening, closing) -> bool:
+        """Whether a closer's line is indented as its opener's line, or to the opener itself (`1:
+        begin` may end under its begin). Without the editor's tab size, any common one will do."""
+        head, line = self.line_before(opening), self.line_before(closing)
+        indent = line[:len(line) - len(line.lstrip(b" \t"))]
+        targets = (head[:len(head) - len(head.lstrip(b" \t"))], head)
+        return any(len(indent.expandtabs(tab)) in [len(t.expandtabs(tab)) for t in targets] for tab in (8, 4, 2))
 
     def add_fold(self, path: str, start: int, end: int, kind: str | None = None):
         if end > start:

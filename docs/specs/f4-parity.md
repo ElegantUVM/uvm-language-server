@@ -258,8 +258,9 @@ Tests for B.1/B.2 ship with those P0 items even if named arguments are deferred.
   not highlight); block comments, runs of two or more whole-line `//` comments, multiline
   `` `define ``s and macro calls (`kind: comment` for comments); `` `ifdef `` branches; and
   `// #region` markers (`kind: region`). A pair whose end label names something else, or a
-  same-kind pair inside a structure whose closer is missing and whose closer is not indented as its
-  opener, is not a matched pair.
+  same-kind pair inside a structure whose closer is missing and whose closer's line is indented
+  neither as its opener's line nor to the opener itself (an `end` under a case item's `begin`;
+  tabs at any common width), is not a matched pair.
 - Reuse class/method declaration ranges and extend the existing syntax traversal to retain opening
   and closing token locations and begin/end pairs. Keep data free of pyslang objects. Folding must
   not depend on B's call scanning, reparse documents on demand, or pair keywords with a regex stack.

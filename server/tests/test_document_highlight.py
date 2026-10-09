@@ -337,6 +337,17 @@ def test_recovered_and_mismatched_pairs(doc):
     assert highlight_at(doc, "end else begin", 9) == pair_highlights(doc.text, "begin\n      y", "end\n  endfunction")
 
 
+@pytest.mark.parametrize("typed", ["", "    if (a) begin\n"])
+def test_case_item_pairs_while_a_begin_is_unclosed(doc, typed):
+    from test_folding_range import CASE_ITEMS
+
+    doc.change(CASE_ITEMS.replace("    case", typed + "    case"))
+    expected = pair_highlights(doc.text, "begin\n           y = 1", "end\n      2:")
+    assert highlight_at(doc, "1: begin", 3) == expected
+    assert highlight_at(doc, "end\n      2:") == expected
+    assert highlight_at(doc, "if (y) begin", 7) == pair_highlights(doc.text, "begin\n\t  q", "end\n  end")
+
+
 def test_same_line_nested_pairs(doc):
     doc.change("module m; initial begin begin\n  int x;\nend end\nendmodule\n")
     expected = highlights(doc.text, [("begin begin", 0, "begin"), ("end end", 4, "end")])
