@@ -357,6 +357,15 @@ def flatten_name(node) -> list[Segment]:
     return [Segment(compact(node), [], "", node)]
 
 
+def call_segments(node) -> list[Segment]:
+    """flatten_name of a call's head, continued through the calls it is made on, as hover reads
+    them: `a.f().g` -> [a, f, g]."""
+    if node is not None and node.kind == K.MemberAccessExpression and \
+            node.left.kind == K.InvocationExpression and not node.name.isMissing:
+        return [*call_segments(node.left.left), Segment(node.name.valueText, [], ".", node)]
+    return flatten_name(node)
+
+
 def get_type_class(expr) -> str | None:
     """`X::get_type()` or `X::type_id::get()` -> 'X'."""
     expr = unwrap(expr)
@@ -1217,7 +1226,7 @@ class Extractor:
                 return
         if opening is None or rng is None or rng.path != opening.path:
             return
-        segs = tuple((s.name, tuple(s.args), s.sep) for s in flatten_name(head))
+        segs = tuple((s.name, tuple(s.args), s.sep) for s in call_segments(head))
         target = self.assignment_target(node) if node.kind == K.NewClassExpression else None
         call = CallSite(rng, segs, opening, closing, boundary, target)
         commas, names = [], []

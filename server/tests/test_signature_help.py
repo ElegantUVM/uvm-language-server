@@ -721,8 +721,8 @@ endclass
     signature(help_at(doc, '; f(a,'), formals, 1, kind + ' f(' + ', '.join(formals) + ')')
 
 
-def labels_in(tmp_path, text, needles, bundled=False):
-    """Signature labels at the end of each needle, resolved in process on a one-file workspace."""
+def hints_in(tmp_path, text, needles, bundled=False):
+    """(label, active formal) at the end of each needle, resolved in process on a one-file workspace."""
     from test_fixes import index
     from uvmls import signatures
     from uvmls.navigation import Navigator
@@ -732,8 +732,13 @@ def labels_in(tmp_path, text, needles, bundled=False):
     for needle in needles:
         prefix = text[:text.index(needle) + len(needle)]
         found = signatures.signature(nav, path, prefix.count('\n'), len(prefix.rsplit('\n', 1)[-1]))
-        out.append(found and found[2])
+        out.append(found and (found[2], found[4]))
     return out
+
+
+def labels_in(tmp_path, text, needles, bundled=False):
+    """Signature labels at the end of each needle."""
+    return [hint and hint[0] for hint in hints_in(tmp_path, text, needles, bundled)]
 
 
 def test_type_arguments_resolve_where_the_specialization_is_written(tmp_path):
@@ -1388,3 +1393,38 @@ endmodule
 '''
     assert labels_in(tmp_path, text, ['pv = new("pv",', 'cp = new("cp",', 'mb = new("mb",']) == \
         ['function new(string n, int w = 1)'] * 3
+
+
+def test_calls_on_a_call_result(tmp_path, doc):
+    text = '''`include "uvm_macros.svh"
+import uvm_pkg::*;
+class box;
+  function int calc(int a, int b, int c = 0); return a; endfunction
+  function box next(); return this; endfunction
+endclass
+class comp extends uvm_component;
+  box b;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  task run_phase(uvm_phase phase);
+    uvm_component found[$];
+    uvm_factory::get().set_type_override_by_name("a", "b");
+    uvm_root::get().find_all("*", found);
+    void'(this.get_parent().get_full_name());
+    void'(b.next().next().calc(1, 2));
+    void'(b.next().nothing().calc(1, 2));
+  endtask
+endclass
+'''
+    assert hints_in(tmp_path, text, ['by_name("a",', 'find_all("*",', 'get_full_name(', 'next().next().calc(1,',
+                                     'nothing().calc(1,'], bundled=True) == [
+        ('function void set_type_override_by_name(string original_type_name, string override_type_name, '
+         'bit replace = 1)', 1),
+        ('function void find_all(string comp_match, ref uvm_component comps[$], input uvm_component comp = null)', 1),
+        ('function string get_full_name()', -1),
+        ('function int calc(int a, int b, int c = 0)', 1),
+        None]
+    doc.change(doc.text.replace('task alu_driver::run_phase(uvm_phase phase);',
+                               'task alu_driver::run_phase(uvm_phase phase);\n'
+                               '  phase.get_objection().set_drain_time(this, 100);'))
+    signature(help_at(doc, 'set_drain_time(this,'), ['uvm_object obj = null', 'time drain'], 1,
+              'function void set_drain_time(uvm_object obj = null, time drain)')
