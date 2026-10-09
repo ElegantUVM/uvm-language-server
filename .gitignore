@@ -5,5 +5,6 @@ __pycache__/
 client/node_modules/
 client/dist/
 client/server/
+server/uvmls/third_party/verible/
 client/THIRD_PARTY_NOTICES.txt
 client/*.vsix
