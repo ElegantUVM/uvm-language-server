@@ -234,8 +234,10 @@ Tests for B.1/B.2 ship with those P0 items even if named arguments are deferred.
   existing lookup, or factor its occurrence helper for both callers. Do not scan source for words or
   build a second reference index. Return `DocumentHighlightKind.Text` for every occurrence: current
   references are name-based, so do not invent read/write classification or promise scope precision.
-- Require the cursor to lie within an actual source-spelled identifier range, using half-open bounds;
-  adjacent punctuation, whitespace, comments and strings return `[]`. Same spelling in another
+- Require the cursor to lie within an actual source-spelled identifier range, using half-open bounds,
+  or just after one where no other starts: VS Code asks with the cursor there. Adjacent punctuation,
+  whitespace, comments, strings and unindexed (UVM library) identifiers return `null`, which lets
+  VS Code's own word highlighter run; `[]` would stop it. Same spelling in another
   scope in that file may highlight, matching the existing limitation. Include source-spelled macro
   arguments already indexed, omit generated macro-body occurrences and inactive branches. Return
   only locations in the requested file; a method/class definition in another file is not highlighted.
@@ -249,20 +251,32 @@ Tests for B.1/B.2 ship with those P0 items even if named arguments are deferred.
   included), and explicit nested `begin`/`end` blocks, including named blocks and procedural blocks
   outside classes. Prototypes, pure virtual declarations, one-line bodies and unmatched delimiters
   get no fold. Comments/strings containing keywords and macro-generated blocks are not structures.
+- Amended after review: a registered provider turns VS Code's indentation folding off, so folds
+  also cover modules, interfaces, programs, packages, `fork`/`join`, `case`, covergroups,
+  coverpoints, generate regions, clocking blocks, properties, sequences, constraints; port,
+  parameter, argument and instance lists and enum/struct bodies (bracket pairs, which fold but do
+  not highlight); block comments, runs of two or more whole-line `//` comments, multiline
+  `` `define ``s and macro calls (`kind: comment` for comments); `` `ifdef `` branches; and
+  `// #region` markers (`kind: region`). A pair whose end label names something else, or a
+  same-kind pair inside a structure whose closer is missing and whose closer is not indented as its
+  opener, is not a matched pair.
 - Reuse class/method declaration ranges and extend the existing syntax traversal to retain opening
   and closing token locations and begin/end pairs. Keep data free of pyslang objects. Folding must
   not depend on B's call scanning, reparse documents on demand, or pair keywords with a regex stack.
   Use `plain_range`/source provenance to exclude generated tokens; both endpoints must be real,
   matched tokens in the same file. Do not combine endpoints from different included files or
   inactive branches; an ordinary include inside a valid same-file declaration does not prevent its fold.
-- v1 emits line-only folds: `startLine` is the opening keyword's line; `endLine` is the line **before**
-  the closing keyword, keeping header and closing delimiter visible. Omit folds with
+- v1 emits line-only folds: `startLine` is the opening keyword's line (the header's last line when a
+  list in the header folds from the keyword's line); `endLine` is the line **before** the closing
+  keyword, keeping header and closing delimiter visible. Comments, defines and regions end on
+  their last line. Omit folds with
   `endLine <= startLine`, and omit `startCharacter`/`endCharacter` even if the client supports them.
-  This honours `lineFoldingOnly`. Leave `kind` and `collapsedText` absent: these are structural folds,
-  not comment/import regions. A trailing `: label` stays with its visible closing keyword.
+  This honours `lineFoldingOnly`. Leave `collapsedText` absent, and `kind` on structural folds. A
+  trailing `: label` stays with its visible closing keyword.
 - Sort by start line ascending, end line descending; deduplicate identical intervals reached through
   multiple roots. Nested folds are valid, crossing folds are not: discard a conflicting inner range
-  rather than returning invalid structure. Honour `rangeLimit` by taking the first N in that order
+  rather than returning invalid structure; an `` `ifdef `` branch or region that crosses syntax is the
+  one discarded. Honour `rangeLimit` by taking the first N in that order
   (outer before inner on a shared start), including `0 -> []`; an absent limit means no truncation.
   Serve current unsaved text through the indexing barrier and invalidate cached ranges on rebuild.
 
@@ -273,7 +287,8 @@ Tests for C.1/C.2 ship with those P0 items even if keyword highlights are deferr
 - On an opening/closing `class`, `function`, `task` or `begin` keyword, document highlights may also
   show exactly its matched pair (`endclass`, `endfunction`, `endtask`, `end`). Use C.2's token records,
   choose the innermost pair at that token, and return `Text` highlights for the two keyword tokens
-  only, not every `begin` in the file or trailing block labels. Unmatched/generated tokens give `[]`.
+  only, not every `begin` in the file or trailing block labels. Unmatched/generated tokens give
+  `null`. The keyword pairs added in C.2 match the same way.
 - Add `test_document_highlight.py` and `test_folding_range.py` over stdio, plus indexer tests for new
   syntax records. On `alu_agent.svh`, check `m_driver` occurrences and the class, build/connect/new
   methods and conditional block. On `alu_driver.svh`, check separate folds for both classes, extern
@@ -297,8 +312,10 @@ Tests for C.1/C.2 ship with those P0 items even if keyword highlights are deferr
 - A disabled/missing formatter changes request behaviour, not registration. Signature help observes
   the nested documentation/label capabilities; folding observes its range limit. Do not add client
   features that duplicate the language client's standard LSP providers.
-- Index-backed requests await `fresh()` before resolving; on its deadline return `null` for signature
-  help and `[]` for highlights/folding. Hold `ws.lock` only while reading a consistent index. Work
+- Index-backed requests await `fresh()` before resolving; on its deadline return `null` (the editor
+  then folds by indentation and highlights words itself), and send `workspace/foldingRange/refresh`
+  after every index change to a client that supports it. Bound per-position caches as the inlay
+  hint cache is. Hold `ws.lock` only while reading a consistent index. Work
   off the event loop when needed, then check workspace/document versions before returning; never
   return old positions after an intervening edit. Formatting has its separate buffer-version rule.
 - Slang ranges use UTF-8 byte columns; editor positions use the negotiated encoding. Share the
