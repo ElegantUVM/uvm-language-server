@@ -767,3 +767,150 @@ def test_real_verible_matches_direct_invocation(clients, tmp_path, ranged, endin
     doc.change(expected)
     assert (format_range(doc, (2, 3), (3, 0)) if ranged else format_doc(doc)) == []
     assert Path(doc.path).read_bytes() == source.encode("utf-8")
+
+
+DRIVER = 'm_driver    = alu_driver::type_id::create("m_driver", this);'
+SPACED = DRIVER.replace("    = ", "      =     ")
+
+
+def alu_agent(clients, tmp_path, formatter=None):
+    """A copy of the example indexed on the bundled UVM, with the agent open as the editor has it."""
+    root = tmp_path / "alu_tb"
+    shutil.copytree(EXAMPLE, root)
+    c = clients(root, formatter, initialize_index=True, filelists=[str(root / "alu_tb.f")], useBundledUvm=True)
+    return c, Doc(c, str(root / "agent" / "alu_agent.svh"))
+
+
+def test_alu_path_lookup_then_configured_executable(clients, fake, tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    c, doc = alu_agent(clients, tmp_path)
+    disk, fixture = Path(doc.path).read_bytes(), doc.text
+    doc.change(fixture.replace(DRIVER, SPACED))
+    fake.set(output=fixture)
+    assert applied(doc.text, format_doc(doc)) == fixture
+    record = fake.called()
+    assert record["stdin"] == doc.text
+    assert record["argv"] == ["--failsafe_success=false", "--indentation_spaces=2", "-"]
+    assert Path(doc.path).read_bytes() == disk
+    fake.record.unlink()
+    other = tmp_path / "tools with spaces"
+    other.mkdir()
+    selected = Formatter(other)
+    selected.set(output=fixture.replace("m_driver;", "m_driver;  // selected"))
+    configure(c, formatter={"path": str(selected.path)})
+    assert applied(doc.text, format_doc(doc)) == fixture.replace("m_driver;", "m_driver;  // selected")
+    assert selected.called()["stdin"] == doc.text
+    assert not fake.record.exists()
+    assert Path(doc.path).read_bytes() == disk
+
+
+def lines_of(text, n, ending):
+    """The text before line n, line n itself and the text after it."""
+    lines = text.split(ending)
+    return ending.join(lines[:n]) + ending, lines[n] + ending, ending.join(lines[n + 1:])
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_alu_driver_line_range(clients, fake, tmp_path, ending, empty):
+    c, doc = alu_agent(clients, tmp_path, {"path": str(fake.path)})
+    disk = Path(doc.path).read_bytes()
+    fixture = doc.text.replace("\n", ending)
+    doc.change(fixture.replace(DRIVER, SPACED))
+    buffer = doc.text
+    n = buffer[:buffer.index(SPACED)].count("\n")
+    column = buffer.split(ending)[n].index("=")
+    end = (n, column) if empty else (n + 1, 0)  # character 0 of the sequencer line
+    assert "m_sequencer = " in buffer.split(ending)[n + 1]
+    fake.set(output=fixture)
+    edits = format_range(doc, (n, column), end)
+    record = fake.called()
+    assert record["stdin"] == buffer
+    assert record["argv"] == ["--failsafe_success=false", "--indentation_spaces=2", f"--lines={n + 1}-{n + 1}", "-"]
+    prefix, line, suffix = lines_of(buffer, n, ending)
+    assert edits == [{"range": selection((n, 0), (n + 1, 0)), "newText": lines_of(fixture, n, ending)[1]}]
+    result = applied(buffer, edits)
+    assert result == fixture
+    assert result.encode().startswith(prefix.encode()) and result.encode().endswith(suffix.encode())
+    # Verible also changing a line outside the requested ones gives nothing, not a clipped edit.
+    fake.set(output=fixture.replace("m_sequencer = alu_sequencer", "m_sequencer =  alu_sequencer"))
+    assert format_range(doc, (n, column), end) == []
+    c.wait_for("window/logMessage", lambda m: "beyond the requested lines" in m["params"]["message"])
+    assert Path(doc.path).read_bytes() == disk
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+@pytest.mark.parametrize("lines", [None, 1, 2])
+def test_real_verible_on_alu_agent(clients, tmp_path, ending, lines):
+    binary = shutil.which("verible-verilog-format")
+    if binary is None:
+        pytest.skip("real verible-verilog-format is unavailable; recording fixtures do not prove Verible parity")
+    c, doc = alu_agent(clients, tmp_path, {"path": binary})
+    disk = Path(doc.path).read_bytes()
+    doc.change(doc.text.replace(DRIVER, SPACED).replace("\n", ending))
+    buffer = doc.text
+    n = buffer[:buffer.index(SPACED)].count("\n")
+    column = buffer.split(ending)[n].index("=")
+    argv = [binary, "--failsafe_success=false", "--indentation_spaces=2"]
+    if lines:
+        argv.append(f"--lines={n + 1}-{n + lines}")
+    direct = subprocess.run([*argv, "-"], input=buffer.encode("utf-8"), cwd=os.path.dirname(doc.path),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, check=True)
+    expected = direct.stdout.decode("utf-8").replace("\r\n", "\n").replace("\n", ending)
+    request = (lambda: format_range(doc, (n, column), (n + lines, 0))) if lines else (lambda: format_doc(doc))
+    assert applied(buffer, request()) == expected
+    if lines != 1:  # Verible leaves a lone line of an aligned pair as it is
+        assert expected != buffer
+    doc.change(expected)
+    assert request() == []
+    assert Path(doc.path).read_bytes() == disk
+
+
+def test_alu_failures_then_recovery_without_reindexing(clients, fake, tmp_path):
+    missing = tmp_path / "missing dir" / "verible-verilog-format"
+    c, doc = alu_agent(clients, tmp_path, {"path": str(missing)})
+    disk, fixture = Path(doc.path).read_bytes(), doc.text
+    doc.change(fixture.replace(DRIVER, SPACED))
+    c.wait_for("uvm/indexChanged")
+    c.request("uvm/stats", {})
+    c.forget("uvm/indexChanged", "uvm/elaborationStatus", "window/logMessage")
+
+    def fails(reason):
+        assert format_doc(doc) == []
+        message = c.wait_for("window/logMessage", lambda m: reason in m["params"]["message"])["params"]["message"]
+        assert Path(doc.path).read_bytes() == disk
+        return message
+
+    assert str(missing) in fails("uvm.formatter.path")
+    fake.set(exit=1, stderr="formatter failure", output="// would delete the source\n")
+    configure(c, formatter={"path": str(fake.path)})
+    message = fails("status 1")
+    assert str(fake.path) in message and "formatter failure" in message
+    fake.record.unlink()
+    fake.set(delay=30)
+    fails("5 s")
+    dead(fake.called()["pid"])
+    fake.record.unlink()
+    fake.set(output=fixture)
+    configure(c, formatter={"path": str(fake.path), "enabled": False})
+    assert format_doc(doc) == format_range(doc, (0, 0), (1, 0)) == []
+    assert not fake.record.exists()
+    configure(c, formatter={"path": str(fake.path), "enabled": True})
+    assert applied(doc.text, format_doc(doc)) == fixture
+    for method in ("uvm/indexChanged", "uvm/elaborationStatus"):
+        with pytest.raises(TimeoutError):
+            c.wait_for(method, timeout=0.35)
+    fake.record.unlink()
+    fake.set(delay=30)
+    rid = pending(doc)
+    pid = fake.called()["pid"]
+    c.notify("$/cancelRequest", {"id": rid})
+    assert response(c, rid)["error"]["code"] == -32800
+    dead(pid)
+    fake.record.unlink()
+    fake.set(delay=0.5, output=fixture)
+    rid = pending(doc)
+    fake.called()
+    doc.change(doc.text.replace(SPACED, SPACED + " // typed meanwhile"))
+    assert response(c, rid)["result"] == []
+    assert Path(doc.path).read_bytes() == disk
