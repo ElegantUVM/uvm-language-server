@@ -733,11 +733,12 @@ class Navigator:
         # Different preprocessing roots can disagree about nesting.
         syntax = _nested(p for p, k in kinds.items() if k not in CROSSING_FOLDS)
         crossing = [p for p, k in kinds.items() if k in CROSSING_FOLDS]
-        # One that starts inside syntax and ends after it, or (mirrored) starts before and ends inside.
-        dropped = _start_inside(syntax, crossing) | \
-            _start_inside([(-b, -a) for a, b in syntax], [(-b, -a) for a, b in crossing])
-        out = _nested(syntax + [p for i, p in enumerate(crossing) if i not in dropped])
-        return [(start, end, kinds[start, end]) for start, end in out]
+        if crossing:
+            # One that starts inside syntax and ends after it, or (mirrored) starts before and ends inside.
+            dropped = _start_inside(syntax, crossing) | \
+                _start_inside([(-b, -a) for a, b in syntax], [(-b, -a) for a, b in crossing])
+            syntax = _nested(syntax + [p for i, p in enumerate(crossing) if i not in dropped])
+        return [(start, end, kinds[start, end]) for start, end in syntax]
 
     # -- completion ------------------------------------------------------------
 

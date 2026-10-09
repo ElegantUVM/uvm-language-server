@@ -714,6 +714,20 @@ def test_crossing_check_matches_pairwise_check():
     assert time.perf_counter() - start < 1
 
 
+def test_no_crossing_sweeps_without_crossing_folds(monkeypatch):
+    from uvmls import navigation
+    from uvmls.model import FoldRegion
+    from uvmls.workspace import Workspace
+
+    w = Workspace()
+    w.folds_by_file["a.sv"] = [FoldRegion("a.sv", *f) for f in ((0, 10, None), (2, 5, "comment"), (4, 8, None))]
+    sweeps, nested = [], navigation._nested
+    monkeypatch.setattr(navigation, "_start_inside", lambda *a: sweeps.append(a) or set())
+    monkeypatch.setattr(navigation, "_nested", lambda spans: sweeps.append(spans) or nested(spans))
+    assert navigation.Navigator(w).folding_ranges("a.sv") == [(0, 10, None), (2, 5, "comment")]
+    assert len(sweeps) == 1  # the syntax's own nesting, nothing for crossings
+
+
 def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
     import asyncio
     import threading
