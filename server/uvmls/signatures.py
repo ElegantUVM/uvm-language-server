@@ -7,8 +7,8 @@ import re
 from .fixes import FileText
 from .indexer import MASK_RE, NOT_EOL_RE, argument_spans, mask
 from .model import ClassInfo, Method
-from .navigation import CursorExpr, Target
-from .workspace import bind_params, substitute_params
+from .navigation import CursorExpr
+from .workspace import substitute_params
 
 
 LIMIT = 65536
@@ -74,17 +74,7 @@ def signature(nav, path, line, col):
     if not names:
         return None
     if names == ["new"]:
-        cls, _, _ = nav.ws.enclosing(path, call.head.line, call.head.col)
-        creates = nav.ws.calls_of(cls).creates if cls else ()
-        create = next((cr for cr in creates if cr.kind == "new" and cr.range.path == path and
-                       cr.range.contains(call.head.line, call.head.col)), None)
-        spec, _, _ = nav.new_target_type(path, call.head.line, call.head.col,
-                                         create.target if create else call.target, create.type if create else None)
-        if spec is None or spec.cls is None:
-            return None
-        bindings = bind_params([(p.name, p.default) for p in spec.cls.params], spec.args, {})
-        hit = nav.ws.find_member(spec.cls, "new", bindings, strict=True)
-        targets = [Target(hit[1], owner=hit[0], bindings=hit[2])] if hit else []
+        targets = nav.constructor_at(path, call.head.line, call.head.col, strict=True, call=call) or []
     else:
         ce = CursorExpr(names[-1], names, [s[2] for s in call.segments[1:]], False, 0, 0,
                         [list(s[1]) for s in call.segments])

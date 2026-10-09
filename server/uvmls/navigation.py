@@ -125,8 +125,12 @@ class Navigator:
                 params = shim_macros()[ce.word]
                 found = [Target(("uvm-macro", ce.word, params))]
             return found
-        cls, meth, unit = ws.enclosing(path, line, col)
         segs, seps = ce.segments, ce.seps
+        if segs == ["new"]:
+            found = self.constructor_at(path, line, col, strict)
+            if found is not None:
+                return found
+        cls, meth, unit = ws.enclosing(path, line, col)
         near = Range(path, line, col, line, col)
         current = self.resolve_first(segs[0], cls, meth, unit, scoped=bool(seps) and seps[0] == "::", strict=strict,
                                      near=near)
@@ -243,6 +247,27 @@ class Navigator:
             return None, "", False
         t = targets[0]
         return self.type_of(t, strict=True), t.obj.type_text, isinstance(t.owner, ClassInfo) and t.owner is not cls
+
+    def constructor_at(self, path, line, col, strict=False, call=None) -> list[Target] | None:
+        """The constructor a bare `new` at a position calls: the assigned variable's class's, or
+        unless strict the one it inherits. None when the position has no indexed `new` or its
+        target's class is unknown."""
+        ws = self.ws
+        cls, _, _ = ws.enclosing(path, line, col)
+        create = next((cr for cr in (ws.calls_of(cls).creates if cls else ()) if cr.kind == "new" and
+                       cr.range.path == path and cr.range.contains(line, col)), None)
+        if call is None and create is None:
+            call = next((c for c in ws.invocations_by_file.get(path, ()) if c.head.contains(line, col)
+                         and [s[0] for s in c.segments] == ["new"]), None)
+        if call is None and create is None:
+            return None
+        spec, _, _ = self.new_target_type(path, line, col, create.target if create else call.target,
+                                          create.type if create else None)
+        if spec is None or spec.cls is None:
+            return None
+        bindings = bind_params([(p.name, p.default) for p in spec.cls.params], spec.args, {})
+        hit = ws.find_member(spec.cls, "new", bindings, strict)
+        return [Target(hit[1], owner=hit[0], bindings=hit[2])] if hit else []
 
     def bound_member_hints(self, path: str, start_line: int = 0,
                            end_line: int | None = None) -> list[tuple[Range, str, str]]:

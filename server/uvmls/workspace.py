@@ -771,8 +771,8 @@ class Workspace:
         """(owner, member, bindings) for `name` in cls or its ancestors."""
         for entry in self.chain(cls, bindings, strict):
             c = entry.spec.cls
-            if name == "new" and c is not cls:
-                break
+            if name == "new" and strict and c is not cls:
+                break  # constructors are not inherited
             if c is not None:
                 for v in c.properties:
                     if v.name == name:

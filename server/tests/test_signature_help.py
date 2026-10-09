@@ -1024,3 +1024,46 @@ endclass
 '''.replace('IMPORTS', imports)
     create = 'function box create(string name = "", uvm_component parent = null, string contxt = "")'
     assert labels_in(tmp_path, text, ['alias_t::go(', '::create('], bundled=True) == [label, label and create]
+
+
+def test_constructor_navigation_follows_the_assigned_class(tmp_path):
+    """Hover and definition on `new` show the constructor the assigned class calls, inherited
+    if need be; signature help does not, since constructors are not inherited."""
+    from test_fixes import index
+    from uvmls.navigation import Navigator
+
+    text = '''package p;
+class base_item;
+  function new(string name = "base_item"); endfunction
+endclass
+class my_item extends base_item;
+  function base_item clone();
+    my_item t;
+    t = new();
+    return t;
+  endfunction
+endclass
+class other;
+  function new(int count); endfunction
+endclass
+class grand extends my_item;
+  other o;
+  function new(); super.new(); o = new(1); endfunction
+endclass
+endpackage
+'''
+    ws = index(tmp_path, {'t.sv': text})
+    nav, path, lines = Navigator(ws), str(tmp_path / 't.sv'), text.splitlines()
+
+    def at(needle):
+        line = next(i for i, s in enumerate(lines) if needle in s)
+        col = lines[line].index(needle) + needle.index('new') + 1
+        return [(r.line, r.col) for r in nav.definition(path, line, col, text)], nav.hover(path, line, col, text)
+
+    for needle in ('t = new', 'super.new'):
+        where, shown = at(needle)
+        assert where == [(2, 11)] and 'function new(string name = "base_item")' in shown
+    where, shown = at('o = new')
+    assert where == [(12, 11)] and 'function new(int count)' in shown
+    assert labels_in(tmp_path, text, ['t = new(', 'super.new(', 'o = new(']) == \
+        [None, None, 'function new(int count)']
