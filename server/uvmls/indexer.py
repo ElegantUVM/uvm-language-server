@@ -1768,7 +1768,7 @@ class Extractor:
             visible = after is not None and not after.isMissing and after.location.buffer == buffer and \
                 self.physical_position(after.location)[0] == self.physical_position(last)[0]
         if last.buffer == buffer:
-            self.add_fold(path, start, self.physical_position(last)[0] - visible)
+            self.add_fold(path, start, self.physical_position(last)[0] - visible, "body")
 
     def suspect_within(self, node, family):
         """Recovery gives a missing closer's job to one inside: with the inner end of `begin begin

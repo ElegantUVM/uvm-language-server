@@ -283,8 +283,9 @@ Tests for B.1/B.2 ship with those P0 items even if named arguments are deferred.
   trailing `: label` stays with its visible closing keyword.
 - Sort by start line ascending, end line descending; deduplicate identical intervals reached through
   multiple roots. Nested folds are valid, crossing folds are not: discard a conflicting inner range
-  rather than returning invalid structure; an `` `ifdef `` branch, region or `` `uvm_*_begin `` block
-  that crosses syntax is the one discarded. Honour `rangeLimit` by taking the first N in that order
+  rather than returning invalid structure; an `` `ifdef `` branch, region, `` `uvm_*_begin `` block
+  or statement body that crosses syntax is the one discarded. Honour `rangeLimit` by taking the
+  first N in that order
   (outer before inner on a shared start), including `0 -> []`; an absent limit means no truncation.
   Serve current unsaved text through the indexing barrier and invalidate cached ranges on rebuild.
 

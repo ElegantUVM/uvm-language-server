@@ -544,6 +544,13 @@ def test_bodies_without_begin(tmp_path):
         c.close()
 
 
+def test_body_that_crosses_a_block(doc):
+    text = "module m;\n  always @(posedge clk)\n    x <= 1; initial begin\n    y = 1;\n  end\nendmodule\n"
+    doc.change(text)
+    # The always's body ends on the line where the initial block starts: the block keeps its fold.
+    assert folds(doc) == ordered([fold(text, "module", "endmodule"), fold(text, "initial begin", "  end")])
+
+
 def test_branch_that_crosses_a_block(doc):
     text = ("module m;\n`ifdef A\n  initial begin\n`else\n  initial begin\n    x = 0;\n`endif\n    x = 1;\n"
             "  end\nendmodule\n")
