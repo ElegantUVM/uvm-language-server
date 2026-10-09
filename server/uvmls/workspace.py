@@ -237,6 +237,7 @@ class Workspace:
         self._highlight_cache: dict = {}
         self._folding_cache: dict = {}
         self.structures_by_file: dict = {}
+        self.folds_by_file: dict = {}
         self.identifiers_by_file: dict[str, list[tuple[str, Range]]] = {}
         self.texts: dict[str, str] = {}
         self.lines: dict[str, list[str]] = {}
@@ -341,6 +342,10 @@ class Workspace:
                 if owners.setdefault(path, root) == root or \
                         _unseen(known, self.structures_by_file, path, pair, lambda p: p):
                     self.structures_by_file.setdefault(path, []).append(pair)
+            for fold in idx.folds:
+                if owners.setdefault(fold.path, root) == root or \
+                        _unseen(known, self.folds_by_file, fold.path, fold, lambda f: f):
+                    self.folds_by_file.setdefault(fold.path, []).append(fold)
             for call in idx.invocations:
                 path = call.head.path
                 if owners.setdefault(path, root) == root or \
@@ -438,18 +443,30 @@ class Workspace:
         return list(self.indices.values())
 
     def structures_in(self, path: str) -> list:
-        """A file's structural pairs. A library root's are collected when one of its files first
-        asks: user code never needs them."""
-        if path in self.library_files:
-            for root in self.roots_for(path):
-                idx = self.indices[root]
-                if idx.structures_pending:
-                    idx.structures, idx.structures_pending = self.indexer.structures(root, self.overrides), False
-                    known: dict = {}
-                    for pair in idx.structures:
-                        if _unseen(known, self.structures_by_file, pair.opening.path, pair, lambda p: p):
-                            self.structures_by_file.setdefault(pair.opening.path, []).append(pair)
+        """A file's structural pairs."""
+        self._collect_library_structures(path)
         return self.structures_by_file.get(path, [])
+
+    def folds_in(self, path: str) -> list:
+        self._collect_library_structures(path)
+        return self.folds_by_file.get(path, [])
+
+    def _collect_library_structures(self, path: str):
+        """A library root's pairs and folds are collected when one of its files first asks: user
+        code never needs them."""
+        if path not in self.library_files:
+            return
+        for root in self.roots_for(path):
+            idx = self.indices[root]
+            if idx.structures_pending:
+                (idx.structures, idx.folds), idx.structures_pending = self.indexer.structures(root, self.overrides), False
+                known: dict = {}
+                for pair in idx.structures:
+                    if _unseen(known, self.structures_by_file, pair.opening.path, pair, lambda p: p):
+                        self.structures_by_file.setdefault(pair.opening.path, []).append(pair)
+                for fold in idx.folds:
+                    if _unseen(known, self.folds_by_file, fold.path, fold, lambda f: f):
+                        self.folds_by_file.setdefault(fold.path, []).append(fold)
 
     def visible_packages(self, imports) -> set[str]:
         """What `imports` make visible, with what their packages re-export (IEEE 1800 26.6):

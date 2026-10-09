@@ -19,7 +19,7 @@ from pyslang import syntax as S
 
 from . import naturaldocs
 from .model import (
-    CallSite, ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex,
+    CallSite, ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex, FoldRegion,
     Instance, MacroDef, Method, OutOfBlockMethod, OverrideCall, Param, Range,
     SeqStart, StructuralPair, TypeRef, Typedef, Variable,
 )
@@ -35,17 +35,45 @@ SHIM_BUFFER_NAME = "<uvm-macro-shim>"
 UVM_MACROS_PRELUDE = "<uvm-macros-prelude>"
 
 FUNC_DECLS = (K.FunctionDeclaration, K.TaskDeclaration)
-# A structure's matched keywords: kind -> (opening, closing, names, end name), as attribute paths.
+UNIT_DECLS = (K.ModuleDeclaration, K.InterfaceDeclaration, K.ProgramDeclaration, K.PackageDeclaration)
+# A structure's matched keywords: kind -> (opening, closing, names, end name, end of the header), as
+# attribute paths. Its fold starts at the opening, or after a header whose list folds on its own.
 STRUCTURES = {
-    K.ClassDeclaration: ("classKeyword", "endClass", ("name",), "endBlockName"),
-    **{k: ("prototype.keyword", "end", ("prototype.name",), "endBlockName") for k in FUNC_DECLS},
-    K.SequentialBlockStatement: ("begin", "end", ("blockName", "label"), "endBlockName"),
-    K.GenerateBlock: ("begin", "end", ("beginName", "label"), "endName"),
+    K.ClassDeclaration: ("classKeyword", "endClass", ("name",), "endBlockName", "semi"),
+    **{k: ("prototype.keyword", "end", ("prototype.name",), "endBlockName", "semi") for k in FUNC_DECLS},
+    **{k: ("header.moduleKeyword", "endmodule", ("header.name",), "blockName", "header.semi") for k in UNIT_DECLS},
+    K.SequentialBlockStatement: ("begin", "end", ("blockName", "label"), "endBlockName", None),
+    K.ParallelBlockStatement: ("begin", "end", ("blockName", "label"), "endBlockName", None),
+    K.GenerateBlock: ("begin", "end", ("beginName", "label"), "endName", None),
+    K.GenerateRegion: ("keyword", "endgenerate", (), None, None),
+    K.CaseStatement: ("caseKeyword", "endcase", (), None, None),
+    K.CaseGenerate: ("keyword", "endCase", (), None, None),
+    K.RandCaseStatement: ("randCase", "endCase", (), None, None),
+    K.RandSequenceStatement: ("randsequence", "endsequence", (), None, None),
+    K.CovergroupDeclaration: ("covergroup", "endgroup", ("name",), "endBlockName", "semi"),
+    K.ClockingDeclaration: ("clocking", "endClocking", ("blockName",), "endBlockName", None),
+    **{k: ("keyword", "end", ("name",), "endBlockName", "semi")
+       for k in (K.PropertyDeclaration, K.SequenceDeclaration, K.CheckerDeclaration)},
+    K.SpecifyBlock: ("specify", "endspecify", (), None, None),
+    K.UdpDeclaration: ("primitive", "endprimitive", ("name",), "endBlockName", "portList.semi"),
+    K.UdpBody: ("table", "endtable", (), None, None),
+    K.ConfigDeclaration: ("config", "endconfig", ("name",), "blockName", None),
 }
-STRUCTURE_KINDS = frozenset(STRUCTURES)
-# Syntax that holds none of them: a library's walk for folds skips it (most of its nodes).
+# Lists and bodies in brackets: they fold, and the editor matches their brackets itself.
+_PARENS, _BRACES = ("openParen", "closeParen", (), None, None), ("openBrace", "closeBrace", (), None, None)
+BRACKETS = {
+    **{k: _PARENS for k in (K.AnsiPortList, K.NonAnsiPortList, K.ParameterPortList, K.ParameterValueAssignment,
+                            K.HierarchicalInstance, K.FunctionPortList, K.ArgumentList, K.AnsiUdpPortList,
+                            K.NonAnsiUdpPortList)},
+    **{k: _BRACES for k in (K.EnumType, K.StructType, K.UnionType, K.ConstraintBlock, K.Coverpoint, K.CoverCross,
+                            K.RsCodeBlock, K.SimpleAssignmentPattern, K.StructuredAssignmentPattern,
+                            K.ReplicatedAssignmentPattern, K.ConcatenationExpression, K.RangeList)},
+}
+STRUCTURE_KINDS = frozenset(STRUCTURES) | frozenset(BRACKETS)
+# Syntax that holds no keyword pair: a library's walk for folds skips it (most of its nodes), with
+# what its lists (a prototype's arguments, a call's) and its trivia after the first token would fold.
 NO_STRUCTURE_KINDS = frozenset([K.ExpressionStatement, K.DataDeclaration, K.FunctionPrototype, K.ConditionalPredicate,
-                                K.ReturnStatement, K.ParameterDeclarationStatement, K.TypedefDeclaration,
+                                K.ReturnStatement, K.ParameterDeclarationStatement,
                                 K.ClassPropertyDeclaration, K.ProceduralAssignStatement,
                                 *(k for k in K.__members__.values() if k.name.endswith(("Expression", "Expr")))])
 # Where a call's missing delimiters may still be recovered.
@@ -78,7 +106,10 @@ QUALIFIER_TOKENS = {
     TK.VirtualKeyword: "virtual", TK.PureKeyword: "pure", TK.ExternKeyword: "extern",
 }
 LINE_COMMENT, BLOCK_COMMENT = P.TriviaKind.LineComment, P.TriviaKind.BlockComment
-END_OF_LINE, WHITESPACE = P.TriviaKind.EndOfLine, P.TriviaKind.Whitespace
+END_OF_LINE, WHITESPACE, DIRECTIVE = P.TriviaKind.EndOfLine, P.TriviaKind.Whitespace, P.TriviaKind.Directive
+REGION_RE = re.compile(rb"//\s*#(end)?region\b")  # the markers VS Code folds in other languages
+FOLDED_DIRECTIVES = frozenset([K.IfDefDirective, K.IfNDefDirective, K.ElsIfDirective, K.ElseDirective,
+                               K.EndIfDirective, K.DefineDirective, K.MacroUsage])
 RULE_CHARS = "-=*#~_+/\\"  # what a separator line in a comment is made of
 TYPEDEF_KINDS = (K.TypedefDeclaration, K.ForwardTypedefDeclaration)
 FAILURE_CALLS = {"$fatal", "$error", "uvm_report_fatal", "uvm_report_error"}
@@ -435,7 +466,9 @@ def physical_position(sm, loc, line_starts: dict) -> tuple[int, int]:
     return line, loc.offset - starts[line]
 
 
-def _attribute(node, path: str):
+def _attribute(node, path: str | None):
+    if path is None:
+        return None
     for name in path.split("."):
         node = getattr(node, name, None)
         if node is None:
@@ -461,12 +494,26 @@ def _family(closer) -> TK:
     return TK.JoinKeyword if k in (TK.JoinAnyKeyword, TK.JoinNoneKeyword) else k
 
 
+def _raw_bytes(trivia) -> bytes:
+    """A piece of trivia as it is in the file."""
+    try:
+        return trivia.getRawText().encode()
+    except UnicodeDecodeError as e:
+        return e.object
+
+
 def _raw_length(trivia) -> int:
     """Length in bytes of a piece of trivia as it is in the file."""
-    try:
-        return len(trivia.getRawText().encode())
-    except UnicodeDecodeError as e:
-        return len(e.object)
+    return len(_raw_bytes(trivia))
+
+
+def _line_start(data: bytes, offset: int) -> int:
+    return max(data.rfind(b"\n", 0, offset), data.rfind(b"\r", 0, offset)) + 1
+
+
+def _line_end(data: bytes, offset: int) -> int:
+    ends = [i for i in (data.find(b"\n", offset), data.find(b"\r", offset)) if i >= 0]
+    return min(ends, default=len(data))
 
 
 @dataclass
@@ -521,12 +568,13 @@ class Indexer:
             return built
         return Extractor(*built, root, library, overrides, self.library_dirs).run()
 
-    def structures(self, root: str, overrides: dict[str, str] | None = None) -> list[StructuralPair]:
-        """A library root's structural pairs, which indexing leaves for the first request."""
+    def structures(self, root: str, overrides: dict[str, str] | None = None
+                   ) -> tuple[list[StructuralPair], list[FoldRegion]]:
+        """A library root's structural pairs and folds, which indexing leaves for the first request."""
         overrides = overrides or {}
         built = self._tree(root, overrides, True)
         if isinstance(built, FileIndex):
-            return []
+            return [], []
         return Extractor(*built, root, True, overrides, self.library_dirs).collect_structures()
 
     def _tree(self, root: str, overrides: dict[str, str], library: bool):
@@ -581,6 +629,11 @@ class Extractor:
         self._argument_calls: set[Range] = set()
         self._suspect: set[tuple[int, int]] = set()  # openers whose closer slang's recovery may have taken
         self._sources: dict[int, bytes] = {}
+        self._headed: list[tuple[str, int, int, int]] = []  # (path, opening, header end, end) of a fold
+        self._list_starts: set[tuple[str, int]] = set()  # where a bracketed list's fold starts
+        self._branches: dict[int, list[int]] = {}  # per buffer, the lines of the open `ifdef branches
+        self._comment_lines: dict[str, set[int]] = {}  # lines holding only a line comment
+        self._markers: dict[str, set[tuple[int, bool]]] = {}  # (line, opens) of `// #region` markers
 
     # -- locations -----------------------------------------------------------
 
@@ -824,7 +877,7 @@ class Extractor:
         if not repeated:
             return
         for name, key_of in (("structures", lambda s: s.opening), ("invocations", lambda c: c.opening),
-                             ("directives", lambda r: r)):
+                             ("directives", lambda r: r), ("folds", lambda f: f)):
             kept, seen = [], set()
             for record in getattr(self.out, name):
                 key = key_of(record)
@@ -1636,7 +1689,8 @@ class Extractor:
             self.out.ignores[path] = lines
 
     def structural_pair(self, node):
-        opening_path, closing_path, names, end_name = STRUCTURES[node.kind]
+        keyword = node.kind in STRUCTURES
+        opening_path, closing_path, names, end_name, head_path = (STRUCTURES if keyword else BRACKETS)[node.kind]
         opening, closing = _attribute(node, opening_path), _attribute(node, closing_path)
         if opening is None or closing is None or opening.isMissing:
             return
@@ -1652,7 +1706,18 @@ class Extractor:
         loc = opening.location
         if (loc.buffer.id, loc.offset) in self._suspect and self.indent(loc) != self.indent(closing.location):
             return
+        if not keyword:
+            if b.line - 1 > a.line:
+                self._list_starts.add((a.path, a.line))
+                self.add_fold(a.path, a.line, b.line - 1)
+            return
         self.out.structures.append(StructuralPair(a, b))
+        head = _attribute(node, head_path)
+        h = self.keyword_range(head) if head is not None and not head.isMissing else None
+        if h is not None and h.path == a.path and a.line < h.line < b.line:
+            self._headed.append((a.path, a.line, h.line, b.line - 1))
+        else:
+            self.add_fold(a.path, a.line, b.line - 1)
 
     def suspect_within(self, node, family):
         """Recovery gives a missing closer's job to one inside: with the inner end of `begin begin
@@ -1665,7 +1730,7 @@ class Extractor:
                 if not isinstance(c, Node):
                     continue
                 if c.kind in STRUCTURE_KINDS:
-                    opening_path, closing_path, _, _ = STRUCTURES[c.kind]
+                    opening_path, closing_path = (STRUCTURES.get(c.kind) or BRACKETS[c.kind])[:2]
                     opening, closing = _attribute(c, opening_path), _attribute(c, closing_path)
                     if opening is not None and closing is not None and _family(closing) == family:
                         self._suspect.add((opening.location.buffer.id, opening.location.offset))
@@ -1683,24 +1748,135 @@ class Extractor:
     def indent(self, loc) -> bytes:
         """The white space that starts the line holding a location."""
         data = self.source_bytes(loc.buffer)
-        line = data[max(data.rfind(b"\n", 0, loc.offset), data.rfind(b"\r", 0, loc.offset)) + 1:loc.offset]
+        line = data[_line_start(data, loc.offset):loc.offset]
         return line[:len(line) - len(line.lstrip(b" \t"))]
 
-    def collect_structures(self) -> list[StructuralPair]:
+    def add_fold(self, path: str, start: int, end: int, kind: str | None = None):
+        if end > start:
+            self.out.folds.append(FoldRegion(path, start, end, kind))
+
+    def foldable(self, loc) -> str | None:
+        """The path of a location whose comments and directives fold here."""
+        if self.sm.isMacroLoc(loc):
+            return None
+        path = self.path_of(loc.buffer)
+        return None if path is None or not self.library and self.in_library(path) else path
+
+    def fold_trivia(self, tok):
+        """For the library's walk: the folds the trivia before a token makes."""
+        trivia = tok.trivia
+        after, comments = 0, False
+        for i, t in enumerate(trivia):
+            k = t.kind
+            if k is DIRECTIVE:
+                after, comments = i + 1, False
+                syntax = t.syntax()
+                sr = syntax.sourceRange
+                if path := self.foldable(sr.start):
+                    self.directive_folds(syntax, path, sr)
+            elif k is LINE_COMMENT or k is BLOCK_COMMENT:
+                comments = True
+        if comments and (path := self.foldable(tok.location)):
+            self.comment_folds(tok.location, trivia[after:], path)
+
+    def comment_folds(self, loc, trivia, path: str):
+        """Folds of the comments in trivia that ends at `loc`, walking back from it."""
+        data = self.source_bytes(loc.buffer)
+        end = loc.offset
+        for t in reversed(trivia):
+            raw = _raw_bytes(t)
+            start = end - len(raw)
+            if start < 0 or data[start:end] != raw:
+                return  # what follows an included file's last token comes after its `include
+            k = t.kind
+            if k is LINE_COMMENT:
+                if not data[_line_start(data, start):start].strip():
+                    line = self.offset_line(loc.buffer, start)
+                    if marker := REGION_RE.match(raw):
+                        self._markers.setdefault(path, set()).add((line, not marker.group(1)))
+                    else:
+                        self._comment_lines.setdefault(path, set()).add(line)
+            elif k is BLOCK_COMMENT:
+                last = self.offset_line(loc.buffer, end)
+                if data[end:_line_end(data, end)].strip():
+                    last -= 1  # the code after it on its last line stays visible
+                self.add_fold(path, self.offset_line(loc.buffer, start), last, "comment")
+            end = start
+
+    def offset_line(self, buffer, offset: int) -> int:
+        return self.physical_position(ps.SourceLocation(buffer, offset))[0]
+
+    def directive_folds(self, syntax, path: str, sr):
+        """Folds of an `ifdef branch, a multi-line define or macro call, and the comments before
+        it, which its first token holds."""
+        first = syntax.getFirstToken()
+        trivia = first.trivia if first is not None else ()
+        if any(t.kind is LINE_COMMENT or t.kind is BLOCK_COMMENT for t in trivia):
+            self.comment_folds(first.location, trivia, path)
+        k = syntax.kind
+        if k not in FOLDED_DIRECTIVES:
+            return
+        line = self.physical_position(sr.start)[0]
+        if k == K.DefineDirective:
+            self.add_fold(path, line, self.physical_position(sr.end)[0])
+        elif k == K.MacroUsage:
+            args = syntax.args
+            if args is not None and not args.closeParen.isMissing:
+                self.add_fold(path, self.physical_position(args.openParen.location)[0],
+                              self.physical_position(args.closeParen.location)[0] - 1)
+        else:
+            open_branches = self._branches.setdefault(sr.start.buffer.id, [])
+            if k not in (K.IfDefDirective, K.IfNDefDirective):
+                if not open_branches:
+                    return  # slang reports it
+                self.add_fold(path, open_branches.pop(), line - 1, "branch")
+                if k == K.EndIfDirective:
+                    return
+            open_branches.append(line)
+
+    def finish_folds(self):
+        """The folds that wait for the whole walk: a structure after a header whose list folds on
+        its own line (an editor shows one fold per line), line comment runs and #regions."""
+        for path, line, head, end in self._headed:
+            self.add_fold(path, head if (path, line) in self._list_starts else line, end)
+        for path, lines in self._comment_lines.items():
+            ordered = sorted(lines)
+            first = 0
+            for i, line in enumerate(ordered):
+                if i + 1 == len(ordered) or ordered[i + 1] != line + 1:
+                    self.add_fold(path, ordered[first], line, "comment")
+                    first = i + 1
+        for path, markers in self._markers.items():
+            starts = []
+            for line, opens in sorted(markers):
+                if opens:
+                    starts.append(line)
+                elif starts:
+                    self.add_fold(path, starts.pop(), line, "region")
+
+    def collect_structures(self) -> tuple[list[StructuralPair], list[FoldRegion]]:
         stack = [self.tree.root]
         while stack:
             n = stack.pop()
-            if isinstance(n, Node):
-                k = n.kind
-                if k in STRUCTURE_KINDS:
-                    self.structural_pair(n)
-                elif k in NO_STRUCTURE_KINDS:
-                    continue
-                stack.extend(c for c in n if isinstance(c, Node))
-        return self.out.structures
+            if isinstance(n, Token):
+                self.fold_trivia(n)
+                continue
+            k = n.kind
+            if k in STRUCTURE_KINDS:
+                self.structural_pair(n)
+            elif k in NO_STRUCTURE_KINDS:
+                first = n.getFirstToken()
+                if first is not None:
+                    self.fold_trivia(first)
+                continue
+            children = [c for c in n if c is not None]
+            children.reverse()  # in source order: `ifdef branches pair up as they come
+            stack.extend(children)
+        self.finish_folds()
+        return self.out.structures, self.out.folds
 
     def collect_source_ranges(self):
-        """Identifiers, structural pairs and directives, in one pass over the tree."""
+        """Identifiers, structural pairs, folds and directives, in one pass over the tree."""
         ids, directives = self.out.identifiers, self.out.directives
         sm = self.sm
         path_of, in_library, position = self.path_of, self.in_library, self.physical_position
@@ -1713,17 +1889,24 @@ class Extractor:
                 if tok.kind in STRUCTURE_KINDS:
                     self.structural_pair(tok)
                 return
+            trivia_list = tok.trivia
             prev = None  # (index, start) of the directive just before
-            for trivia in tok.trivia:
-                if trivia.kind != directive:
+            after, comments = 0, False  # where the trivia after the last directive start; any comments
+            for i, trivia in enumerate(trivia_list):
+                k = trivia.kind
+                if k is not directive:
+                    if k is LINE_COMMENT or k is BLOCK_COMMENT:
+                        comments = True
                     continue
+                after, comments = i + 1, False
                 syntax = trivia.syntax()
+                sr = syntax.sourceRange
+                path = self.foldable(sr.start)
+                if path is not None:
+                    self.directive_folds(syntax, path, sr)
                 if syntax.kind == macro_usage:
                     continue  # code: its arguments are as written and its expansion is parsed
-                sr = syntax.sourceRange
-                path = path_of(sr.start.buffer)
-                if path is None or in_library(path) or sr.start.buffer != sr.end.buffer or \
-                        sm.isMacroLoc(sr.start) or sm.isMacroLoc(sr.end):
+                if path is None or sr.start.buffer != sr.end.buffer or sm.isMacroLoc(sr.end):
                     prev = None
                     continue
                 if prev is not None and prev[1].buffer == sr.start.buffer and \
@@ -1733,6 +1916,8 @@ class Extractor:
                     directives[prev[0]] = self.make_range(prev[1], sr.start)[0]
                 directives.append(self.make_range(sr.start, sr.end)[0])
                 prev = (len(directives) - 1, sr.start)
+            if comments and (path := self.foldable(tok.location)):
+                self.comment_folds(tok.location, trivia_list[after:], path)
             if tok.kind != identifier:
                 return
             loc = tok.location
@@ -1752,3 +1937,4 @@ class Extractor:
             line, col = position(loc)
             ids.setdefault(tok.valueText, []).append(Range(path, line, col, line, col + len(tok.rawText)))
         self.tree.root.visit(visit)
+        self.finish_folds()

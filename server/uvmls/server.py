@@ -911,10 +911,13 @@ async def folding_range(ls: UvmLanguageServer, params: T.FoldingRangeParams):
     return result
 
 
+FOLDING_KINDS = {"comment": T.FoldingRangeKind.Comment, "region": T.FoldingRangeKind.Region}
+
+
 def _compute_folding_range(ls: UvmLanguageServer, params: T.FoldingRangeParams, limit):
     path = uri_to_path(params.text_document.uri)
     with ls.ws.lock:
-        return [T.FoldingRange(a, b) for a, b in ls.nav.folding_ranges(path)[:limit]]
+        return [T.FoldingRange(a, b, kind=FOLDING_KINDS.get(kind)) for a, b, kind in ls.nav.folding_ranges(path)[:limit]]
 
 
 @server.feature(T.TEXT_DOCUMENT_COMPLETION,

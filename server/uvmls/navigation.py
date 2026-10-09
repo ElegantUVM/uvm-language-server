@@ -19,6 +19,7 @@ WORD = re.compile(r"[A-Za-z0-9_$]")
 # What the utils and field macros generate in a user class; other generated methods are API
 # (a TLM port's get_next_item, item_done, put ...).
 UTILS_METHODS = {"get_type", "get_object_type", "create", "get_type_name", "__m_uvm_field_automation"}
+CROSSING_FOLDS = {"branch", "region"}  # folds that need not nest with the syntax around them
 
 
 @dataclass
@@ -675,18 +676,26 @@ class Navigator:
                     return self.occurrences(name, path)
         return []
 
-    def folding_ranges(self, path) -> list[tuple[int, int]]:
-        intervals = {(p.opening.line, p.closing.line - 1) for p in self.ws.structures_in(path)
-                     if p.closing.line - 1 > p.opening.line}
+    def folding_ranges(self, path) -> list[tuple[int, int, str | None]]:
+        """(start, end, kind) of a file's folds, outer before inner on a shared start. Syntax and
+        comments nest by construction, unless preprocessing roots disagree; an `ifdef branch or
+        #region that crosses them is left out."""
+        kinds: dict[tuple[int, int], str | None] = {}
+        for f in sorted(self.ws.folds_in(path), key=lambda f: f.kind in CROSSING_FOLDS):
+            kinds.setdefault((f.start, f.end), f.kind)
         out, ends = [], []
-        for start, end in sorted(intervals, key=lambda p: (p[0], -p[1])):
+        for start, end in sorted((p for p, k in kinds.items() if k not in CROSSING_FOLDS), key=lambda p: (p[0], -p[1])):
             while ends and start > ends[-1]:
                 ends.pop()
             if ends and end > ends[-1]:
                 continue  # Different preprocessing roots can disagree about nesting.
             out.append((start, end))
             ends.append(end)
-        return out
+        for start, end in sorted(p for p, k in kinds.items() if k in CROSSING_FOLDS):
+            if not any(a < start <= b < end or start < a <= end < b for a, b in out):
+                out.append((start, end))
+        out.sort(key=lambda p: (p[0], -p[1]))
+        return [(start, end, kinds[start, end]) for start, end in out]
 
     # -- completion ------------------------------------------------------------
 

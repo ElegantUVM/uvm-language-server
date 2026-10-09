@@ -137,13 +137,14 @@ endclass
 '''
 
 
-def source_folds(text):
-    return ordered([fold(text, "class c", "endclass\n"),
-                    fold(text, "function void f", "  endfunction"),
-                    fold(text, "begin : outer", "end : outer"),
-                    fold(text, "begin : inner", "end : inner"),
-                    fold(text, "begin : proc", "end : proc"),
-                    fold(text, "begin : gen", "end : gen")])
+SOURCE_FOLDS = [("`define BLOCK", "virtual class"), ("class c", "endclass\n"), ("prototype(", "  );"),
+                ("abstract_method(", "  );"), ("function void f", "  endfunction"), ("begin : outer", "end : outer"),
+                ("begin : inner", "end : inner"), ("module m", "endmodule"), ("begin : proc", "end : proc"),
+                ("begin : gen", "end : gen"), ("`ifdef NEVER_DEFINED", "`endif")]
+
+
+def source_folds(text, without=()):
+    return ordered([fold(text, opening, closing) for opening, closing in SOURCE_FOLDS if opening not in without])
 
 
 def test_line_directive_fold(doc):
@@ -167,10 +168,9 @@ def test_nested_named_procedural_and_generated_blocks(doc):
     doc.change(SOURCE)
     assert folds(doc) == source_folds(SOURCE)
     # The inner begin is given `end : outer` and the outer begin no end: neither block folds.
-    text = SOURCE.replace("      end : inner", "      // closing token removed")
+    text = SOURCE.replace("      end : inner\n", "")
     doc.change(text)
-    assert folds(doc) == ordered([fold(text, "class c", "endclass\n"), fold(text, "function void f", "  endfunction"),
-                                  fold(text, "begin : proc", "end : proc"), fold(text, "begin : gen", "end : gen")])
+    assert folds(doc) == source_folds(text, without=("begin : outer", "begin : inner"))
 
 
 NESTED = "    begin : outer\n      begin : inner\n        int q;\n        q = 1;\n      end : inner\n    end : outer\n"
@@ -226,7 +226,8 @@ def test_unlabelled_missing_end_and_mismatched_labels(doc):
     # `if (b) begin` is given the end before `else`; the else block keeps the end below it.
     assert folds(doc) == ordered([fold(UNMATCHED, "class c", "endclass"),
                                   fold(UNMATCHED, "function void f", "endfunction"),
-                                  fold(UNMATCHED, "end else begin", "    end\n  endfunction")])
+                                  fold(UNMATCHED, "end else begin", "    end\n  endfunction"),
+                                  fold(UNMATCHED, "module m", "endmodule")])
 
 
 def test_unclosed_begin_keeps_blocks_it_holds(doc):
@@ -240,7 +241,7 @@ def test_unclosed_begin_keeps_blocks_it_holds(doc):
 
 @pytest.mark.parametrize("source,expected", [
     ("class missing;\n  int value;\n", []),
-    ("module m; initial begin\n  int value;\nendmodule\n", []),
+    ("module m; initial begin\n  int value;\nendmodule\n", [{"startLine": 0, "endLine": 1}]),
     ("function void f();\n  int value;\n", []),
     ("class c;\nendclass\n", []),
     ("class c; endclass\n", []),
@@ -284,16 +285,223 @@ def test_duplicate_roots_and_include_endpoints(tmp_path):
         c.close()
 
 
+def span(text, first, last, kind=None, after=""):
+    """A fold that hides everything after its first line, through the line of `last`."""
+    start = text.index(first, text.index(after))
+    found = {"startLine": text.count("\n", 0, start), "endLine": text.count("\n", 0, text.index(last, start))}
+    return {**found, "kind": kind} if kind else found
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("tb/tb_top.sv", lambda t: [fold(t, "module tb_top", "endmodule"), fold(t, "u_dut (", "  );"),
+                                fold(t, "initial begin", "  end")]),
+    ("agent/alu_if.sv", lambda t: [fold(t, "interface alu_if", "endinterface"), fold(t, "clocking drv_cb", "endclocking"),
+                                   fold(t, "clocking mon_cb", "endclocking")]),
+    ("agent/alu_pkg.sv", lambda t: [fold(t, "package alu_pkg", "endpackage")]),
+    ("rtl/alu.sv", lambda t: [fold(t, "module alu", ");"), fold(t, ");", "endmodule"),
+                              fold(t, "always_ff", "  end\nendmodule"), fold(t, "if (!rst_n) begin", "    end else"),
+                              fold(t, "end else begin", "    end\n  end"), fold(t, "if (valid) begin", "      end\n"),
+                              fold(t, "unique case", "endcase")]),
+    ("env/alu_coverage.svh", lambda t: [fold(t, "class alu_coverage", "endclass"), fold(t, "covergroup", "endgroup"),
+                                        fold(t, "function new", "endfunction"),
+                                        fold(t, "function void write", "endfunction")]),
+])
+def test_units_ports_clocking_case_and_covergroups(client, tb, name, expected):
+    # Without a folding provider an editor folds by indentation: these are the folds it gave here.
+    d = Doc(client, os.path.join(tb, name))
+    try:
+        assert folds(d) == ordered(expected(d.text))
+    finally:
+        d.close()
+
+
+CONSTRUCTS = '''/*
+ * A block comment.
+ */
+// Function: helper
+//
+// A NaturalDocs topic.
+`define SHOW(a, b) \\
+  $display(a, \\
+           b);
+program prog;
+  initial
+    fork
+      #1;
+    join_any
+endprogram
+package pkg;
+  typedef enum logic [1:0] {
+    ADD,
+    SUB
+  } op_e;
+  typedef struct packed {
+    logic a;
+  } pair_t;
+  class item #(
+    type T = int
+  ) extends base;
+    rand int x;
+    constraint c_x {
+      x > 0;
+    }
+    function void f(
+      int a
+    );
+      x = a; /* trailing
+      block */
+      /* leading
+      */ x++;
+    endfunction
+    extern function void g(int a,
+                           int b);
+  endclass
+endpackage
+interface bus (input logic clk);
+  clocking cb @(posedge clk);
+    input clk;
+  endclocking
+  modport mp (
+    input clk
+  );
+  property p_clk;
+    @(posedge clk)
+      clk;
+  endproperty
+  sequence s_clk;
+    clk ##1
+      clk;
+  endsequence
+endinterface
+module top #(parameter int N = 2) (
+  input logic clk,
+  input logic [1:0] op
+);
+  covergroup cg @(posedge clk);
+    cp_op: coverpoint op {
+      bins add = {0};
+    }
+  endgroup
+  sub #(
+    .N(N)
+  ) u_sub (
+    .clk(clk)
+  );
+  generate
+    for (genvar i = 0; i < N; i++) begin : g
+      wire w;
+    end
+  endgenerate
+  // #region checks
+  always_comb
+    case (op)
+      2'd0: ;
+    endcase
+  // #endregion
+  initial begin
+    `SHOW("%0d",
+      N
+    )
+    $display(
+      "%0d", N
+    );
+    fork
+      #1;
+    join_none
+  end
+`ifdef SIM_ONLY
+  initial
+    $display("sim");
+`elsif FAST
+  initial
+    $display("fast");
+`else
+  initial
+    $display("other");
+`endif
+endmodule
+'''
+
+
+def constructs_folds(t):
+    return ordered([
+        span(t, "/*", " */", "comment"), span(t, "// Function", "// A NaturalDocs", "comment"),
+        span(t, "`define SHOW", "b);"), fold(t, "program", "endprogram"), fold(t, "fork", "join_any"),
+        fold(t, "package", "endpackage"), fold(t, "typedef enum", "} op_e"), fold(t, "typedef struct", "} pair_t"),
+        fold(t, "class item #(", ") extends"), fold(t, ") extends", "  endclass"),
+        fold(t, "constraint", "    }"), fold(t, "function void f(", "    );"), fold(t, "    );", "endfunction"),
+        span(t, "x = a; /* trailing", "block */", "comment"), fold(t, "interface", "endinterface"),
+        fold(t, "clocking", "endclocking"), fold(t, "modport mp (", "  );"), fold(t, "property", "endproperty"),
+        fold(t, "sequence", "endsequence"), fold(t, "module top", ");\n  covergroup"),
+        fold(t, ");\n  covergroup", "endmodule"), fold(t, "covergroup", "endgroup"), fold(t, "coverpoint", "    }"),
+        fold(t, "sub #(", ") u_sub"), fold(t, ") u_sub (", "  );"), fold(t, "  generate", "endgenerate"),
+        fold(t, "begin : g", "    end\n"), span(t, "// #region", "// #endregion", "region"),
+        fold(t, "case (op)", "endcase"), fold(t, "initial begin", "  end\n`ifdef"), fold(t, "`SHOW(", "    )\n"),
+        fold(t, "$display(\n", "    );"), fold(t, "fork", "join_none", after="$display(\n"),
+        fold(t, "`ifdef", "`elsif"), fold(t, "`elsif", "`else\n"), fold(t, "`else\n", "`endif")])
+
+
+def test_folds_of_every_construct(tmp_path):
+    path = tmp_path / "constructs.sv"
+    path.write_text(CONSTRUCTS)
+    c = start(str(tmp_path), capabilities=CAPS, settings={"useBundledUvm": False, "elaboration": "off"})
+    try:
+        d = Doc(c, str(path))
+        assert folds(d) == constructs_folds(CONSTRUCTS)
+        d.change("\n" + CONSTRUCTS)
+        assert folds(d) == constructs_folds(d.text)
+    finally:
+        c.close()
+
+
+def test_branch_that_crosses_a_block(doc):
+    text = ("module m;\n`ifdef A\n  initial begin\n`else\n  initial begin\n    x = 0;\n`endif\n    x = 1;\n"
+            "  end\nendmodule\n")
+    doc.change(text)
+    # The `else branch would end inside the block its begin opens: it does not fold.
+    assert folds(doc) == ordered([fold(text, "module", "endmodule"), fold(text, "`ifdef", "`else"),
+                                  fold(text, "initial begin\n    x = 0", "  end\n")])
+
+
+def test_comments_after_an_included_file(tmp_path):
+    # slang moves the trivia after a header's last token to the token after its `include.
+    (tmp_path / "head.svh").write_text("class h;\n  int x;\nendclass\n// footer one\n// footer two\n")
+    path = tmp_path / "top.sv"
+    path.write_text('module top;\n`include "head.svh"\n  // own one\n  // own two\n  int y;\nendmodule\n')
+    c = start(str(tmp_path), capabilities=CAPS, settings={"useBundledUvm": False, "elaboration": "off"})
+    try:
+        d = Doc(c, str(path))
+        assert folds(d) == [{"startLine": 0, "endLine": 4}, {"startLine": 2, "endLine": 3, "kind": "comment"}]
+        assert folds(Doc(c, str(tmp_path / "head.svh"))) == [{"startLine": 0, "endLine": 1}]
+    finally:
+        c.close()
+
+
+def test_library_comments(client):
+    from uvmls.project import BUNDLED_UVM
+
+    d = Doc(client, os.path.join(BUNDLED_UVM, "base", "uvm_object.svh"))
+    try:
+        found = folds(d)
+        assert found[0] == span(d.text, "//", "\n\n\ntypedef class", "comment")
+        assert span(d.text, "virtual class uvm_object", "\nendclass") in found
+        assert span(d.text, "  // Function: new", "  // supplied", "comment") in found
+    finally:
+        d.close()
+
+
 def test_crossing_intervals_and_shared_start():
-    from uvmls.model import Range, StructuralPair
+    from uvmls.model import FoldRegion
     from uvmls.navigation import Navigator
     from uvmls.workspace import Workspace
 
     w = Workspace()
-    pairs = [(0, 10), (0, 7), (2, 5), (4, 8), (11, 15), (0, 10)]
-    w.structures_by_file["a.sv"] = [StructuralPair(Range("a.sv", a, 0, a, 5),
-                                                  Range("a.sv", b + 1, 0, b + 1, 3)) for a, b in pairs]
-    assert Navigator(w).folding_ranges("a.sv") == [(0, 10), (0, 7), (2, 5), (11, 15)]
+    folds = [(0, 10, None), (0, 7, None), (2, 5, None), (4, 8, None), (11, 15, None), (0, 10, None),
+             (6, 9, "branch"), (3, 4, "branch"), (11, 15, "branch"), (12, 14, "region"), (13, 15, "branch")]
+    w.folds_by_file["a.sv"] = [FoldRegion("a.sv", *f) for f in folds]
+    # A branch or #region that crosses syntax (or one before it) is dropped, never the syntax.
+    assert Navigator(w).folding_ranges("a.sv") == [(0, 10, None), (0, 7, None), (2, 5, None), (3, 4, "branch"),
+                                                   (11, 15, None), (12, 14, "region")]
 
 
 def test_deadline_and_intervening_edit(tmp_path, monkeypatch):

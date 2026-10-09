@@ -90,7 +90,7 @@ def test_structural_pairs_are_plain_source_tokens(tmp_path):
         assert asdict(pair)["opening"]["path"] == str(path)
         found.append((lines[a.line][a.col:a.end_col], lines[b.line][b.col:b.end_col]))
     assert sorted(found) == sorted([("class", "endclass"), ("function", "endfunction"),
-        ("function", "endfunction")] + [("begin", "end")] * 5)
+        ("function", "endfunction"), ("module", "endmodule")] + [("begin", "end")] * 5)
     idx = Indexer([], {}, use_shim=True).parse(str(path), {str(path): "class c;\n int value;\n"})
     assert idx.structures == []
 
@@ -192,6 +192,8 @@ typedef int t_foo;
     idx = Indexer([str(tmp_path)], {}, use_shim=True).parse(str(root))
     header = str(tmp_path / "common.svh")
     assert len([p for p in idx.structures if p.opening.path == header]) == 4
+    assert sorted((f.start, f.end, f.kind) for f in idx.folds if f.path == header) == [
+        (0, 5, None), (1, 3, None), (7, 8, "branch")]
     assert len([c for c in idx.invocations if c.opening.path == header]) == 1
     assert len([r for r in idx.directives if r.path == header]) == 2
 
@@ -588,6 +590,7 @@ def test_library_fold_walk_skips_only_structureless_syntax(tmp_path, source):
         if n.kind in STRUCTURE_KINDS:
             full.structural_pair(n)
         stack.extend(c for c in n if isinstance(c, SyntaxNode))
-    pruned = Extractor(*built, root, True, {}, ws.indexer.library_dirs).collect_structures()
+    pruned, folds = Extractor(*built, root, True, {}, ws.indexer.library_dirs).collect_structures()
     assert len(full.out.structures) > (1000 if source == "library" else 15)
     assert sorted(pruned, key=repr) == sorted(full.out.structures, key=repr)
+    assert folds

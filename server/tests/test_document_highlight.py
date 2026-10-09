@@ -277,7 +277,7 @@ def test_nested_named_pairs_and_edits(doc):
     assert highlight_at(doc, "begin : inner") == pair_highlights(doc.text, "begin : inner", "end : inner")
     doc.change("module m; initial begin : unmatched\n  int x;\nendmodule\n")
     assert highlight_at(doc, "begin : unmatched") == []
-    assert folds(doc) == []
+    assert folds(doc) == [{"startLine": 0, "endLine": 1}]
     doc.close()
     doc.text = original
     assert highlight_at(doc, "class alu_agent") == pair_highlights(original, "class alu_agent", "endclass")
