@@ -1577,20 +1577,44 @@ class comp extends uvm_component;
     void'(b.next().nothing().calc(1, 2));
     void'(b.next().inner.calc(1, 2));
     void'(b.next().arr[0].inner.next().calc(1, 2));
+    uvm_resource_db #(int)::get_by_name("a", "b").write(5, this);
   endtask
 endclass
 '''
     calc = ('function int calc(int a, int b, int c = 0)', 1)
     assert hints_in(tmp_path, text, ['by_name("a",', 'find_all("*",', 'get_full_name(', 'next().next().calc(1,',
-                                     'nothing().calc(1,', 'next().inner.calc(1,', 'inner.next().calc(1,'],
-                    bundled=True) == [
+                                     'nothing().calc(1,', 'next().inner.calc(1,', 'inner.next().calc(1,',
+                                     'write(5,'], bundled=True) == [
         ('function void set_type_override_by_name(string original_type_name, string override_type_name, '
          'bit replace = 1)', 1),
         ('function void find_all(string comp_match, ref uvm_component comps[$], input uvm_component comp = null)', 1),
         ('function string get_full_name()', -1),
-        calc, None, calc, calc]
+        calc, None, calc, calc,
+        # The registry's T is bound through the call: get_by_name returns its rsrc_t.
+        ('function void write(int t, uvm_object accessor = null)', 1)]
     doc.change(doc.text.replace('task alu_driver::run_phase(uvm_phase phase);',
                                'task alu_driver::run_phase(uvm_phase phase);\n'
                                '  phase.get_objection().set_drain_time(this, 100);'))
     signature(help_at(doc, 'set_drain_time(this,'), ['uvm_object obj = null', 'time drain'], 1,
               'function void set_drain_time(uvm_object obj = null, time drain)')
+
+def test_calls_on_a_call_result_keep_the_receiver_parameters(tmp_path):
+    text = '''class holder #(type T = int);
+  typedef holder #(T) this_t;
+  this_t peer;
+  static function holder #(T) get(); return null; endfunction
+  function this_t self_(); return this; endfunction
+  function T calc(T a, int b); return a; endfunction
+endclass
+class user;
+  holder #(string) h;
+  task test();
+    void'(holder #(string)::get().calc("x", 1));
+    void'(h.self_().calc("y", 1));
+    void'(h.peer.calc("z", 1));
+    void'(h.calc("w", 1));
+  endtask
+endclass
+'''
+    assert labels_in(tmp_path, text, ['get().calc("x",', 'self_().calc("y",', 'peer.calc("z",', 'h.calc("w",']) == \
+        ['function string calc(string a, int b)'] * 4

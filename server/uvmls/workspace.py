@@ -710,6 +710,15 @@ class Workspace:
         bindings = bindings or {}
         if ref.scope is None and ref.name in bindings:
             return self.resolve_type_text(bindings[ref.name], ctx, strict, depth)
+        if bindings and ctx is not None and ref.scope is None and depth < 8 and \
+                any(t.owner_class for t in self.typedefs_by_name.get(ref.name, ())):
+            # A member typedef of a specialization (rsrc_t) names its target with the parameters bound.
+            hit = self.find_member(ctx, ref.name, bindings, strict)
+            td = hit[1] if hit is not None else None
+            if isinstance(td, Typedef) and td.target is not None and \
+                    not (td.target.scope is None and td.target.name == ref.name):
+                inner = self.resolve_type_ref(td.target, hit[0], hit[2], strict, depth + 1)
+                return Spec(inner.name, inner.cls, inner.args, td) if inner is not None else None
         scope = ref.scope
         if scope in bindings:  # T::inner_t
             outer = self.resolve_type_text(bindings[scope], ctx, strict, depth)
@@ -910,7 +919,9 @@ class Workspace:
         if isinstance(member, Method):
             parsed = parse_type_text(member.return_type)
             if parsed:
-                return self.resolve_type_text(bindings.get(parsed[1], member.return_type), ctx, strict, depth)
+                # As a property's type: a written specialization (holder #(T)) keeps the bindings.
+                ref = TypeRef(parsed[1], member.return_type, parsed[0], parsed[2])
+                return self.resolve_type_ref(ref, ctx, bindings, strict, depth)
             return None
         if isinstance(member, Typedef) and member.target is not None:
             return self.resolve_type_ref(member.target, ctx, bindings, strict, depth)
