@@ -330,6 +330,7 @@ def test_factory_and_inherited_documentation(tb, bundled_ws, markdown, offsets, 
             cls = bundled_ws.find_class(registry)
             method = next(m for m in cls.methods if m.name == 'create')
             assert sig['documentation'] == {'kind': 'markdown' if markdown else 'plaintext', 'value': render(method.doc)}
+            assert markdown or not any(mark in sig['documentation']['value'] for mark in ('```', '`', '**'))
             d.close()
         d = Doc(c, os.path.join(tb, 'agent/alu_driver.svh'))
         result = help_at(d, 'seq_item_port.get_next_item(')
@@ -342,6 +343,8 @@ def test_factory_and_inherited_documentation(tb, bundled_ws, markdown, offsets, 
         attribution = f'doc from `{source.name}::get_next_item`' if markdown else f'doc from {source.name}::get_next_item'
         assert sig['documentation']['value'] == attribution + '\n\n' + render(raw)
         assert 'Retrieves the next available item' in sig['documentation']['value']
+        # Plain text keeps the prose and drops the Markdown: no fences, code spans or bold.
+        assert markdown or not any(mark in sig['documentation']['value'] for mark in ('```', '`', '**'))
     finally:
         c.close()
 
@@ -1676,3 +1679,41 @@ endclass
     found = ('function int inner(int a, int b)', 1) if bundled else None
     assert hints_in(tmp_path, text, ['inner(1,', 'inner(3,', '`uvm_info("ID", '], bundled) == [found] * 2 + [None]
     assert index(tmp_path, {'t.sv': text}, bundled=bundled).user_diagnostics() == []
+
+
+@pytest.mark.parametrize('needle,active', [('super.new(', 0), ('super.new(name', 0), ('super.new(name,', 1),
+                                           ('super.new(name, ', 1), ('super.new(name, parent', 1)])
+def test_super_new_either_side_of_the_comma(doc, needle, active):
+    signature(help_at(doc, needle), ['string name', 'uvm_component parent'], active,
+              'function new(string name, uvm_component parent)')
+
+
+def test_multiline_factory_create_with_a_comma_inside_its_first_argument(client, tb):
+    d = Doc(client, os.path.join(tb, 'agent/alu_agent.svh'))
+    original = d.text
+    formals = ['string name', 'uvm_component parent', 'string contxt = ""']
+    call = 'create(\n        $sformatf("m,%0d", 1),\n        this);'
+    try:
+        d.change(original.replace('create("m_driver", this);', call))
+        for needle, active in [('alu_driver::type_id::create(\n', 0), ('$sformatf("m,%0d", 1)', 0),
+                               ('$sformatf("m,%0d", 1),', 1), ('1),\n        this', 1)]:
+            sig = signature(help_at(d, needle), formals, active)
+            assert sig['label'] == 'function alu_driver create(' + ', '.join(formals) + ')'
+        # Inside $sformatf, which has no indexed signature: its commas never select parent.
+        for needle in ('$sformatf("m,', '$sformatf("m,%0d",'):
+            assert help_at(d, needle) is None
+        assert help_at(d, '1),\n        this);') is None
+        # The final ) removed and a comma typed after the last argument.
+        d.change(original.replace('create("m_driver", this);', call.replace('this);', 'this,;')))
+        signature(help_at(d, '1),\n        this,'), formals, 2)
+        # The same call in a comment or a string is not a call.
+        d.change(original.replace('    m_monitor = alu_monitor', '    // m_driver = alu_driver::type_id::create("m_driver", this);\n'
+                                  '    m_monitor = alu_monitor').replace(
+            '  uvm_analysis_port #(alu_seq_item) ap;\n',
+            '  uvm_analysis_port #(alu_seq_item) ap;\n  string note = "alu_driver::type_id::create(\\"m_driver\\", this)";\n'))
+        for needle in ('// m_driver = alu_driver::type_id::create(', '// m_driver = alu_driver::type_id::create("m_driver", ',
+                       '"alu_driver::type_id::create(', '"alu_driver::type_id::create(\\"m_driver\\", '):
+            assert help_at(d, needle) is None
+        signature(help_at(d, '    m_driver    = alu_driver::type_id::create("m_driver",'), formals, 1)
+    finally:
+        d.close()
