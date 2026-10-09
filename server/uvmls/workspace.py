@@ -172,15 +172,35 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
     return out
 
 
-def _unseen(known: dict, by_file: dict, path: str, key, key_of) -> bool:
-    """Whether a record of `path` with this key is not in `by_file` yet (and is now)."""
-    seen = known.get((id(by_file), path))
-    if seen is None:
-        seen = known[(id(by_file), path)] = {key_of(r) for r in by_file.get(path, ())}
-    if key in seen:
-        return False
-    seen.add(key)
-    return True
+class _PerFile(dict):
+    """One kind of per-file record (structures, folds, calls, directives) from every root that
+    reaches a file, merged when the file is first asked about: requests need one file's, and merging
+    every file's after each edit cost more than the rest of a rebuild. The first root with records
+    for the file gives all of them; another (a shared header) adds only those not seen yet."""
+
+    def __init__(self, ws: "Workspace", kind: str, path_of, key_of):
+        super().__init__()
+        self.ws, self.kind, self.path_of, self.key_of = ws, kind, path_of, key_of
+
+    def __missing__(self, path: str) -> list:
+        out, seen = [], None
+        for root in self.ws.roots_for(path):
+            records = self.ws._records(self.ws.indices[root], self.kind, self.path_of).get(path, ())
+            if not records:
+                continue
+            if seen is None:
+                out, seen = list(records), {self.key_of(r) for r in records}
+                continue
+            for r in records:
+                if (key := self.key_of(r)) not in seen:
+                    seen.add(key)
+                    out.append(r)
+        self[path] = out
+        return out
+
+    def get(self, path: str, default=None):
+        found = self[path]
+        return found if found or default is None else default
 
 
 def _never(cond: tuple[str, str], given: set[str], known: set[str]) -> bool:
@@ -216,6 +236,7 @@ class Workspace:
         self.ephemeral: set[str] = set()
         self.overrides: dict[str, str] = {}
         self.version = 0
+        self._grouped: dict[tuple[int, str], tuple] = {}  # (id(index), kind): (index, records by file)
         self.last_index_seconds = 0.0
         self._include_candidates: tuple[tuple, dict[str, list[str]],
                                          dict[str, tuple[int, int, int] | None]] | None = None
@@ -233,14 +254,14 @@ class Workspace:
         self._inlay_hint_cache: dict = {}
         self._bound_member_hints: dict = {}
         self.creates_by_file: dict[str, list[CreateCall]] = {}
-        self.invocations_by_file: dict = {}
-        self.directives_by_file: dict = {}
+        self.invocations_by_file = _PerFile(self, "invocations", lambda c: c.head.path, lambda c: c.opening)
+        self.directives_by_file = _PerFile(self, "directives", lambda r: r.path, lambda r: r)
         self._signature_texts: dict = {}
         self._signature_cache: dict = {}
         self._highlight_cache: dict = {}
         self._folding_cache: dict = {}
-        self.structures_by_file: dict = {}
-        self.folds_by_file: dict = {}
+        self.structures_by_file = _PerFile(self, "structures", lambda p: p.opening.path, lambda p: p)
+        self.folds_by_file = _PerFile(self, "folds", lambda f: f.path, lambda f: f)
         self.identifiers_by_file: dict[str, list[tuple[str, Range]]] = {}
         self.texts: dict[str, str] = {}
         self.lines: dict[str, list[str]] = {}
@@ -335,30 +356,10 @@ class Workspace:
         self.version += 1
         seen_decl: set[tuple[str, int, str]] = set()
         seen_ids: set[Range] = set()
-        # A file's structures, calls and directives: the first root that reaches it adds its own;
-        # another root (a shared header) adds only those not seen yet.
-        owners: dict[str, str] = {}
-        known: dict = {}
+        live = {id(idx) for idx in self.indices.values()}
+        self._grouped = {k: v for k, v in self._grouped.items() if k[0] in live}
         for root, idx in self.indices.items():
             self.texts.update(idx.texts)
-            for pair in idx.structures:
-                path = pair.opening.path
-                if owners.setdefault(path, root) == root or \
-                        _unseen(known, self.structures_by_file, path, pair, lambda p: p):
-                    self.structures_by_file.setdefault(path, []).append(pair)
-            for fold in idx.folds:
-                if owners.setdefault(fold.path, root) == root or \
-                        _unseen(known, self.folds_by_file, fold.path, fold, lambda f: f):
-                    self.folds_by_file.setdefault(fold.path, []).append(fold)
-            for call in idx.invocations:
-                path = call.head.path
-                if owners.setdefault(path, root) == root or \
-                        _unseen(known, self.invocations_by_file, path, call.opening, lambda c: c.opening):
-                    self.invocations_by_file.setdefault(path, []).append(call)
-            for rng in idx.directives:
-                if owners.setdefault(rng.path, root) == root or \
-                        _unseen(known, self.directives_by_file, rng.path, rng, lambda r: r):
-                    self.directives_by_file.setdefault(rng.path, []).append(rng)
             if idx.library:
                 self.library_files |= idx.files
             else:
@@ -468,13 +469,22 @@ class Workspace:
             if idx.structures_pending:
                 idx.structures, idx.folds = self.indexer.structures(root, self.overrides)
                 idx.structures_pending = False
-                known: dict = {}
-                for pair in idx.structures:
-                    if _unseen(known, self.structures_by_file, pair.opening.path, pair, lambda p: p):
-                        self.structures_by_file.setdefault(pair.opening.path, []).append(pair)
-                for fold in idx.folds:
-                    if _unseen(known, self.folds_by_file, fold.path, fold, lambda f: f):
-                        self.folds_by_file.setdefault(fold.path, []).append(fold)
+                for kind in ("structures", "folds"):
+                    self._grouped.pop((id(idx), kind), None)
+                for name in idx.files:  # merged again, now with this root's records
+                    self.structures_by_file.pop(name, None)
+                    self.folds_by_file.pop(name, None)
+
+    def _records(self, idx, kind: str, path_of) -> dict[str, list]:
+        """A root's records of one kind by file, kept while the root's index is unchanged."""
+        key = (id(idx), kind)
+        cached = self._grouped.get(key)
+        if cached is None or cached[0] is not idx:
+            by_path: dict[str, list] = {}
+            for r in getattr(idx, kind):
+                by_path.setdefault(path_of(r), []).append(r)
+            cached = self._grouped[key] = (idx, by_path)
+        return cached[1]
 
     def visible_packages(self, imports) -> set[str]:
         """What `imports` make visible, with what their packages re-export (IEEE 1800 26.6):
