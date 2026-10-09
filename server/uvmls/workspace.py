@@ -602,7 +602,7 @@ class Workspace:
         if not any(t.owner_class for t in self.typedefs_by_name.get(name, ())):
             return None
         for c in [cls, *self.outer_classes(cls)]:
-            hit = self.find_member(c, name)
+            hit = self.find_member(c, name, strict=strict)
             if hit is not None:
                 td = hit[1]
                 if not isinstance(td, Typedef) or td.target is None:
@@ -667,7 +667,7 @@ class Workspace:
         value = substitute_params(arg, bindings)
         if ctx is None or value != arg or not any(t.owner_class for t in self.typedefs_by_name.get(arg, ())):
             return value
-        hit = self.find_member(ctx, arg, bindings)
+        hit = self.find_member(ctx, arg, bindings, strict)
         if hit is None or not isinstance(hit[1], Typedef):
             return value
         spec = self.member_type_spec(hit[0], hit[1], hit[2], strict, depth + 1)
@@ -676,9 +676,9 @@ class Workspace:
         text = spec.cls.name + ("#(" + ",".join(spec.args) + ")" if spec.args else "")
         return Bound(text, Scope.of(ctx), spec)
 
-    def base_spec(self, cls: ClassInfo, bindings: dict[str, str] | None = None) -> Spec | None:
+    def base_spec(self, cls: ClassInfo, bindings: dict[str, str] | None = None, strict: bool = False) -> Spec | None:
         """The base class; `extends BASE` follows what the type parameter BASE is bound to
-        (uvm_reg_sequence, uvm_port_base), else its default."""
+        (uvm_reg_sequence, uvm_port_base), else its default. Strict: only a base visible there."""
         ref = cls.base
         if ref is None:
             return None
@@ -686,17 +686,29 @@ class Workspace:
             bound = (bindings or {}).get(ref.name)
             if bound is None:
                 bound = next(p.default for p in cls.params if p.name == ref.name)
-            return self.resolve_type_text(bound, cls, members=False)
-        return self.resolve_spec(ref.name, ref.scope, ref.args, cls, members=False)
+            return self.resolve_type_text(bound, cls, strict, members=False)
+        spec = self.resolve_spec(ref.name, ref.scope, ref.args, cls, strict=strict, members=False)
+        if strict and (spec is None or spec.cls is None) and cls.package is None and ref.scope is None:
+            # Outside a package, a $unit import in another file of the compilation unit (-mfcu)
+            # can make the base visible; the index cannot see it, so take the only candidate.
+            cands = [c for c in self.classes_by_name.get(ref.name, ())
+                     if c.library or self._compiled_together(c.range.path, cls.range.path)]
+            if len(cands) == 1:
+                found = self.resolve_spec(ref.name, None, ref.args, cls, members=False)
+                spec = found if found is not None and found.cls is cands[0] else None
+            elif cands:
+                spec = None
+        return spec
 
-    def chain(self, cls: ClassInfo, bindings: dict[str, str] | None = None) -> list[ChainEntry]:
-        """The class followed by all its ancestors, with type parameter bindings."""
+    def chain(self, cls: ClassInfo, bindings: dict[str, str] | None = None, strict: bool = False) -> list[ChainEntry]:
+        """The class followed by all its ancestors, with type parameter bindings. A strict chain
+        ends at a base class the lookup cannot see or tell from another of its name."""
         entries = [ChainEntry(Spec(cls.name, cls), bindings if bindings is not None else
                               {p.name: p.default for p in cls.params})]
         seen = {cls.qualname}
         cur, bindings = cls, entries[0].bindings
         while cur is not None and cur.base is not None:
-            base = self.base_spec(cur, bindings)
+            base = self.base_spec(cur, bindings, strict)
             if base is None:
                 entries.append(ChainEntry(Spec(cur.base.name), {}))
                 break
@@ -755,9 +767,9 @@ class Workspace:
     def is_component(self, cls: ClassInfo) -> bool:
         return self.role(cls) in COMPONENT_ROLES
 
-    def find_member(self, cls: ClassInfo, name: str, bindings: dict[str, str] | None = None):
+    def find_member(self, cls: ClassInfo, name: str, bindings: dict[str, str] | None = None, strict: bool = False):
         """(owner, member, bindings) for `name` in cls or its ancestors."""
-        for entry in self.chain(cls, bindings):
+        for entry in self.chain(cls, bindings, strict):
             c = entry.spec.cls
             if name == "new" and c is not cls:
                 break

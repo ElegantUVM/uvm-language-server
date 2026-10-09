@@ -155,7 +155,7 @@ class Navigator:
         if name == "this" and cls is not None:
             return [Target(cls, spec=Spec(cls.name, cls))]
         if name == "super" and cls is not None:
-            base = ws.base_spec(cls)
+            base = ws.base_spec(cls, strict=strict)
             return [Target(base.cls or base.name, spec=base)] if base else []
         if scoped:
             pkg = ws.find_unit(name, "package")
@@ -166,11 +166,11 @@ class Navigator:
                 if v.name == name:
                     return [Target(v, owner=cls if cls is not None else unit)]
         if cls is not None:
-            hit = ws.find_member(cls, name)
+            hit = ws.find_member(cls, name, strict=strict)
             if hit is not None:
                 return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
             for c in ws.outer_classes(cls):
-                hit = ws.find_member(c, name)
+                hit = ws.find_member(c, name, strict=strict)
                 if hit is not None:
                     return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
         package, imports = self._package_scope(cls, unit)
@@ -344,7 +344,7 @@ class Navigator:
             return [] if strict else self.global_member_search(name)
         if spec.cls is not None:
             bindings = bind_params([(p.name, p.default) for p in spec.cls.params], spec.args, {})
-            hit = ws.find_member(spec.cls, name, bindings)
+            hit = ws.find_member(spec.cls, name, bindings, strict)
             if hit is not None:
                 return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
             return []

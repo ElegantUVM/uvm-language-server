@@ -83,7 +83,7 @@ def signature(nav, path, line, col):
         if spec is None or spec.cls is None:
             return None
         bindings = bind_params([(p.name, p.default) for p in spec.cls.params], spec.args, {})
-        hit = nav.ws.find_member(spec.cls, "new", bindings)
+        hit = nav.ws.find_member(spec.cls, "new", bindings, strict=True)
         targets = [Target(hit[1], owner=hit[0], bindings=hit[2])] if hit else []
     else:
         ce = CursorExpr(names[-1], names, [s[2] for s in call.segments[1:]], False, 0, 0,

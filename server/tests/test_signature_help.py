@@ -947,3 +947,46 @@ endpackage
         line = text.splitlines().index('  function void t(); visible::go(1); hidden::go(2); shared(3); endfunction')
         [where] = Navigator(index(tmp_path, {'t.sv': text})).definition(str(tmp_path / 't.sv'), line, 22, text)
         assert where.line == 1
+
+
+@pytest.mark.parametrize('imports,label', [
+    ('import first::*;\nimport second::*;', None),  # ambiguous
+    ('', None),  # not visible in a package
+    ('import second::*;', 'function void go(string second_arg)'),
+])
+def test_inherited_members_need_a_visible_base(tmp_path, imports, label):
+    text = '''package first;
+class box; function void go(int first_arg); endfunction endclass
+endpackage
+package second;
+class box; function void go(string second_arg); endfunction endclass
+endpackage
+package calls;
+IMPORTS
+class caller extends box;
+  function void t(); go(1); this.go(2); super.go(3); endfunction
+endclass
+endpackage
+'''.replace('IMPORTS', imports)
+    assert labels_in(tmp_path, text, ['; go(', 'this.go(', 'super.go(']) == [label] * 3
+
+
+def test_base_outside_a_package(tmp_path):
+    """A $unit class sees the $unit class before a package's; outside a package, a base the
+    file does not import may come from another file's $unit import (-mfcu)."""
+    text = '''package first;
+class box; function void go(int first_arg); endfunction endclass
+class only; function void solo(int solo_arg); endfunction endclass
+endpackage
+class box; function void go(string unit_arg); endfunction endclass
+class caller extends box;
+  function void t(); go(1); endfunction
+endclass
+program test;
+class user extends only;
+  function void t(); solo(2); endfunction
+endclass
+endprogram
+'''
+    assert labels_in(tmp_path, text, ['; go(', '; solo(']) == \
+        ['function void go(string unit_arg)', 'function void solo(int solo_arg)']
