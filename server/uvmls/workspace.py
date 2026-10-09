@@ -289,6 +289,7 @@ class Workspace:
         self._spec_cache: dict = {}
         self._formals: dict = {}
         self._visible_packages: dict = {}
+        self._import_scopes: dict = {}
         self._roots_by_file: dict[str, set[str]] | None = None
         self._include_sites: dict[str, list[Range]] | None = None
         self._including: dict[tuple[str, bool], tuple[DesignUnit | None, ...]] = {}
@@ -545,6 +546,26 @@ class Workspace:
         return [[package] if package else [], [p.split("::")[0] for p in imports if p.endswith("::" + name)],
                 [p for p in imports if "::" not in p]]
 
+    def import_scopes(self, name: str, package: str | None, imports) -> list[list[str]]:
+        """As import_order, with the packages whose `name` an import reaches through a re-export
+        (IEEE 1800 26.6) added to that import's level."""
+        key = (name, package, tuple(imports))
+        if key not in self._import_scopes:
+            own, named, wildcard = self.import_order(name, package, imports)
+            suffix = "::" + name
+            by_name = self.visible_packages([f"{p}{suffix}" for p in named])
+            visible = self.visible_packages(wildcard)
+            self._import_scopes[key] = [
+                own,
+                list(dict.fromkeys(named + sorted(q[:-len(suffix)] for q in by_name if q.endswith(suffix)))),
+                list(dict.fromkeys(wildcard + sorted(q.split("::")[0] for q in visible
+                                                     if "::" not in q or q.endswith(suffix))))]
+        return self._import_scopes[key]
+
+    def provides(self, scope: str, name: str, package: str | None) -> bool:
+        """Whether `scope::name` reaches a declaration of `package`: its own, or one it re-exports."""
+        return package == scope or any(package in level for level in self.import_scopes(name, scope, [scope]))
+
     def unit_at(self, rng: Range, packages: bool = False) -> DesignUnit | None:
         """The module, interface or program (or package) around a position, in its file or
         around the first `include that brings the file in, as the index keeps a shared header's
@@ -585,11 +606,8 @@ class Workspace:
         name = cands[0].name
 
         def imported(imports):  # by name, by wildcard
-            _, named, wildcard = self.import_order(name, None, imports)
-            by_name = self.visible_packages([f"{p}::{name}" for p in named])
-            packages = self.visible_packages(wildcard)
-            return [c for c in cands if f"{c.package}::{name}" in by_name], \
-                [c for c in cands if c.package in packages or f"{c.package}::{name}" in packages]
+            _, named, wildcard = self.import_scopes(name, None, imports)
+            return [c for c in cands if c.package in named], [c for c in cands if c.package in wildcard]
 
         named, wildcard = imported(imports)
         if package:
@@ -718,13 +736,13 @@ class Workspace:
                 result = Spec(name=nested.name, cls=nested, args=args)
         if result is None and not settled:
             cls = self.find_class(name, scope or package, [scope] if scope else imports, strict, near)
-            if cls is not None and (scope is None or cls.package == scope or not cls.package) and \
-                    not self.typedef_hides(cls, name, scope or package):
+            if cls is not None and (scope is None or not cls.package or self.provides(scope, name, cls.package)) \
+                    and not self.typedef_hides(cls, name, scope or package):
                 result = Spec(name=cls.name, cls=cls, args=args)
         if result is None and not settled:
             td = self.find_typedef(name, scope or package, ctx.name if ctx else None,
                                    [scope] if scope else imports, strict, near)
-            if strict and scope and td and td.package != scope and td.owner_class != scope:
+            if strict and scope and td and td.owner_class != scope and not self.provides(scope, name, td.package):
                 td = None
             if td is not None and td.target is not None:
                 result = self._spec_from_typedef(td, ctx, depth, strict)

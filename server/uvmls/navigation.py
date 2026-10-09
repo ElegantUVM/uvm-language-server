@@ -225,7 +225,7 @@ class Navigator:
                 if m.name == name:
                     return [Target(m, owner=unit)]
         # Items of packages in scope, nearest first, then of any package.
-        levels = [[ws.find_unit(p, "package") for p in level] for level in ws.import_order(name, package, imports)]
+        levels = [[ws.find_unit(p, "package") for p in level] for level in ws.import_scopes(name, package, imports)]
         if not strict:
             levels.append([u for u in ws.units if u.kind == "package"])
         for level in levels:
@@ -372,19 +372,23 @@ class Navigator:
     def step(self, t: Target, name: str, sep: str, ctx_cls, strict: bool = False) -> list[Target]:
         ws = self.ws
         if isinstance(t.obj, DesignUnit) and t.obj.kind == "package":
-            pkg = t.obj
-            for c in ws.classes_by_name.get(name, []):
-                if c.package == pkg.name:
-                    return [Target(c, spec=Spec(c.name, c))]
-            td = ws.find_typedef(name, pkg.name, strict=strict)
-            if td is not None and td.package == pkg.name:
-                return [Target(td, spec=ws.resolve_spec(name, pkg.name, strict=strict))]
-            for v in pkg.variables:
-                if v.name == name:
-                    return [Target(v, owner=pkg)]
-            for m in pkg.methods:
-                if m.name == name:
-                    return [Target(m, owner=pkg)]
+            # The package's own items, then those it re-exports (IEEE 1800 26.6).
+            scopes = dict.fromkeys(p for level in ws.import_scopes(name, t.obj.name, [t.obj.name]) for p in level)
+            for pkg in (t.obj if p == t.obj.name else ws.find_unit(p, "package") for p in scopes):
+                if pkg is None:
+                    continue
+                for c in ws.classes_by_name.get(name, []):
+                    if c.package == pkg.name:
+                        return [Target(c, spec=Spec(c.name, c))]
+                td = ws.find_typedef(name, pkg.name, strict=strict)
+                if td is not None and td.package == pkg.name:
+                    return [Target(td, spec=ws.resolve_spec(name, pkg.name, strict=strict))]
+                for v in pkg.variables:
+                    if v.name == name:
+                        return [Target(v, owner=pkg)]
+                for m in pkg.methods:
+                    if m.name == name:
+                        return [Target(m, owner=pkg)]
             return []
         if isinstance(t.obj, Variable) and t.obj.type is not None and t.obj.type.text.startswith("virtual"):
             iface = ws.find_unit(t.obj.type.name, "interface")
