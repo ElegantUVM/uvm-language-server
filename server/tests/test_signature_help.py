@@ -1311,3 +1311,50 @@ endclass
     own, sub = 'function void f(holder#(T) a, bit[W+1-1:0] b)', 'function void f(holder#(U) a, bit[N*2-1:0] b)'
     assert labels_in(tmp_path, text, ['comp.f(', '(); f(', 'super.f(', 'c.f(']) == \
         [own, sub, sub, 'function void f(holder#(shortint) a, bit[3*2-1:0] b)']
+
+
+@pytest.mark.parametrize('decoy', ['', 'class thing; function void go(string wrong_arg); endfunction endclass'])
+def test_composite_arguments_keep_where_each_name_is_written(tmp_path, decoy):
+    """In `pair #(T)` written in package pa, pair is pa's and T's argument the user's class."""
+    text = '''package pa;
+class pair #(type T = int); T item; endclass
+class holder #(type T = int); T item; endclass
+class gen #(type T = int);
+  holder #(pair #(T)) h;
+endclass
+class sub #(type T = int) extends holder #(pair #(T)); endclass
+class dflt #(type T = int, type V = pair #(T)) extends holder #(V); endclass
+DECOY
+endpackage
+package pb;
+import pa::*;
+class thing; function void go(int right_arg); endfunction endclass
+class user;
+  gen #(thing) g;
+  sub #(thing) s;
+  dflt #(thing) d;
+  function void f(); g.h.item.item.go(1); s.item.item.go(2); d.item.item.go(3); endfunction
+endclass
+class leaf extends sub #(thing);
+  function void f(); item.item.go(4); endfunction
+endclass
+endpackage
+'''.replace('DECOY', decoy)
+    needles = ['g.h.item.item.go(', 's.item.item.go(', 'd.item.item.go(', ' item.item.go(4']
+    assert labels_in(tmp_path, text, needles) == ['function void go(int right_arg)'] * 4
+
+
+def test_a_composite_argument_naming_a_subclass_typedef_ends(tmp_path):
+    text = '''package p;
+class pair #(type T = int); T item; function void go(int a); endfunction endclass
+class base #(type T = int); T item; endclass
+class child #(type U = int) extends base #(outer::pair_t #(U));
+  typedef pair #(U) inner_t;
+endclass
+class outer extends child #(byte);
+  typedef inner_t pair_t;
+  function void f(); item.go(1); endfunction
+endclass
+endpackage
+'''
+    assert labels_in(tmp_path, text, ['item.go(']) == ['function void go(int a)']

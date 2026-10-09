@@ -265,7 +265,7 @@ class Navigator:
                                           create.type if create else None)
         if spec is None or spec.cls is None:
             return None
-        bindings = bind_params([(p.name, p.default) for p in spec.cls.params], spec.args, {})
+        bindings = ws.specialize(spec.cls, spec.args, strict=strict)
         hit = ws.find_member(spec.cls, "new", bindings, strict)
         return [Target(hit[1], owner=hit[0], bindings=hit[2])] if hit else []
 
@@ -368,7 +368,7 @@ class Navigator:
         if spec is None:
             return [] if strict else self.global_member_search(name)
         if spec.cls is not None:
-            bindings = bind_params([(p.name, p.default) for p in spec.cls.params], spec.args, {})
+            bindings = ws.specialize(spec.cls, spec.args, strict=strict)
             hit = ws.find_member(spec.cls, name, bindings, strict)
             if hit is not None:
                 return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]

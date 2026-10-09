@@ -139,8 +139,11 @@ def substitute_params(text: str, bindings: dict[str, str]) -> str:
     return re.sub(r'"(?:\\.|[^"\\])*"|\\\S+|::|[A-Za-z_$][\w$]*|\S', replace, text)
 
 
-def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str, str]) -> dict[str, str]:
-    """Map a class's parameters to the arguments of a specialization."""
+def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str, str],
+                bind=None, scope: Scope | None = None) -> dict[str, str]:
+    """Map a class's parameters to the arguments of a specialization. `bind` puts bindings into
+    an argument (as text by default); `scope` is where the class writes its defaults."""
+    bind = bind or _bind
     out: dict[str, str] = {}
     positional = [a for a in args if not a.startswith(".")]
     named = {}
@@ -150,11 +153,11 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
             named[m.group(1)] = _carry(m.group(2), a)
     for i, (pname, default) in enumerate(params):
         if pname in named:
-            val = _bind(named[pname], outer)
+            val = bind(named[pname], outer)
         elif i < len(positional):
-            val = _bind(positional[i], outer)
+            val = bind(positional[i], outer)
         else:
-            val = substitute_params(default, out)
+            val = bind(Bound(default, scope), out) if scope else substitute_params(default, out)
         out[pname] = val
     return out
 
@@ -709,13 +712,14 @@ class Workspace:
         return self.resolve_spec(ref.name, scope, args, ctx, depth, strict=strict, **where)
 
     def _bind_arg(self, arg: str, ctx: ClassInfo | None, bindings: dict[str, str], strict: bool, depth: int) -> str:
-        """A type argument written in `ctx` with its parameters bound. A typedef member of the
-        class (`this_type`) means nothing elsewhere: it becomes the type it names."""
+        """A type argument written in `ctx` with its parameters bound. In `pair #(T)`, pair means
+        what it means in ctx and T's value what it meant where it was written. A typedef member of
+        the class (`this_type`) means nothing elsewhere: it becomes the type it names."""
         value = substitute_params(arg, bindings)
         if ctx is None or isinstance(value, Bound):
             return value
         if value != arg:
-            return _bind(Bound(arg, Scope.of(ctx)), bindings)
+            return self._bind_type(Bound(arg, Scope.of(ctx)), bindings, strict, depth, members=True)
         if not any(t.owner_class for t in self.typedefs_by_name.get(arg, ())):
             return value
         hit = self.find_member(ctx, arg, bindings, strict)
@@ -726,6 +730,23 @@ class Workspace:
             return value
         text = spec.cls.name + ("#(" + ",".join(spec.args) + ")" if spec.args else "")
         return Bound(text, Scope.of(ctx), spec)
+
+    def _bind_type(self, text: str, bindings: dict[str, str], strict: bool = False, depth: int = 0,
+                   members: bool = False) -> str:
+        """Bound type text with `bindings` put in. In `pair #(T)`, pair means what it means where
+        the text is written and T's value what it meant where that was written, so a composite
+        becomes the type it names."""
+        value = _bind(text, bindings)
+        if not isinstance(text, Bound) or value is text or value.spec is not None or str(value) == text:
+            return value
+        parsed = parse_type_text(text)
+        if not parsed or not parsed[2]:
+            return value
+        where = text.scope
+        args = [self._bind_type(Bound(a, where), bindings, strict, depth, members) for a in parsed[2]]
+        spec = self.resolve_spec(parsed[1], parsed[0], args, where.ctx, depth, package=where.package,
+                                 imports=where.imports, strict=strict, near=where.near, members=members)
+        return Bound(value, where, spec, value.formal) if spec is not None else value
 
     def base_spec(self, cls: ClassInfo, bindings: dict[str, str] | None = None, strict: bool = False) -> Spec | None:
         """The base class; `extends BASE` follows what the type parameter BASE is bound to
@@ -777,7 +798,7 @@ class Workspace:
                 if base.cls.qualname in seen:
                     break
                 seen.add(base.cls.qualname)
-                bindings = bind_params([(p.name, p.default) for p in base.cls.params], args, bindings)
+                bindings = self.specialize(base.cls, args, bindings, strict)
                 entries.append(ChainEntry(base, bindings))
                 cur = base.cls
             else:
@@ -790,6 +811,16 @@ class Workspace:
                     args = [bindings.get(p, p) for p, _ in builtin_params(name)]
                     name = parent
                 break
+
+    def specialize(self, cls: ClassInfo, args: list[str], outer: dict[str, str] | None = None,
+                   strict: bool = False) -> dict[str, str]:
+        """cls's parameters bound to a specialization's arguments, in which `outer` binds the
+        parameters of the class that writes them."""
+        if not cls.params:
+            return {}
+        return bind_params([(p.name, p.default) for p in cls.params], args, outer or {},
+                           lambda text, bindings: self._bind_type(text, bindings, strict),
+                           Scope.of(cls) if len(args) < len(cls.params) else None)
 
     def formals(self, cls: ClassInfo) -> dict[str, str]:
         """A class's parameters as its own body sees them: unbound, resolving as their defaults."""
