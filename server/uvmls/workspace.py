@@ -582,7 +582,7 @@ class Workspace:
             owner = self.class_by_qual.get(scope) or self.find_class(scope, package, imports, strict, near)
             td = self.find_typedef(name, owner.package, owner.name, strict=strict, near=owner.range) if owner else None
             if td and td.target:
-                result = self._spec_from_typedef(td, ctx, depth, strict)
+                result = self._spec_from_typedef(td, owner, depth, strict)
         if result is None:
             cls = self.find_class(name, scope or package, [scope] if scope else imports, strict, near)
             if cls is not None and (scope is None or cls.package == scope or not cls.package):
@@ -625,8 +625,11 @@ class Workspace:
                 out.append(cur)
         return out
 
-    def _spec_from_typedef(self, td: Typedef, ctx, depth, strict=False) -> Spec | None:
-        inner = self.resolve_spec(td.target.name, td.target.scope, td.target.args, ctx, depth + 1,
+    def _spec_from_typedef(self, td: Typedef, owner: ClassInfo | None, depth, strict=False) -> Spec | None:
+        """A typedef's target, resolved where the typedef is written: in `owner`, the class that
+        declares it, or else in its package, which sees no class's member typedefs."""
+        inner = self.resolve_spec(td.target.name, td.target.scope, td.target.args,
+                                  owner if td.owner_class else None, depth + 1,
                                   package=td.package, imports=td.imports, strict=strict, near=td.range)
         if inner is not None:
             return Spec(name=inner.name, cls=inner.cls, args=inner.args, via_typedef=td)

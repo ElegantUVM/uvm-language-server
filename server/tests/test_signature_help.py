@@ -1139,3 +1139,59 @@ endpackage
                                       'main(); seq_item_port.get_next_item('], bundled=True) == \
         ['task get_next_item(output REQ_T t)', 'function void copy(uvm_object rhs)', 'function void write(input T t)',
          'task get_next_item(output bus_item t)']
+
+
+def test_a_package_typedef_names_what_its_package_sees(tmp_path):
+    """A package typedef's target resolves in the package: the typedefs of a class that uses it,
+    inherits or declares one of the same name do not change it, nor make its base its own."""
+    text = '''package p;
+class real_item; function void go(int a); endfunction endclass
+class fake; function void go(string s); endfunction endclass
+typedef real_item item_t;
+typedef item_t alias_t;
+class base; typedef fake item_t; endclass
+class user extends base;
+  alias_t x;
+  function void t(); x.go(1); endfunction
+endclass
+class own;
+  typedef fake item_t;
+  alias_t y;
+  function void t(); y.go(2); endfunction
+endclass
+typedef real_item base_t;
+typedef base_t my_base_t;
+class other; typedef fake base_t; endclass
+class child extends my_base_t;
+  function void t(); go(3); endfunction
+endclass
+endpackage
+'''
+    assert labels_in(tmp_path, text, ['x.go(', 'y.go(', '(); go(']) == ['function void go(int a)'] * 3
+    from test_fixes import index
+    from uvmls.navigation import Navigator
+    line = text.splitlines().index('  function void t(); x.go(1); endfunction')
+    nav = Navigator(index(tmp_path, {'t.sv': text}))
+    assert 'function of `real_item`' in nav.hover(str(tmp_path / 't.sv'), line, 24, text)
+    assert [r.line for r in nav.definition(str(tmp_path / 't.sv'), line, 24, text)] == [1]
+
+
+def test_a_base_through_a_typedef_of_a_uvm_typedef_name(tmp_path):
+    """uvm_sequence declares sequencer_t; a package typedef chain through that name still ends."""
+    text = '''`include "uvm_macros.svh"
+package p;
+import uvm_pkg::*;
+class item extends uvm_sequence_item;
+  function new(string name = "item"); super.new(name); endfunction
+endclass
+typedef uvm_sequencer #(item) sequencer_t;
+typedef sequencer_t sqr_base_t;
+class my_sqr extends sqr_base_t;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  function void t(); set_arbitration(UVM_SEQ_ARB_FIFO); endfunction
+endclass
+endpackage
+'''
+    assert labels_in(tmp_path, text, ['set_arbitration(', 'parent); super.new('], bundled=True) == \
+        ['function void set_arbitration(UVM_SEQ_ARB_TYPE val)',
+         'function new(string name, uvm_component parent = null)']
