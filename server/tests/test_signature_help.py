@@ -1560,6 +1560,8 @@ def test_calls_on_a_call_result(tmp_path, doc):
     text = '''`include "uvm_macros.svh"
 import uvm_pkg::*;
 class box;
+  box inner;
+  box arr[4];
   function int calc(int a, int b, int c = 0); return a; endfunction
   function box next(); return this; endfunction
 endclass
@@ -1573,17 +1575,20 @@ class comp extends uvm_component;
     void'(this.get_parent().get_full_name());
     void'(b.next().next().calc(1, 2));
     void'(b.next().nothing().calc(1, 2));
+    void'(b.next().inner.calc(1, 2));
+    void'(b.next().arr[0].inner.next().calc(1, 2));
   endtask
 endclass
 '''
+    calc = ('function int calc(int a, int b, int c = 0)', 1)
     assert hints_in(tmp_path, text, ['by_name("a",', 'find_all("*",', 'get_full_name(', 'next().next().calc(1,',
-                                     'nothing().calc(1,'], bundled=True) == [
+                                     'nothing().calc(1,', 'next().inner.calc(1,', 'inner.next().calc(1,'],
+                    bundled=True) == [
         ('function void set_type_override_by_name(string original_type_name, string override_type_name, '
          'bit replace = 1)', 1),
         ('function void find_all(string comp_match, ref uvm_component comps[$], input uvm_component comp = null)', 1),
         ('function string get_full_name()', -1),
-        ('function int calc(int a, int b, int c = 0)', 1),
-        None]
+        calc, None, calc, calc]
     doc.change(doc.text.replace('task alu_driver::run_phase(uvm_phase phase);',
                                'task alu_driver::run_phase(uvm_phase phase);\n'
                                '  phase.get_objection().set_drain_time(this, 100);'))

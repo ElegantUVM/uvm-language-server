@@ -358,11 +358,15 @@ def flatten_name(node) -> list[Segment]:
 
 
 def call_segments(node) -> list[Segment]:
-    """flatten_name of a call's head, continued through the calls it is made on, as hover reads
-    them: `a.f().g` -> [a, f, g]."""
-    if node is not None and node.kind == K.MemberAccessExpression and \
-            node.left.kind == K.InvocationExpression and not node.name.isMissing:
-        return [*call_segments(node.left.left), Segment(node.name.valueText, [], ".", node)]
+    """flatten_name of a call's head, continued through the calls, members and elements it is
+    made on, as hover reads them: `a.f().g[0].h` -> [a, f, g, h]."""
+    if node is not None and node.kind == K.MemberAccessExpression and not node.name.isMissing:
+        left = node.left
+        while left.kind == K.ElementSelectExpression:
+            left = left.left  # flatten_name drops a select too: `a[0].h` -> [a, h]
+        if left.kind == K.InvocationExpression:
+            left = left.left
+        return [*call_segments(left), Segment(node.name.valueText, [], ".", node)]
     return flatten_name(node)
 
 
