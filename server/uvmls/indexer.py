@@ -137,6 +137,15 @@ RESOURCE_DB_OPS = {"set": "set", "read_by_name": "get", "read_by_type": "get",
                    "set_default": "set", "set_override": "set"}
 
 
+LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
+def to_slang(text: str) -> str:
+    """Editor text for slang. A lone surrogate (a client's \\uXXXX escape) is not UTF-8, so slang
+    cannot take the buffer; U+FFFD has the same UTF-8 and UTF-16 widths, keeping every column."""
+    return LONE_SURROGATE_RE.sub("\ufffd", text)
+
+
 def slang_text(get, *args) -> str:
     """Text from slang as str. Source bytes that are not UTF-8 (a Latin-1 comment or string, say)
     become U+FFFD instead of raising: pybind11 decodes strictly, and keeps the bytes in the error."""
@@ -605,7 +614,7 @@ class Indexer:
         sm = ps.SourceManager()
         for path, text in overrides.items():
             if path != root:
-                sm.assignText(path, text)
+                sm.assignText(path, to_slang(text))
         po = P.PreprocessorOptions()
         dirs = list(self.include_dirs)
         if self.use_shim:
@@ -621,7 +630,7 @@ class Indexer:
             buffers.append(sm.assignText(SHIM_BUFFER_NAME, self._shim))
         try:
             if root in overrides:
-                buffers.append(sm.assignText(root, overrides[root]))
+                buffers.append(sm.assignText(root, to_slang(overrides[root])))
             else:
                 buffers.append(sm.readSource(root))
         except Exception as e:  # unreadable file

@@ -23,7 +23,7 @@ import pyslang as ps
 from pyslang import analysis, ast, driver
 from pyslang import syntax as S
 
-from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro, fix_data, physical_position, slang_text
+from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro, fix_data, physical_position, slang_text, to_slang
 from .project import BUNDLED_UVM, SourceSet, norm
 
 log = logging.getLogger("uvmls")
@@ -287,7 +287,7 @@ def _compile(req: dict):
         real = os.path.realpath(path)  # the name slang looks files up by
         if real not in assigned:
             assigned.add(real)
-            sm.assignText(real, text)
+            sm.assignText(real, to_slang(text))
     d.parseAllSources()
     loc = _Locator(sm, req)
     trees = _with_uvm_macros(d, loc, req.get("includeDirs") or [])

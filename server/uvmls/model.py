@@ -12,7 +12,14 @@ from dataclasses import dataclass, field
 
 def utf8_prefix(line: str, col: int) -> str:
     """The text before UTF-8 byte column `col` (slang's unit), never splitting a character."""
-    return line.encode("utf-8")[:col].decode("utf-8", errors="replace")
+    try:
+        return line.encode("utf-8")[:col].decode("utf-8", errors="replace")
+    except UnicodeEncodeError:  # a lone surrogate, which slang reads as the 3-byte U+FFFD
+        head = line.encode("utf-8", "surrogatepass")[:col]
+        try:
+            return head.decode("utf-8", "surrogatepass")
+        except UnicodeDecodeError:  # a column inside a character
+            return head.decode("utf-8", errors="replace")
 
 
 @dataclass(frozen=True, slots=True)

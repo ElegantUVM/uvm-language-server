@@ -174,14 +174,18 @@ def test_escaped_identifiers(tmp_path, encoding, offset):
 
 
 def test_lone_surrogate_in_buffer(client, tmp_path):
-    # Sent as the escape \ud83d; slang cannot read the buffer, so requests find nothing.
+    # Sent as the escape \ud83d. slang reads it as U+FFFD, which has the same widths, so the
+    # columns after it still line up.
     path = tmp_path / "surrogate.sv"
     path.write_text("module s; endmodule\n")
     doc = Doc(client, str(path), 'module s;\n  string t = "\ud83d"; int x = 1; int y = x;\nendmodule\n')
     try:
-        pos = {"line": 1, "character": doc.text.split("\n")[1].index("x;")}
-        for method in ("textDocument/hover", "textDocument/definition", "textDocument/documentHighlight"):
-            assert client.request(method, {"textDocument": {"uri": doc.uri}, "position": pos}) in (None, [])
+        line = doc.text.split("\n")[1]
+        pos = {"line": 1, "character": line.index("x =")}
+        hover = client.request("textDocument/hover", {"textDocument": {"uri": doc.uri}, "position": pos})
+        assert "int x = 1;" in hover["contents"]["value"]
+        found = client.request("textDocument/documentHighlight", {"textDocument": {"uri": doc.uri}, "position": pos})
+        assert [r["range"]["start"]["character"] for r in found] == [line.index("x ="), line.index("x;")]
     finally:
         doc.close()
 

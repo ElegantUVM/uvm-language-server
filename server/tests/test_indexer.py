@@ -640,3 +640,16 @@ def test_library_fold_walk_sees_directives_inside_skipped_syntax(tmp_path):
     expected = [(0, 15, "branch"), (2, 14, None), (5, 6, "branch"), (7, 8, "branch"), (11, 12, "comment")]
     assert sorted((f.start, f.end, f.kind) for f in folds) == expected
     assert sorted((f.start, f.end, f.kind) for f in ws.indices[root].folds) == expected
+
+
+def test_an_open_buffer_with_a_lone_surrogate_does_not_stop_indexing(tmp_path):
+    # A client sends a lone surrogate as a \uXXXX escape; slang cannot take it as UTF-8.
+    for name, cls in (('a.sv', 'a_c'), ('b.sv', 'b_c')):
+        (tmp_path / name).write_text(f'class {cls}; endclass\n')
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
+    ws.update_document(str(tmp_path / 'a.sv'), 'class a_c; // \ud800\nendclass\n')
+    ws.update_document(str(tmp_path / 'b.sv'), 'class edited_c; endclass\n')
+    assert {'a_c', 'edited_c'} <= set(ws.classes_by_name)
+    ws.reindex_all()
+    assert {'a_c', 'edited_c'} <= set(ws.classes_by_name)
