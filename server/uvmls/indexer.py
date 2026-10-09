@@ -880,7 +880,8 @@ class Extractor:
         scope = "::".join(s.name for s in segs[:-1]) if len(segs) > 1 else None
         tok = name_token(node)
         rng = self.tok_range(tok)[0] if tok is not None else None
-        return TypeRef(name=last.name, text=compact(node), scope=scope, args=last.args, range=rng)
+        return TypeRef(name=last.name, text=compact(node), scope=scope, args=last.args, range=rng,
+                       scope_args=segs[-2].args if len(segs) > 1 else [])
 
     def type_ref(self, dtype) -> TypeRef | None:
         if dtype is None or dtype.kind in BUILTIN_TYPE_KINDS:
@@ -1473,7 +1474,8 @@ class Extractor:
             tseg = segs[-3]
             scope = segs[-4].name if len(segs) >= 4 else None
             tref = TypeRef(name=tseg.name, text=compact(tseg.node), scope=scope, args=tseg.args,
-                           range=self.tok_range(name_token(tseg.node))[0] if name_token(tseg.node) else None)
+                           range=self.tok_range(name_token(tseg.node))[0] if name_token(tseg.node) else None,
+                           scope_args=segs[-4].args if len(segs) >= 4 else [])
             target = self.assignment_target(node)
             sink.creates.append(CreateCall(
                 kind="factory", type=tref, target=target,

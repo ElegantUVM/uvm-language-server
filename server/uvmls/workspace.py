@@ -808,9 +808,8 @@ class Workspace:
     def _spec_from_typedef(self, td: Typedef, owner: ClassInfo | None, depth, strict=False) -> Spec | None:
         """A typedef's target, resolved where the typedef is written: in `owner`, the class that
         declares it, or else in its package, which sees no class's member typedefs."""
-        inner = self.resolve_spec(td.target.name, td.target.scope, td.target.args,
-                                  owner if td.owner_class else None, depth + 1,
-                                  package=td.package, imports=td.imports, strict=strict, near=td.range)
+        inner = self.resolve_type_ref(td.target, owner if td.owner_class else None, None, strict, depth + 1,
+                                      package=td.package, imports=td.imports, near=td.range)
         if inner is not None:
             return Spec(name=inner.name, cls=inner.cls, args=inner.args, via_typedef=td)
         return None
@@ -838,25 +837,43 @@ class Workspace:
         bindings = bindings or {}
         if ref.scope is None and ref.name in bindings:
             return self.resolve_type_text(bindings[ref.name], ctx, strict, depth)
-        if bindings and ctx is not None and ref.scope is None and depth < 8 and \
-                any(t.owner_class for t in self.typedefs_by_name.get(ref.name, ())):
-            # A member typedef of a specialization (rsrc_t) names its target with the parameters bound.
-            hit = self.find_member(ctx, ref.name, bindings, strict)
-            td = hit[1] if hit is not None else None
-            if isinstance(td, Typedef) and td.target is not None and \
-                    not (td.target.scope is None and td.target.name == ref.name):
-                inner = self.resolve_type_ref(td.target, hit[0], hit[2], strict, depth + 1)
-                return Spec(inner.name, inner.cls, inner.args, td) if inner is not None else None
-        scope = ref.scope
+        if bindings and ctx is not None and ref.scope is None:
+            found, spec = self._bound_member_typedef(ctx, ref.name, bindings, strict, depth)
+            if found:
+                return spec
+        scope, outer = ref.scope, None
         if scope in bindings:  # T::inner_t
             outer = self.resolve_type_text(bindings[scope], ctx, strict, depth)
-            if outer is not None and outer.cls is not None:
-                scope = outer.cls.qualname
-            else:
+            if outer is None or outer.cls is None:
                 parsed = parse_type_text(bindings[scope])
                 scope = "::".join(p for p in parsed[:2] if p) if parsed else scope
+        elif scope and ref.scope_args:  # wrap #(string)::item_t
+            package, _, name = scope.rpartition("::")
+            outer = self.resolve_spec(name, package or None,
+                                      [self._bind_arg(a, ctx, bindings, strict, depth) for a in ref.scope_args],
+                                      ctx, depth, strict=strict, **where)
+        if outer is not None and outer.cls is not None:
+            scope = outer.cls.qualname
+            if outer.args:  # the specialization's typedef has its parameters bound
+                found, spec = self._bound_member_typedef(
+                    outer.cls, ref.name, self.specialize(outer.cls, outer.args, strict=strict), strict, depth)
+                if found:
+                    return spec
         args = [self._bind_arg(a, ctx, bindings, strict, depth) for a in ref.args]
         return self.resolve_spec(ref.name, scope, args, ctx, depth, strict=strict, **where)
+
+    def _bound_member_typedef(self, cls: ClassInfo, name: str, bindings: dict[str, str], strict: bool,
+                              depth: int) -> tuple[bool, Spec | None]:
+        """Whether `name` is a member typedef of `cls` specialized by `bindings` (rsrc_t), and the
+        type it names, its target resolved with the parameters bound."""
+        if depth >= 8 or not any(t.owner_class for t in self.typedefs_by_name.get(name, ())):
+            return False, None
+        hit = self.find_member(cls, name, bindings, strict)
+        td = hit[1] if hit is not None else None
+        if not isinstance(td, Typedef) or td.target is None or (td.target.scope is None and td.target.name == name):
+            return False, None
+        inner = self.resolve_type_ref(td.target, hit[0], hit[2], strict, depth + 1)
+        return True, Spec(inner.name, inner.cls, inner.args, td) if inner is not None else None
 
     def _bind_arg(self, arg: str, ctx: ClassInfo | None, bindings: dict[str, str], strict: bool, depth: int) -> str:
         """A type argument written in `ctx` with its parameters bound. In `pair #(T)`, pair means

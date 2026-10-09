@@ -55,6 +55,7 @@ class TypeRef:
     scope: str | None = None
     args: list[str] = field(default_factory=list)
     range: Range | None = None
+    scope_args: list[str] = field(default_factory=list)  # the scope's specialization: `wrap #(T)::item_t`
 
 
 @dataclass
