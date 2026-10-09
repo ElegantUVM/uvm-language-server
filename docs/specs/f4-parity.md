@@ -51,6 +51,12 @@ reports; factory override resolution is irrelevant to the callable's declared si
   use the existing document reader. It works without a successful index or elaboration. Only local
   Verilog/SystemVerilog documents selected by the client are eligible; bundled/library sources and
   non-file URIs return `[]`. The server returns edits, never saves or rewrites the source on disk.
+- Amended after review: library sources are the bundled UVM, the server's macro shim, the UVM
+  directory in use or configured, the files the library roots include, and any UVM source directory
+  (`uvm_pkg.sv` with `uvm_macros.svh`) above the document, the last so that discovery in progress
+  cannot expose a library. Compare both the opened and the resolved path, against both spellings of
+  each directory: the editor keeps the link a file was opened through, slang resolves it. A lone
+  `uvm_pkg.sv` above a document does not make it library code.
 - Executable precedence: nonempty `uvm.formatter.path`, otherwise `shutil.which("verible-verilog-format")`
   on the **server's** PATH. A configured bare executable name is searched on PATH; a configured path
   is one executable, not a shell command. Support `~`, environment variables and `${workspaceFolder}`
@@ -58,7 +64,9 @@ reports; factory override resolution is irrelevant to the callable's declared si
   a root require an absolute path or bare executable name). Reuse/factor that expansion code.
   An invalid explicit path never silently falls back to another executable.
 - Put process adaptation in a small `uvmls/formatting.py`. Run with an argument vector, no shell,
-  document-directory cwd, UTF-8 buffer on stdin and `-` as the input filename. Use
+  document-directory cwd (amended: its nearest existing ancestor once the directory is removed under
+  an open buffer), UTF-8 buffer on stdin and `-` as the input filename. A buffer UTF-8 cannot encode
+  (a lone surrogate the client sent as an escape) returns `[]` with a log line, before any spawn. Use
   `--failsafe_success=false` and `--indentation_spaces=N`, where N is LSP `FormattingOptions.tabSize`
   (a positive integer). Never use `--inplace`, pass source files as writable arguments, or download
   anything. Verible owns all layout decisions. It emits spaces even when `insertSpaces` is false;
