@@ -479,6 +479,16 @@ def test_branch_that_crosses_a_block(doc):
                                   fold(text, "initial begin\n    x = 0", "  end\n")])
 
 
+def test_region_markers_with_or_without_hash(doc):
+    text = ("module m;\n  // region inputs\n  wire a;\n  // #region inner\n  wire b;\n  //#endregion\n"
+            "  // endregion\n  // the next\n  // region of memory\n  // is spare\n  wire c;\nendmodule\n")
+    doc.change(text)
+    # A marker with no partner may be prose: it stays in its run of comments.
+    assert folds(doc) == ordered([fold(text, "module", "endmodule"), span(text, "// region", "// endregion", "region"),
+                                  span(text, "// #region", "//#endregion", "region"),
+                                  span(text, "// the next", "// is spare", "comment")])
+
+
 def test_comments_after_an_included_file(tmp_path):
     # slang moves the trivia after a header's last token to the token after its `include.
     (tmp_path / "head.svh").write_text("class h;\n  int x;\nendclass\n// footer one\n// footer two\n")

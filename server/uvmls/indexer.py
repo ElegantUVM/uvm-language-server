@@ -107,7 +107,8 @@ QUALIFIER_TOKENS = {
 }
 LINE_COMMENT, BLOCK_COMMENT = P.TriviaKind.LineComment, P.TriviaKind.BlockComment
 END_OF_LINE, WHITESPACE, DIRECTIVE = P.TriviaKind.EndOfLine, P.TriviaKind.Whitespace, P.TriviaKind.Directive
-REGION_RE = re.compile(rb"//\s*#(end)?region\b")  # the markers VS Code folds in other languages
+# The region markers that SystemVerilog extensions give VS Code: `// #region` or `// region`.
+REGION_RE = re.compile(rb"//\s*#?(end)?region\b")
 TRIVIA_MARK = re.compile(rb"`|/[/*]")
 FOLDED_DIRECTIVES = frozenset([K.IfDefDirective, K.IfNDefDirective, K.ElsIfDirective, K.ElseDirective,
                                K.EndIfDirective, K.DefineDirective, K.MacroUsage])
@@ -1864,9 +1865,19 @@ class Extractor:
 
     def finish_folds(self):
         """The folds that wait for the whole walk: a structure after a header whose list folds on
-        its own line (an editor shows one fold per line), line comment runs and #regions."""
+        its own line (an editor shows one fold per line), regions and line comment runs."""
         for path, line, head, end in self._headed:
             self.add_fold(path, head if (path, line) in self._list_starts else line, end)
+        for path, markers in self._markers.items():
+            starts, comments = [], self._comment_lines.setdefault(path, set())
+            for line, opens in sorted(markers):
+                if opens:
+                    starts.append(line)
+                elif starts:
+                    self.add_fold(path, starts.pop(), line, "region")
+                else:
+                    comments.add(line)  # unpaired, a marker may be prose (`// region of memory`)
+            comments.update(starts)
         for path, lines in self._comment_lines.items():
             ordered = sorted(lines)
             first = 0
@@ -1874,13 +1885,6 @@ class Extractor:
                 if i + 1 == len(ordered) or ordered[i + 1] != line + 1:
                     self.add_fold(path, ordered[first], line, "comment")
                     first = i + 1
-        for path, markers in self._markers.items():
-            starts = []
-            for line, opens in sorted(markers):
-                if opens:
-                    starts.append(line)
-                elif starts:
-                    self.add_fold(path, starts.pop(), line, "region")
 
     def collect_structures(self) -> tuple[list[StructuralPair], list[FoldRegion]]:
         stack = [self.tree.root]
