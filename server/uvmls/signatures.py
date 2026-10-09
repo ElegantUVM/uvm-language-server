@@ -19,9 +19,12 @@ GAP_RE = re.compile(r"(?:\s+|//[^\r\n]*|/\*.*?\*/|`(?![A-Za-z_]))*", re.S)
 def call_at(ws, path, line, col):
     if path not in ws._signature_texts:
         ft = FileText(path, ws.texts.get(path, ""))
-        directives = [span for r in ws.directives_by_file.get(path, ()) if (span := ft.span(r)) is not None]
-        ws._signature_texts[path] = ft, directives
-    ft, directives = ws._signature_texts[path]
+        directives = sorted(span for r in ws.directives_by_file.get(path, ()) if (span := ft.span(r)) is not None)
+        ends = {}
+        for a, b in directives:
+            ends[a] = max(ends.get(a, a), b)
+        ws._signature_texts[path] = ft, directives, ends
+    ft, directives, ends = ws._signature_texts[path]
     cursor = ft.offset(line, col)
     if cursor is None or any(a <= cursor < b for a, b in directives):
         return None
@@ -39,7 +42,7 @@ def call_at(ws, path, line, col):
             # Typing goes on in the blanks, comments and inactive text before the next token.
             while cursor > end:
                 gap = GAP_RE.match(ft.text, end, opening[1] + LIMIT).end()
-                end = next((b for a, b in directives if a == gap < b), gap)
+                end = ends.get(gap, gap)
                 if end == gap:
                     break
         else:
@@ -51,10 +54,13 @@ def call_at(ws, path, line, col):
     start, end, call = max(candidates, key=lambda c: c[0])
     text = ft.text[start:min(end, start + LIMIT)]
     # Directive syntax includes skipped branches; raw text must not reintroduce their arguments.
+    parts, done = [], 0
     for a, b in directives:
-        a, b = max(0, a - start), min(len(text), b - start)
+        a, b = max(done, a - start), min(len(text), b - start)
         if a < b:
-            text = text[:a] + NOT_EOL_RE.sub(" ", text[a:b]) + text[b:]
+            parts += [text[done:a], NOT_EOL_RE.sub(" ", text[a:b])]
+            done = b
+    text = "".join(parts) + text[done:]
     at = cursor - start
     for m in MASK_RE.finditer(text):
         comment = m.group()
