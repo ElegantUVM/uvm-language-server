@@ -644,6 +644,7 @@ class Extractor:
         self._headed: list[tuple[str, int, int, int]] = []  # (path, opening, header end, end) of a fold
         self._list_starts: set[tuple[str, int]] = set()  # where a bracketed list's fold starts
         self._branches: dict[int, list[int]] = {}  # per buffer, the lines of the open `ifdef branches
+        self._macro_blocks: dict[int, list[int]] = {}  # per buffer, the lines of open `uvm_*_begin usages
         self._comment_lines: dict[str, set[int]] = {}  # lines holding only a line comment
         self._markers: dict[str, set[tuple[int, bool]]] = {}  # (line, opens) of `// #region` markers
 
@@ -1836,8 +1837,8 @@ class Extractor:
         return self.physical_position(ps.SourceLocation(buffer, offset))[0]
 
     def directive_folds(self, syntax, path: str, sr):
-        """Folds of an `ifdef branch, a multi-line define or macro call, and the comments before
-        it, which its first token holds."""
+        """Folds of an `ifdef branch, a multi-line define or macro call, a `uvm_*_begin block, and
+        the comments before it, which its first token holds."""
         first = syntax.getFirstToken()
         trivia = first.trivia if first is not None else ()
         if any(t.kind is LINE_COMMENT or t.kind is BLOCK_COMMENT for t in trivia):
@@ -1853,6 +1854,12 @@ class Extractor:
             if args is not None and not args.closeParen.isMissing:
                 self.add_fold(path, self.physical_position(args.openParen.location)[0],
                               self.physical_position(args.closeParen.location)[0] - 1)
+            name = syntax.directive.valueText
+            if name.startswith("`uvm_"):  # `uvm_object_utils_begin(c) .. `uvm_object_utils_end
+                if name.endswith("_begin"):
+                    self._macro_blocks.setdefault(sr.start.buffer.id, []).append(line)
+                elif name.endswith("_end") and (open_blocks := self._macro_blocks.get(sr.start.buffer.id)):
+                    self.add_fold(path, open_blocks.pop(), line - 1, "macro")
         else:
             open_branches = self._branches.setdefault(sr.start.buffer.id, [])
             if k not in (K.IfDefDirective, K.IfNDefDirective):

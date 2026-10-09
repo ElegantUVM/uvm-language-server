@@ -19,7 +19,7 @@ WORD = re.compile(r"[A-Za-z0-9_$]")
 # What the utils and field macros generate in a user class; other generated methods are API
 # (a TLM port's get_next_item, item_done, put ...).
 UTILS_METHODS = {"get_type", "get_object_type", "create", "get_type_name", "__m_uvm_field_automation"}
-CROSSING_FOLDS = {"branch", "region"}  # folds that need not nest with the syntax around them
+CROSSING_FOLDS = {"branch", "region", "macro"}  # folds that need not nest with the syntax around them
 
 
 def _nested(spans) -> list[tuple[int, int]]:
@@ -725,8 +725,8 @@ class Navigator:
 
     def folding_ranges(self, path) -> list[tuple[int, int, str | None]]:
         """(start, end, kind) of a file's folds, outer before inner on a shared start. Syntax and
-        comments nest by construction, unless preprocessing roots disagree; an `ifdef branch or
-        #region that crosses them is left out."""
+        comments nest by construction, unless preprocessing roots disagree; an `ifdef branch,
+        region or `uvm_*_begin block that crosses them is left out."""
         kinds: dict[tuple[int, int], str | None] = {}
         for f in sorted(self.ws.folds_in(path), key=lambda f: f.kind in CROSSING_FOLDS):
             kinds.setdefault((f.start, f.end), f.kind)

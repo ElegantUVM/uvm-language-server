@@ -322,8 +322,9 @@ class StructuralPair:
 
 @dataclass(frozen=True, slots=True)
 class FoldRegion:
-    """Lines a fold spans, both included. `kind` is "comment", "region" (`// #region` markers) or
-    "branch" (an `ifdef branch); syntax folds have none. Branches and regions may cross syntax."""
+    """Lines a fold spans, both included. `kind` is "comment", "region" (`// #region` markers),
+    "branch" (an `ifdef branch) or "macro" (`uvm_*_begin to `uvm_*_end); syntax folds have none.
+    Branches, regions and macro blocks may cross syntax."""
     path: str
     start: int
     end: int

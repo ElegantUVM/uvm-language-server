@@ -489,6 +489,32 @@ def test_region_markers_with_or_without_hash(doc):
                                   span(text, "// the next", "// is spare", "comment")])
 
 
+UTILS = '''class item extends uvm_sequence_item;
+  rand int a;
+  `uvm_object_utils_begin(item)
+    `uvm_field_int(a, UVM_ALL_ON)
+  `uvm_object_utils_end
+  task t();
+    `uvm_info_begin("ID", "msg", UVM_LOW)
+      `uvm_message_add_int(a, UVM_DEC)
+    `uvm_info_end
+  endtask
+endclass
+'''
+
+
+def test_uvm_begin_and_end_macros(doc):
+    doc.change(UTILS)
+    assert folds(doc) == ordered([fold(UTILS, "class", "endclass"), fold(UTILS, "task", "endtask"),
+                                  fold(UTILS, "`uvm_object_utils_begin", "`uvm_object_utils_end"),
+                                  fold(UTILS, "`uvm_info_begin", "`uvm_info_end")])
+    # Only UVM's macros are known to pair.
+    text = "`define my_begin\n`define my_end\n" + UTILS.replace("uvm_object_utils_", "my_").replace("(item)", "")
+    doc.change(text)
+    assert folds(doc) == ordered([fold(text, "class", "endclass"), fold(text, "task", "endtask"),
+                                  fold(text, "`uvm_info_begin", "`uvm_info_end")])
+
+
 def test_comments_after_an_included_file(tmp_path):
     # slang moves the trivia after a header's last token to the token after its `include.
     (tmp_path / "head.svh").write_text("class h;\n  int x;\nendclass\n// footer one\n// footer two\n")
