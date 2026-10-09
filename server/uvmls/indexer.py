@@ -508,7 +508,9 @@ def _raw_length(trivia) -> int:
 
 
 def _line_start(data: bytes, offset: int) -> int:
-    return max(data.rfind(b"\n", 0, offset), data.rfind(b"\r", 0, offset)) + 1
+    # A CR is looked for only on the line: in an LF file, the search would cover the whole file.
+    lf = data.rfind(b"\n", 0, offset)
+    return max(lf, data.rfind(b"\r", lf + 1, offset)) + 1
 
 
 def _alone(data: bytes, offset: int) -> bool:
@@ -518,8 +520,10 @@ def _alone(data: bytes, offset: int) -> bool:
 
 
 def _line_end(data: bytes, offset: int) -> int:
-    ends = [i for i in (data.find(b"\n", offset), data.find(b"\r", offset)) if i >= 0]
-    return min(ends, default=len(data))
+    lf = data.find(b"\n", offset)
+    lf = len(data) if lf < 0 else lf
+    cr = data.find(b"\r", offset, lf)
+    return lf if cr < 0 else cr
 
 
 @dataclass

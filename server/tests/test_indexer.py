@@ -212,6 +212,22 @@ def test_comment_folds_in_physical_lines(tmp_path, data, expected):
     assert sorted((f.start, f.end, f.kind) for f in idx.folds) == expected
 
 
+def test_line_bounds_search_only_their_line():
+    import time
+
+    from uvmls.indexer import _line_end, _line_start
+
+    data = b"a\r\nbc\rd\ne"
+    assert [_line_start(data, i) for i in range(len(data) + 1)] == [0, 0, 2, 3, 3, 3, 6, 6, 8, 8]
+    assert [_line_end(data, i) for i in range(len(data) + 1)] == [1, 1, 2, 5, 5, 5, 7, 7, 9, 9]
+    # A file without CRs: each comment's line is found without a search through the whole file.
+    data = b"// comment\n" * 400000
+    start = time.perf_counter()
+    for offset in range(0, 220000, 11):
+        _line_start(data, len(data) - offset), _line_end(data, offset)
+    assert time.perf_counter() - start < 0.3
+
+
 def test_generated_structural_endpoints(tmp_path):
     path = tmp_path / "structure.sv"
     source = '''`define START class
