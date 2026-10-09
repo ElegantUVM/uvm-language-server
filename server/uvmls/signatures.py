@@ -12,7 +12,8 @@ from .workspace import substitute_params
 
 
 LIMIT = 65536
-GAP_RE = re.compile(r"(?:\s+|//[^\r\n]*|/\*.*?\*/)*", re.S)  # what may follow an unfinished call
+# What may follow an unfinished call: blanks, comments and a backtick slang skips as no directive.
+GAP_RE = re.compile(r"(?:\s+|//[^\r\n]*|/\*.*?\*/|`(?![A-Za-z_]))*", re.S)
 
 
 def call_at(ws, path, line, col):

@@ -644,6 +644,9 @@ def test_unfinished_call_keeps_enclosing_context(doc, call, needle):
     ('if (1) begin\n      f(1, 2,\n      \n    end', 'f(1, 2,\n      ', 2),
     ('f(1, /* open\n   ', '/* open\n   ', None),
     ('f(1, 2);\n    ', 'f(1, 2);\n    ', None),
+    ('f(`', 'f(`', 0),  # a backtick just typed, which slang skips
+    ('f(`);', 'f(`', 0),
+    ('f(`, 2);', 'f(`', 0),
 ])
 def test_unfinished_call_reaches_the_next_token(doc, eol, call, needle, active):
     # The last statement before endfunction: nothing follows for the parser to take into it.
