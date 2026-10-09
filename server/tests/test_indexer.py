@@ -198,6 +198,20 @@ typedef int t_foo;
     assert len([r for r in idx.directives if r.path == header]) == 2
 
 
+@pytest.mark.parametrize("data,expected", [
+    (b"\xef\xbb\xbf// one\n// two\nclass c;\n  int x;\nendclass\n", [(0, 1, "comment"), (2, 3, None)]),
+    (b"// one\r\n// two\r\n/* a\r\n b */\r\nclass c;\r\n  int x;\r\nendclass\r\n",
+     [(0, 1, "comment"), (2, 3, "comment"), (4, 5, None)]),
+    # To an editor an LF CR pair is two line breaks: a blank line parts the comments.
+    (b"// one\n\r// two\n\rclass c;\n\r  int x;\n\rendclass\n\r", [(4, 7, None)]),
+])
+def test_comment_folds_in_physical_lines(tmp_path, data, expected):
+    path = tmp_path / "comments.sv"
+    path.write_bytes(data)
+    idx = Indexer([], {}, use_shim=True).parse(str(path))
+    assert sorted((f.start, f.end, f.kind) for f in idx.folds) == expected
+
+
 def test_generated_structural_endpoints(tmp_path):
     path = tmp_path / "structure.sv"
     source = '''`define START class

@@ -511,6 +511,12 @@ def _line_start(data: bytes, offset: int) -> int:
     return max(data.rfind(b"\n", 0, offset), data.rfind(b"\r", 0, offset)) + 1
 
 
+def _alone(data: bytes, offset: int) -> bool:
+    """Whether only white space, or a file's byte order mark, comes before `offset` on its line."""
+    start = _line_start(data, offset)
+    return not data[start:offset].removeprefix(b"\xef\xbb\xbf" if start == 0 else b"").strip()
+
+
 def _line_end(data: bytes, offset: int) -> int:
     ends = [i for i in (data.find(b"\n", offset), data.find(b"\r", offset)) if i >= 0]
     return min(ends, default=len(data))
@@ -1790,7 +1796,7 @@ class Extractor:
                 return  # what follows an included file's last token comes after its `include
             k = t.kind
             if k is LINE_COMMENT:
-                if not data[_line_start(data, start):start].strip():
+                if _alone(data, start):
                     line = self.offset_line(loc.buffer, start)
                     if marker := REGION_RE.match(raw):
                         self._markers.setdefault(path, set()).add((line, not marker.group(1)))
