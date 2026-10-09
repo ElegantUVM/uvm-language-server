@@ -585,6 +585,27 @@ endclass
     assert not lib.structures_pending and lib.structures
 
 
+def test_an_edit_keeps_its_parse_for_the_first_request(tmp_path):
+    from unittest.mock import patch
+
+    from test_fixes import index
+    from uvmls.indexer import Indexer
+    from uvmls.navigation import Navigator
+
+    text = 'class c;\n  function void f();\n    if (1) begin\n    end\n  endfunction\nendclass\n'
+    ws = index(tmp_path, {'t.sv': text})
+    path = str(tmp_path / 't.sv')
+    assert not ws._trees  # a full index keeps none: most roots are never asked about
+    ws.update_document(path, text.replace('(1)', '(2)'))
+    assert set(ws._trees) == {path}
+    with patch.object(Indexer, '_tree', side_effect=AssertionError('parsed again')):
+        folds = Navigator(ws).folding_ranges(path)
+    assert folds and not ws._trees  # walked once, then let go
+    ws.update_document(path, None)  # closed: the file on disk again
+    assert set(ws._trees) == {path}
+    assert Navigator(ws).folding_ranges(path) == folds and not ws._trees
+
+
 
 STRUCTURES_EVERYWHERE = '''module m #(parameter N = 2) (input logic clk);
   for (genvar i = 0; i < N; i++) begin : g

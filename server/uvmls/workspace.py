@@ -237,6 +237,7 @@ class Workspace:
         self.overrides: dict[str, str] = {}
         self.version = 0
         self._grouped: dict[tuple[int, str], tuple] = {}  # (id(index), kind): (index, records by file)
+        self._trees: dict[str, tuple] = {}  # what the last edit parsed, by root: its first request walks it
         self.last_index_seconds = 0.0
         self._include_candidates: tuple[tuple, dict[str, list[str]],
                                          dict[str, tuple[int, int, int] | None]] | None = None
@@ -303,6 +304,7 @@ class Workspace:
                                    library_dirs=sorted({os.path.dirname(r) for r in s.library_roots}),
                                    library_guard=s.uvm_guard)
             self.indices = {}
+            self._trees = {}
             for root in self.sources.roots:
                 self.indices[root] = self.indexer.parse(
                     root, self.overrides, library=root in self.sources.library_roots)
@@ -346,9 +348,10 @@ class Workspace:
                     return []
                 roots = [path]
                 self.ephemeral.add(path)
+            self._trees = {}
             for root in roots:
                 lib = self.sources is not None and root in self.sources.library_roots
-                self.indices[root] = self.indexer.parse(root, self.overrides, library=lib)
+                self.indices[root] = self.indexer.parse(root, self.overrides, library=lib, trees=self._trees)
             self._rebuild()
             return roots
 
@@ -475,7 +478,8 @@ class Workspace:
         for root in self.roots_for(path):
             idx = self.indices[root]
             if idx.structures_pending:
-                idx.structures, idx.folds, idx.directives = self.indexer.structures(root, self.overrides, idx.library)
+                idx.structures, idx.folds, idx.directives = self.indexer.structures(
+                    root, self.overrides, idx.library, self._trees.pop(root, None))
                 idx.structures_pending = False
                 for kind in ("structures", "folds", "directives"):
                     self._grouped.pop((id(idx), kind), None)

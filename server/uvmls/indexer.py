@@ -593,28 +593,33 @@ class Indexer:
         self._real_macros = not use_shim and any(
             os.path.isfile(os.path.join(d, "uvm_macros.svh")) for d in self.include_dirs)
 
-    def parse(self, root: str, overrides: dict[str, str] | None = None,
-              library: bool = False, complete: bool = False) -> FileIndex:
+    def parse(self, root: str, overrides: dict[str, str] | None = None, library: bool = False,
+              complete: bool = False, trees: dict | None = None) -> FileIndex:
         """A root's index; with `complete`, also the structures, folds and directives that
-        indexing otherwise leaves for the first request (structures())."""
+        indexing otherwise leaves for the first request (structures()). `trees` keeps what was
+        parsed, by root, for that request to walk instead of parsing again."""
         overrides = overrides or {}
         built = self._tree(root, overrides, library)
         if isinstance(built, FileIndex):
             return built
+        if trees is not None:
+            trees[root] = built
         extractor = Extractor(*built, root, library, overrides, self.library_dirs)
         idx = extractor.run()
         if complete:
             extractor.collect_structures()
         return idx
 
-    def structures(self, root: str, overrides: dict[str, str] | None = None, library: bool = False
-                   ) -> tuple[list[StructuralPair], list[FoldRegion], list[Range]]:
+    def structures(self, root: str, overrides: dict[str, str] | None = None, library: bool = False,
+                   built=None) -> tuple[list[StructuralPair], list[FoldRegion], list[Range]]:
         """A root's structural pairs, folds and directive ranges, which indexing leaves for the
-        first request: a walk of every token, which most roots are never asked about."""
+        first request: a walk of every token, which most roots are never asked about. `built` is
+        the root's parse when parse() kept it."""
         overrides = overrides or {}
-        built = self._tree(root, overrides, library)
-        if isinstance(built, FileIndex):
-            return [], [], []
+        if built is None:
+            built = self._tree(root, overrides, library)
+            if isinstance(built, FileIndex):
+                return [], [], []
         return Extractor(*built, root, library, overrides, self.library_dirs).collect_structures()
 
     def _tree(self, root: str, overrides: dict[str, str], library: bool):
