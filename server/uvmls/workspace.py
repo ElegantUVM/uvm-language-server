@@ -217,6 +217,17 @@ class _PerFile(dict):
         return found if found or default is None else default
 
 
+def _encloses(outer: ClassInfo, cls: ClassInfo) -> bool:
+    """Whether `cls` is declared in the body of `outer`."""
+    return cls.outer_class == outer.name and cls.range.path == outer.decl_range.path and \
+        outer.decl_range.contains(cls.range.line, cls.range.col)
+
+
+def _precedes(cls: ClassInfo, at: Range) -> bool:
+    """Whether `cls` is declared before `at`; in another file, the index cannot tell."""
+    return cls.range.path != at.path or (cls.range.line, cls.range.col) < (at.line, at.col)
+
+
 def _never(cond: tuple[str, str], given: set[str], known: set[str]) -> bool:
     """Whether an `ifdef branch condition is false whatever order files are read in: `ifndef of a
     macro the configuration defines, or `ifdef of one nothing defines."""
@@ -702,10 +713,11 @@ class Workspace:
     def resolve_spec(self, name: str, scope: str | None = None, args: list[str] | None = None,
                      ctx: ClassInfo | None = None, depth: int = 0, *,
                      package: str | None = None, imports: list[str] | None = None, strict: bool = False,
-                     near: Range | None = None, members: bool = True) -> Spec | None:
+                     near: Range | None = None, members: bool = True, at: Range | None = None) -> Spec | None:
         """Resolve a type name (following typedefs) to an indexed or built-in class. A strict
         lookup sees only what is visible at `near` (by default the context class). `members`
-        includes the typedefs the context class declares, inherits or is nested in."""
+        includes the typedefs the context class declares, inherits or is nested in. `at` is where
+        the name is written, which a nested class must be declared before."""
         if depth > 8:
             return None
         package = package if package is not None else ctx.package if ctx else None
@@ -716,8 +728,10 @@ class Workspace:
         if args:
             here = Scope.of(ctx, package, imports, site)
             args = [a if isinstance(a, Bound) else Bound(a, here) for a in args]
+        # The position tells only among nested classes: most names share one result per context.
+        at = (at or site) if ctx is not None and not scope and self._nested_named(name) else None
         cache_key = (name, scope, tuple(map(_arg_key, args)), ctx.qualname if ctx else None,
-                     package, tuple(imports), strict, near, members)
+                     package, tuple(imports), strict, near, members, at)
         if depth == 0 and cache_key in self._spec_cache:
             return self._spec_cache[cache_key]
         result: Spec | None = None
@@ -728,13 +742,13 @@ class Workspace:
             td = self.find_typedef(name, owner.package, owner.name, strict=strict, near=owner.range) if owner else None
             if td and td.target:
                 result = self._spec_from_typedef(td, owner, depth, strict)
-            elif owner is not None and (nested := self.nested_class(owner, name, strict)) is not None:
+            elif owner is not None and (nested := self.nested_class(owner, name, strict, lexical=False)) is not None:
                 result = Spec(name=nested.name, cls=nested, args=args)
         elif ctx is not None and not scope:
             if members:
                 found, result = self._class_typedef(ctx, name, depth, strict)
                 settled = found and strict
-            if result is None and not settled and (nested := self.nested_class(ctx, name, strict, members)):
+            if result is None and not settled and (nested := self.nested_class(ctx, name, strict, members, at)):
                 result = Spec(name=nested.name, cls=nested, args=args)
         if result is None and not settled:
             cls = self.find_class(name, scope or package, [scope] if scope else imports, strict, near)
@@ -776,26 +790,33 @@ class Workspace:
         """The classes a nested class is declared in, innermost first."""
         out, cur = [], cls
         while cur is not None and cur.outer_class and len(out) < 16:
-            cur = self.find_class(cur.outer_class, cur.package)
+            cur = next((c for c in self.classes_by_name.get(cur.outer_class, ()) if _encloses(c, cur)), None) \
+                or self.find_class(cur.outer_class, cur.package)
             if cur is not None:
                 out.append(cur)
         return out
 
-    def nested_class(self, cls: ClassInfo, name: str, strict: bool = False,
-                     members: bool = True) -> ClassInfo | None:
-        """The class `name` declared in `cls` (when `members`), in a class enclosing it or in a
-        base of those, nearest first: a nested class is a member, which subclasses inherit
-        (IEEE 1800 8.25)."""
+    def _nested_named(self, name: str) -> bool:
+        return any(c.outer_class for c in self.classes_by_name.get(name, ()))
+
+    def nested_class(self, cls: ClassInfo, name: str, strict: bool = False, members: bool = True,
+                     before: Range | None = None, lexical: bool = True) -> ClassInfo | None:
+        """The class `name` declared in `cls` (when `members`) or in a base of it and, when
+        `lexical`, in the classes enclosing `cls` or their bases, nearest first: a nested class is
+        a member, which subclasses inherit (IEEE 1800 8.25). The code of its own outer class sees
+        it only after its declaration: `before` is where the name is written."""
         cands = [c for c in self.classes_by_name.get(name, ()) if c.outer_class]
         if not cands:
             return None
-        for outer in [cls, *self.outer_classes(cls)] if members else self.outer_classes(cls):
+        owners = [cls, *self.outer_classes(cls)] if lexical else [cls]
+        for outer in owners if members else owners[1:]:
             for entry in self.chain(outer, strict=strict):
                 owner = entry.spec.cls
-                if owner is not None:
-                    for c in cands:
-                        if c.outer_class == owner.name and c.package == owner.package:
-                            return c
+                if owner is None:
+                    continue
+                for c in cands:
+                    if _encloses(owner, c) and (owner is not outer or before is None or _precedes(c, before)):
+                        return c
         return None
 
     def _spec_from_typedef(self, td: Typedef, owner: ClassInfo | None, depth, strict=False) -> Spec | None:
@@ -844,7 +865,7 @@ class Workspace:
             package, _, name = scope.rpartition("::")
             outer = self.resolve_spec(name, package or None,
                                       [self._bind_arg(a, ctx, bindings, strict, depth) for a in ref.scope_args],
-                                      ctx, depth, strict=strict, **where)
+                                      ctx, depth, strict=strict, at=ref.range, **where)
         if outer is not None and outer.cls is not None:
             scope = outer.cls.qualname
             if outer.args:  # the specialization's typedef has its parameters bound
@@ -853,7 +874,7 @@ class Workspace:
                 if found:
                     return spec
         args = [self._bind_arg(a, ctx, bindings, strict, depth) for a in ref.args]
-        return self.resolve_spec(ref.name, scope, args, ctx, depth, strict=strict, **where)
+        return self.resolve_spec(ref.name, scope, args, ctx, depth, strict=strict, at=ref.range, **where)
 
     def _bound_member_typedef(self, cls: ClassInfo, name: str, bindings: dict[str, str], strict: bool,
                               depth: int) -> tuple[bool, Spec | None]:
@@ -919,7 +940,7 @@ class Workspace:
             if bound is None:
                 bound = next(p.default for p in cls.params if p.name == ref.name)
             return self.resolve_type_text(bound, cls, strict, members=False)
-        spec = self.resolve_spec(ref.name, ref.scope, ref.args, cls, strict=strict, members=False)
+        spec = self.resolve_spec(ref.name, ref.scope, ref.args, cls, strict=strict, members=False, at=ref.range)
         if strict and (spec is None or spec.cls is None) and cls.package is None and ref.scope is None:
             # Outside a package, a $unit import in another file of the compilation unit (-mfcu)
             # can make the base visible; the index cannot see it, so take the only candidate.
