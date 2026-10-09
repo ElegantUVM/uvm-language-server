@@ -1221,7 +1221,11 @@ class Extractor:
             parent = node
             while parent.parent is not None and parent.kind not in CALL_BOUNDARY_KINDS:
                 parent = parent.parent
-            boundary = self.node_range(parent)
+            # It ends where its text does: a missing token's range covers the character after it,
+            # half of a CRLF line end.
+            last = parent.getLastToken()
+            end = last.location if last.isMissing else last.range.end
+            boundary = self.make_range(self.file_loc(parent.getFirstToken().location)[0], self.file_loc(end)[0])[0]
             if boundary is None:
                 return
         if opening is None or rng is None or rng.path != opening.path:

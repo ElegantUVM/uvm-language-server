@@ -12,6 +12,7 @@ from .workspace import substitute_params
 
 
 LIMIT = 65536
+GAP_RE = re.compile(r"(?:\s+|//[^\r\n]*|/\*.*?\*/)*", re.S)  # what may follow an unfinished call
 
 
 def call_at(ws, path, line, col):
@@ -30,7 +31,18 @@ def call_at(ws, path, line, col):
             continue
         closing = ft.span(call.closing) if call.closing else None
         boundary = ft.span(call.boundary) if call.boundary else None
-        end = closing[0] if closing else boundary[1] if boundary else opening[1]
+        if closing:
+            end = closing[0]
+        elif boundary:
+            end = boundary[1]
+            # Typing goes on in the blanks, comments and inactive text before the next token.
+            while cursor > end:
+                gap = GAP_RE.match(ft.text, end, opening[1] + LIMIT).end()
+                end = next((b for a, b in directives if a == gap < b), gap)
+                if end == gap:
+                    break
+        else:
+            end = opening[1]
         if opening[1] <= cursor <= end and cursor - opening[1] <= LIMIT:
             candidates.append((opening[1], end, call))
     if not candidates:

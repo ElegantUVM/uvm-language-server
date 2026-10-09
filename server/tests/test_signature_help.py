@@ -577,6 +577,29 @@ def test_unfinished_call_keeps_enclosing_context(doc, call, needle):
     signature(help_at(doc, needle), ['int count = 7'])
 
 
+@pytest.mark.parametrize('eol', ['\n', '\r\n'])
+@pytest.mark.parametrize('call,needle,active', [
+    ('f(1,  ', 'f(1,  ', 1),
+    ('f(\n        1,\n        ', '1,\n        ', 1),
+    ('f(\n        ', 'f(\n        ', 0),
+    ('f(1, // a, b\n\n        ', '// a, b\n\n        ', 1),
+    ('f(1, /* a, b */  ', '/* a, b */  ', 1),
+    ('f(1,\n`ifdef NEVER_DEFINED\n 2,\n`endif\n   ', '`endif\n   ', 1),
+    ('if (1) begin\n      f(1, 2,\n      \n    end', 'f(1, 2,\n      ', 2),
+    ('f(1, /* open\n   ', '/* open\n   ', None),
+    ('f(1, 2);\n    ', 'f(1, 2);\n    ', None),
+])
+def test_unfinished_call_reaches_the_next_token(doc, eol, call, needle, active):
+    # The last statement before endfunction: nothing follows for the parser to take into it.
+    doc.change(SOURCE.replace('CALL', call).replace('\n', eol))
+    found = help_at(doc, needle.replace('\n', eol))
+    if active is None:
+        assert found is None
+    else:
+        signature(found, ['input byte a', 'input byte b', 'output bit[3:0] bits[]', 'const ref string text = "T,a"'],
+                  active)
+
+
 def test_public_typedef_is_not_ambiguous_with_another_class_member(doc):
     text = SOURCE.replace('class child extends base #(byte);', '''typedef base #(string) public_t;
 class unrelated;
