@@ -206,7 +206,7 @@ class Navigator:
                     return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
         package, imports = self._package_scope(cls, unit)
         found = ws.find_class(name, package, imports, strict=strict, near=near)
-        if found is not None:
+        if found is not None and not ws.typedef_hides(found, name, package):
             return [Target(found, spec=Spec(found.name, found))]
         td = ws.find_typedef(name, package, cls.name if cls else None, imports, strict=strict, near=near)
         if td is not None:

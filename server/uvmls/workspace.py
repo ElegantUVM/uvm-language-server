@@ -667,6 +667,12 @@ class Workspace:
                     return t
         return (pkg_level or cands)[0] if not owner_class or pkg_level else None
 
+    def typedef_hides(self, cls: ClassInfo, name: str, package: str | None) -> bool:
+        """Whether `package`'s own typedef `name` hides `cls`, which an import brings in: a
+        package's declaration comes before what it imports by wildcard (IEEE 1800 26.3)."""
+        return package is not None and cls.package != package and \
+            any(t.package == package and t.owner_class is None for t in self.typedefs_by_name.get(name, ()))
+
     def find_unit(self, name: str, kind: str | None = None) -> DesignUnit | None:
         for u in self.units_by_name.get(name, []):
             if kind is None or u.kind == kind:
@@ -707,7 +713,8 @@ class Workspace:
             settled = found and strict
         if result is None and not settled:
             cls = self.find_class(name, scope or package, [scope] if scope else imports, strict, near)
-            if cls is not None and (scope is None or cls.package == scope or not cls.package):
+            if cls is not None and (scope is None or cls.package == scope or not cls.package) and \
+                    not self.typedef_hides(cls, name, scope or package):
                 result = Spec(name=cls.name, cls=cls, args=args)
         if result is None and not settled:
             td = self.find_typedef(name, scope or package, ctx.name if ctx else None,
