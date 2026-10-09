@@ -828,7 +828,10 @@ def _indexed_lines(ls: UvmLanguageServer, path: str) -> list[str]:
 def _indexed_column(ls: UvmLanguageServer, path: str, pos: T.Position) -> int:
     lines = _indexed_lines(ls, path)
     decoded = ls.workspace.position_codec.position_from_client_units(lines, pos)
-    return len(lines[pos.line][:decoded.character].encode("utf-8")) if pos.line < len(lines) else 0
+    if pos.line >= len(lines):
+        return 0
+    # An open buffer slang could not read can hold a lone surrogate the client sent as an escape.
+    return len(lines[pos.line][:decoded.character].encode("utf-8", "surrogatepass"))
 
 
 def _indexed_range(ls: UvmLanguageServer, rng: Range) -> T.Range:

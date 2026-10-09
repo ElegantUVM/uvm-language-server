@@ -173,6 +173,19 @@ def test_escaped_identifiers(tmp_path, encoding, offset):
         c.close()
 
 
+def test_lone_surrogate_in_buffer(client, tmp_path):
+    # Sent as the escape \ud83d; slang cannot read the buffer, so requests find nothing.
+    path = tmp_path / "surrogate.sv"
+    path.write_text("module s; endmodule\n")
+    doc = Doc(client, str(path), 'module s;\n  string t = "\ud83d"; int x = 1; int y = x;\nendmodule\n')
+    try:
+        pos = {"line": 1, "character": doc.text.split("\n")[1].index("x;")}
+        for method in ("textDocument/hover", "textDocument/definition", "textDocument/documentHighlight"):
+            assert client.request(method, {"textDocument": {"uri": doc.uri}, "position": pos}) in (None, [])
+    finally:
+        doc.close()
+
+
 def test_line_directive_identifiers(doc):
     text = '`line 100 "virtual.sv" 0\nclass c;\n int value;\nendclass\n'
     doc.change(text)
