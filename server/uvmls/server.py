@@ -781,6 +781,17 @@ async def _format(ls: UvmLanguageServer, params, rng: T.Range | None = None):
 REQUEST_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="uvmls-request")
 
 
+REQUEST_CACHE_SIZE = 64
+
+
+def _remember(cache: dict, key, value):
+    """Keep a request's answer until the next rebuild. Reading or scrolling a file without editing
+    it asks at many positions and ranges: start over when the cache is full."""
+    if len(cache) >= REQUEST_CACHE_SIZE:
+        cache.clear()
+    cache[key] = value
+
+
 async def _off_loop(fn, *args):
     """Run a request's index lookups in a worker: a reindex or a cold inlay-hint request can hold
     the index lock for seconds, and waiting for it on the event loop would stall every request."""
@@ -883,7 +894,7 @@ async def document_highlight(ls: UvmLanguageServer, params: T.DocumentHighlightP
     if version != ls.ws.version or documents != ls.documents or ls.pending or \
             revisions != {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
         return []
-    ls.ws._highlight_cache[key] = result
+    _remember(ls.ws._highlight_cache, key, result)
     return result
 
 
@@ -909,7 +920,7 @@ async def folding_range(ls: UvmLanguageServer, params: T.FoldingRangeParams):
     if version != ls.ws.version or documents != ls.documents or ls.pending or \
             revisions != {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
         return []
-    ls.ws._folding_cache[key] = result
+    _remember(ls.ws._folding_cache, key, result)
     return result
 
 
@@ -1109,7 +1120,7 @@ async def signature_help(ls: UvmLanguageServer, params: T.SignatureHelpParams):
     if version != ls.ws.version or documents != ls.documents or ls.pending or \
             revisions != {uri: doc.version for uri, doc in ls.workspace.text_documents.items()}:
         return None
-    ls.ws._signature_cache[key] = result
+    _remember(ls.ws._signature_cache, key, result)
     return result
 
 
@@ -1145,9 +1156,6 @@ def _compute_signature(ls: UvmLanguageServer, params: T.SignatureHelpParams, opt
         return result
 
 
-INLAY_CACHE_SIZE = 64
-
-
 async def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
     if ls.settings.get("inlayHints", True) is False:
         return []
@@ -1168,10 +1176,7 @@ async def inlay_hint(ls: UvmLanguageServer, params: T.InlayHintParams):
         if version == ls.ws.version and selected_test == ls.settings.get("inlayHints.test"):
             if ls.settings.get("inlayHints", True) is False:
                 return []
-            cache = ls.ws._inlay_hint_cache
-            if len(cache) >= INLAY_CACHE_SIZE:  # scrolling a file without editing it asks for many ranges
-                cache.clear()
-            cache[key] = hints
+            _remember(ls.ws._inlay_hint_cache, key, hints)
             return hints
     return []
 

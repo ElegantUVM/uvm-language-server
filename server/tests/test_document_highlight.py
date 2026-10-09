@@ -229,6 +229,34 @@ def test_deadline_and_intervening_edit(tmp_path):
     asyncio.run(run())
 
 
+def test_request_caches_are_bounded(tmp_path):
+    import asyncio
+
+    from lsprotocol import types as T
+    from uvmls import server as module
+    from uvmls.documents import Workspace as LspWorkspace
+
+    async def run():
+        path = tmp_path / "a.sv"
+        path.write_text("class a;\n" + "".join(f"  int v{i};\n" for i in range(100)) + "endclass\n")
+        ls = module.UvmLanguageServer()
+        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol.client_capabilities = T.ClientCapabilities()
+        ls.workspace_roots = [str(tmp_path)]
+        ls.settings = {"useBundledUvm": False}
+        ls.ws.configure(ls.config())
+        document = T.TextDocumentIdentifier(path.as_uri())
+        # Moving the cursor without editing asks at every position it visits.
+        for line in range(1, 101):
+            position = T.Position(line, 7)
+            assert await module.document_highlight(ls, T.DocumentHighlightParams(document, position))
+            await module.signature_help(ls, T.SignatureHelpParams(document, position))
+            assert 0 < len(ls.ws._highlight_cache) <= module.REQUEST_CACHE_SIZE
+            assert 0 < len(ls.ws._signature_cache) <= module.REQUEST_CACHE_SIZE
+
+    asyncio.run(run())
+
+
 def pair_highlights(text, opening, closing, encoding="utf-16-le"):
     return highlights(text, [(opening, 0, opening.split()[0]), (closing, 0, closing.split()[0])], encoding)
 
