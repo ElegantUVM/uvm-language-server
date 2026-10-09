@@ -514,3 +514,42 @@ def test_blocks_typed_into_build_phase(doc):
     for needle in ("begin : outer", "begin : inner", "end : outer"):
         assert highlight_at(doc, needle) is None
 
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-8"])
+def test_unsaved_edits_in_two_files_then_close(tb, encoding):
+    from test_folding_range import agent_folds, folds
+    from test_signature_help import help_at, signature
+
+    codec = "utf-16-le" if encoding == "utf-16" else "utf-8"
+    c = start(tb, capabilities={"general": {"positionEncodings": [encoding]}, "textDocument": {
+        "signatureHelp": {}, "documentHighlight": {}, "foldingRange": {}}})
+    try:
+        agent = Doc(c, os.path.join(tb, "agent", "alu_agent.svh"))
+        driver = Doc(c, os.path.join(tb, "agent", "alu_driver.svh"))
+        original = agent.text
+        create = ["string name", "uvm_component parent", 'string contxt = ""']
+        agent.change("// 😀 one line down\n" + original.replace(
+            "      m_driver    =", "      /* 😀 */ m_driver    =").replace(
+            "    ap = m_monitor.ap;", "    /* 😀 */ m_driver.drive_item(null, 1);\n    ap = m_monitor.ap;"))
+        # Asked straight after each edit: never the positions or formals the index had before it.
+        signature(help_at(agent, 'create("m_driver",', encoding=codec), create, 1)
+        # An excess argument selects the last formal.
+        signature(help_at(agent, "m_driver.drive_item(null,", encoding=codec), ["alu_seq_item item"], 0)
+        expected = highlights(agent.text, [("m_driver;", 0, "m_driver"), ("m_driver    =", 0, "m_driver"),
+                                           ("m_driver.drive_item", 0, "m_driver"),
+                                           ("m_driver.seq_item_port", 0, "m_driver")], codec)
+        assert highlight_at(agent, "m_driver;", 0, codec) == expected
+        assert highlight_at(agent, "m_driver    =", 3, codec) == expected
+        assert folds(agent) == agent_folds(agent.text)
+        driver.change(driver.text.replace("extern virtual protected task drive_item(alu_seq_item item);",
+                                          "extern virtual protected task drive_item(alu_seq_item changed, int n = 5);"))
+        signature(help_at(agent, "m_driver.drive_item(null,", encoding=codec), ["alu_seq_item changed", "int n = 5"], 1)
+        driver.close()
+        signature(help_at(agent, "m_driver.drive_item(null,", encoding=codec), ["alu_seq_item item"], 0)
+        agent.close()
+        agent.text = original
+        assert highlight_at(agent, "m_driver;", 0, codec) == agent_highlights(original, codec)
+        assert folds(agent) == agent_folds(original)
+        signature(help_at(agent, 'create("m_driver",', encoding=codec), create, 1)
+    finally:
+        c.close()
