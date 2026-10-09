@@ -321,9 +321,9 @@ class Navigator:
             for c in ws.classes_by_name.get(name, []):
                 if c.package == pkg.name:
                     return [Target(c, spec=Spec(c.name, c))]
-            td = ws.find_typedef(name, pkg.name)
+            td = ws.find_typedef(name, pkg.name, strict=strict)
             if td is not None and td.package == pkg.name:
-                return [Target(td, spec=ws.resolve_spec(name, pkg.name))]
+                return [Target(td, spec=ws.resolve_spec(name, pkg.name, strict=strict))]
             for v in pkg.variables:
                 if v.name == name:
                     return [Target(v, owner=pkg)]

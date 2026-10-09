@@ -990,3 +990,37 @@ endprogram
 '''
     assert labels_in(tmp_path, text, ['; go(', '; solo(']) == \
         ['function void go(string unit_arg)', 'function void solo(int solo_arg)']
+
+
+@pytest.mark.parametrize('imports,label', [
+    ('import first::*;\nimport second::*;', None),
+    ('', None),
+    ('import second::*;\nimport first::box;', 'function void go(int first_arg)'),
+    ('import second::*;', 'function void go(string second_arg)'),
+])
+def test_package_qualified_typedef(tmp_path, imports, label):
+    text = '''`include "uvm_macros.svh"
+package first;
+import uvm_pkg::*;
+class box extends uvm_object;
+  `uvm_object_utils(box)
+  static function void go(int first_arg); endfunction
+endclass
+endpackage
+package second;
+import uvm_pkg::*;
+class box extends uvm_object;
+  `uvm_object_utils(box)
+  static function void go(string second_arg); endfunction
+endclass
+endpackage
+package calls;
+IMPORTS
+typedef box alias_t;
+endpackage
+class caller;
+  function void t(); calls::alias_t::go(1); calls::alias_t::type_id::create("x"); endfunction
+endclass
+'''.replace('IMPORTS', imports)
+    create = 'function box create(string name = "", uvm_component parent = null, string contxt = "")'
+    assert labels_in(tmp_path, text, ['alias_t::go(', '::create('], bundled=True) == [label, label and create]
