@@ -182,7 +182,8 @@ class Context:
     def not_editable(self, path: str) -> str | None:
         """Why a fix may not edit a file, or None. The library is never edited, nor a file outside
         the workspace folders (other than the one asked about)."""
-        if path in self.ws.library_files or is_bundled(path):
+        # An editor may reach a library file through a link.
+        if path in self.ws.library_files or os.path.realpath(path) in self.ws.library_real or is_bundled(path):
             return f"{os.path.basename(path)} is part of the UVM library"
         if path != self.path and not any(path.startswith(os.path.join(r, "")) for r in self.client.roots):
             return f"{path} is outside the workspace"

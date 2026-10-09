@@ -2003,3 +2003,12 @@ endclass
     assert offered(ws, d)
     ws.class_by_qual['item'].library = True
     assert offered(ws, d, disabled_support=True) == []
+
+
+def test_a_library_file_reached_through_a_link_is_not_editable(tmp_path):
+    w = index(tmp_path, {'lib/base.svh': 'class base; endclass\n', 't.sv': 'class t; endclass\n'})
+    (tmp_path / 'link.svh').symlink_to(tmp_path / 'lib/base.svh')
+    w.library_real = frozenset({os.path.realpath(tmp_path / 'lib/base.svh')})
+    ctx = Context(w, FileTexts(), Client(roots=[str(tmp_path)]), str(tmp_path / 't.sv'))
+    assert ctx.not_editable(str(tmp_path / 'link.svh')) == "link.svh is part of the UVM library"
+    assert ctx.not_editable(str(tmp_path / 't.sv')) is None
