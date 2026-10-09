@@ -479,6 +479,34 @@ def test_library_files_through_links(clients, fake, tmp_path, ranged, indexed):
     assert applied(user.text, request(user)) == "// good\n"
 
 
+@pytest.mark.parametrize("indexed", [False, True])
+@pytest.mark.parametrize("layout", ["above_workspace", "unlisted_wrapper"])
+def test_lone_uvm_pkg_ancestor_is_not_a_library(clients, fake, tmp_path, indexed, layout):
+    proj = tmp_path / "work" / "proj"
+    (proj / "tb").mkdir(parents=True)
+    (proj / "tb" / "t.sv").write_text("// BAD\n")
+    settings = {"useBundledUvm": True}
+    if layout == "above_workspace":
+        (tmp_path / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n")
+    else:
+        (proj / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n")
+        (proj / "tb.f").write_text("tb/t.sv\n")
+        settings["filelists"] = [str(proj / "tb.f")]
+    c = clients(proj, {"path": str(fake.path)}, initialize_index=indexed, **settings)
+    if indexed:
+        stats = c.request("uvm/stats", {})
+        assert stats["uvm"]["source"] == "bundled" and stats["files"] == 1
+    doc = Doc(c, str(proj / "tb" / "t.sv"))
+    assert applied(doc.text, format_doc(doc)) == "// good\n"
+    assert applied(doc.text, format_range(doc, (0, 0), (1, 0))) == "// good\n"
+    # A UVM source tree stays library code even where the project uses another UVM.
+    unused = tmp_path / "uvm-1.1d" / "src"
+    (unused / "base").mkdir(parents=True)
+    for name in ("uvm_pkg.sv", "uvm_macros.svh", "base/uvm_object.svh"):
+        (unused / name).write_text("// BAD\n")
+    assert format_doc(Doc(c, str(unused / "base" / "uvm_object.svh"))) == []
+
+
 def selection(start, end):
     return {"start": {"line": start[0], "character": start[1]},
             "end": {"line": end[0], "character": end[1]}}

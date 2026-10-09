@@ -24,7 +24,7 @@ from .documents import Workspace as LspWorkspace
 from .lints import lint
 from .model import Diag, Range, utf8_prefix
 from .navigation import Navigator
-from .project import ProjectConfig, _uvm_src_dir, is_bundled, is_sv_file, norm
+from .project import ProjectConfig, _is_uvm_src, _uvm_src_dir, is_bundled, is_sv_file, norm
 from .views import class_graph, config_db_report, effective_type, topology
 from .workspace import Workspace, _same_text
 
@@ -712,14 +712,15 @@ def _library_source(ls: UvmLanguageServer, path: str) -> bool:
     if is_bundled(path) or real in ls.ws.library_real:
         return True
     names = (path, real)
-    # Discovery may still be running or describe the previous project settings.
-    if any(os.path.isfile(os.path.join(d, "uvm_pkg.sv")) for p in names for d in _parents(p)):
+    # A UVM source tree, even one discovery has not reached yet; a lone uvm_pkg.sv is not one.
+    if any(_is_uvm_src(d) for p in names for d in _parents(p)):
         return True
     cfg = ls.config()
     sources = ls.ws.sources
-    library = sources.uvm_dir if sources else _uvm_src_dir(cfg.uvm_home) or _uvm_src_dir(cfg.env_uvm_home)
-    return bool(library) and any(p.startswith(root + os.sep) for root in {library, os.path.realpath(library)}
-                                 for p in names)
+    # Discovery may still be running or describe the previous project settings.
+    dirs = (sources.uvm_dir if sources else None, _uvm_src_dir(cfg.uvm_home), _uvm_src_dir(cfg.env_uvm_home))
+    return any(p.startswith(root + os.sep) for d in dirs if d for root in {d, os.path.realpath(d)}
+               for p in names)
 
 
 def _text_position(codec, ft: fixes.FileText, offset: int) -> T.Position:
