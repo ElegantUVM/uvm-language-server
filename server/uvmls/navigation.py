@@ -190,22 +190,23 @@ class Navigator:
             for m in unit.methods:
                 if m.name == name:
                     return [Target(m, owner=unit)]
-        # Items of packages in scope, then of any package.
-        scopes = [package] + imports if package else imports
-        ordered = [ws.find_unit(p, "package") for p in scopes] + \
-                  ([u for u in ws.units if u.kind == "package"] if not strict else [])
-        matches = []
-        for u in ordered:
-            if u is None:
-                continue
-            for member in [*u.variables, *u.methods]:
-                if member.name == name:
-                    if not strict:
-                        return [Target(member, owner=u)]
-                    if not any(t.obj is member for t in matches):
-                        matches.append(Target(member, owner=u))
-        if matches:
-            return matches if len(matches) == 1 else []
+        # Items of packages in scope, nearest first, then of any package.
+        levels = [[ws.find_unit(p, "package") for p in level] for level in ws.import_order(name, package, imports)]
+        if not strict:
+            levels.append([u for u in ws.units if u.kind == "package"])
+        for level in levels:
+            matches = []
+            for u in level:
+                if u is None:
+                    continue
+                for member in [*u.variables, *u.methods]:
+                    if member.name == name:
+                        if not strict:
+                            return [Target(member, owner=u)]
+                        if not any(t.obj is member for t in matches):
+                            matches.append(Target(member, owner=u))
+            if matches:
+                return matches if len(matches) == 1 else []
         if name.startswith("uvm_"):
             spec = ws.resolve_spec(name, package=package, imports=imports, strict=strict, near=near)
             if spec is not None:

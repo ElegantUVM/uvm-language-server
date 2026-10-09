@@ -415,19 +415,27 @@ class Workspace:
         return self.structures_by_file.get(path, [])
 
     def visible_packages(self, imports) -> list[str]:
-        """Imported packages and the packages they re-export (`export p::*`, `export *::*`)."""
+        """Wildcard-imported packages and the packages they re-export (`export p::*`, `export *::*`)."""
         key = tuple(imports)
         if key not in self._visible_packages:
-            out, todo = [], list(imports)
+            out, todo = [], [p for p in imports if "::" not in p]
             while todo:
                 p = todo.pop(0)
                 if p not in out:
                     out.append(p)
                     for u in self.units_by_name.get(p, ()):
                         if u.kind == "package":
-                            todo += [q for q in u.exports if q != "*"] + (u.imports if "*" in u.exports else [])
+                            todo += [q for q in u.exports if q != "*"] + \
+                                [q for q in u.imports if "::" not in q and "*" in u.exports]
             self._visible_packages[key] = out
         return self._visible_packages[key]
+
+    @staticmethod
+    def import_order(name: str, package: str | None, imports) -> list[list[str]]:
+        """Where `name` is looked up, nearest first: the own package, packages that import it by
+        name (`import p::name`), then wildcard imports. A nearer one hides the farther ones."""
+        return [[package] if package else [], [p.split("::")[0] for p in imports if p.endswith("::" + name)],
+                [p for p in imports if "::" not in p]]
 
     def unit_at(self, rng: Range) -> DesignUnit | None:
         """The module, interface or program around a position, in its file or around the
@@ -450,14 +458,22 @@ class Workspace:
 
     def _visible(self, cands: list, package: str | None, imports, near: Range | None):
         """The one declaration of `cands` that a reference at `near`, in `package` with `imports`,
-        sees, or None when there is none or the index cannot tell which. Outside a package, a
-        module's own declarations come first and $unit ones compiled with `near` before others."""
-        packages = self.visible_packages(imports)
-        imported = [c for c in cands if c.package in packages]
+        sees, or None when there is none or the index cannot tell which. An import by name comes
+        before wildcard ones. Outside a package, a module's own declarations come first and $unit
+        ones compiled with `near` before others."""
+        if not cands:
+            return None
+
+        def imported(imports):  # by name, by wildcard
+            _, named, wildcard = self.import_order(cands[0].name, None, imports)
+            packages = self.visible_packages(wildcard)
+            return [c for c in cands if c.package in named], [c for c in cands if c.package in packages]
+
+        named, wildcard = imported(imports)
         if package:
-            levels = [[c for c in cands if c.package == package], imported]
+            levels = [[c for c in cands if c.package == package], named, wildcard]
         elif near is None:
-            levels = [[c for c in cands if c.package is None], imported]
+            levels = [[c for c in cands if c.package is None], named, wildcard]
         else:
             unit = self.unit_at(near)
             outside = [(c, self.unit_at(c.range)) for c in cands if c.package is None]
@@ -466,12 +482,13 @@ class Workspace:
             together = [c for c in in_unit if self._compiled_together(c.range.path, near.path)]
             elsewhere = [c for c in in_unit if all(c is not t for t in together)]
             if unit:
-                # The module's own imports come before $unit declarations, its $unit imports after.
-                own = self.visible_packages(imports[len(unit.unit_imports):])
-                mine = [c for c in imported if c.package in own]
-                levels = [local, mine, together, [c for c in imported if c.package not in own], elsewhere]
+                # The module's own imports come before $unit declarations, its $unit imports after;
+                # a $unit import by name is a $unit declaration.
+                own_named, own = imported(imports[len(unit.unit_imports):])
+                unit_named, unit_wildcard = imported(imports[:len(unit.unit_imports)])
+                levels = [local, own_named, own, together + unit_named, unit_wildcard, elsewhere]
             else:
-                levels = [together, imported, elsewhere]
+                levels = [together + named, wildcard, elsewhere]
         for found in levels:
             if len(found) > 1 and near is not None:
                 # Same-named declarations of another testbench, which is not compiled with `near`.
@@ -498,7 +515,7 @@ class Workspace:
             return self._visible(cands, package, imports, near)
         if len(cands) == 1:
             return cands[0]
-        for pref in ([package] if package else []) + list(imports):
+        for pref in (p for level in self.import_order(name, package, imports) for p in level):
             for c in cands:
                 if c.package == pref:
                     return c
@@ -521,7 +538,7 @@ class Workspace:
                 if t.owner_class == owner_class:
                     return t
         pkg_level = [t for t in cands if t.owner_class is None]
-        for pref in ([package] if package else []) + list(imports):
+        for pref in (p for level in self.import_order(name, package, imports) for p in level):
             for t in pkg_level:
                 if t.package == pref:
                     return t

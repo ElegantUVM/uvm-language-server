@@ -911,3 +911,39 @@ endclass
     ws = index(tmp_path, {'t.sv': text})
     line = text.splitlines().index('    b.f(1, 2);')
     assert 'f(int a, int b)' in Navigator(ws).hover(str(tmp_path / 't.sv'), line, 6, text)
+
+
+@pytest.mark.parametrize('imports,visible,hidden', [
+    ('import first::visible;', 'function void go(int first_arg)', None),
+    ('import first::visible; import second::*;', 'function void go(int first_arg)', 'function void go(int hidden_arg)'),
+    ('import second::*; import first::visible;', 'function void go(int first_arg)', 'function void go(int hidden_arg)'),
+    ('import first::*; import second::*;', None, None),
+])
+def test_import_by_name(tmp_path, imports, visible, hidden):
+    """`import p::x` makes only x visible, and hides a wildcard-imported x (IEEE 1800 26.3)."""
+    text = '''package first;
+class visible; static function void go(int first_arg); endfunction endclass
+class hidden; static function void go(int secret_arg); endfunction endclass
+function void shared(int first_arg); endfunction
+endpackage
+package second;
+class visible; static function void go(string second_arg); endfunction endclass
+class hidden; static function void go(int hidden_arg); endfunction endclass
+function void shared(string second_arg); endfunction
+endpackage
+package calls;
+IMPORTS
+import first::shared;
+class caller;
+  function void t(); visible::go(1); hidden::go(2); shared(3); endfunction
+endclass
+endpackage
+'''.replace('IMPORTS', imports)
+    assert labels_in(tmp_path, text, ['visible::go(', 'hidden::go(', '; shared(']) == \
+        [visible, hidden, 'function void shared(int first_arg)']
+    if visible:  # navigation prefers the import by name too
+        from test_fixes import index
+        from uvmls.navigation import Navigator
+        line = text.splitlines().index('  function void t(); visible::go(1); hidden::go(2); shared(3); endfunction')
+        [where] = Navigator(index(tmp_path, {'t.sv': text})).definition(str(tmp_path / 't.sv'), line, 22, text)
+        assert where.line == 1

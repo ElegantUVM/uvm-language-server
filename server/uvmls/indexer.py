@@ -265,6 +265,12 @@ def nodes(seq):
     return [x for x in (seq or []) if isinstance(x, Node)]
 
 
+def import_name(item) -> str:
+    """How an import records what it makes visible: 'p' for `p::*`, 'p::x' for `p::x`."""
+    package = item.package.valueText
+    return package if item.item.kind == TK.Star else f"{package}::{item.item.valueText}"
+
+
 def unwrap(expr):
     """Strip the property/sequence/argument wrappers slang puts around expressions."""
     while expr is not None and expr.kind in (
@@ -767,9 +773,9 @@ class Extractor:
                     self.enum_members(m, unit)
         elif k == K.PackageImportDeclaration:
             for item in nodes(m.items):
-                imports.append(item.package.valueText)
+                imports.append(import_name(item))
                 if unit is not None:
-                    unit.imports.append(item.package.valueText)
+                    unit.imports.append(import_name(item))
         elif k == K.PackageExportDeclaration and unit is not None:
             unit.exports += [item.package.valueText for item in nodes(m.items)]
         elif k == K.PackageExportAllDeclaration and unit is not None:
@@ -795,7 +801,7 @@ class Extractor:
         unit.params = self.params(hdr.parameters)
         for imp in nodes(hdr.imports):
             for item in nodes(imp.items):
-                unit.imports.append(item.package.valueText)
+                unit.imports.append(import_name(item))
         ports = getattr(hdr, "ports", None)
         if ports is not None and ports.kind == K.AnsiPortList:
             for p in nodes(ports.ports):

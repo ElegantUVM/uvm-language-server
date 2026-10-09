@@ -470,7 +470,7 @@ def _type_candidates(ws, name, scope, ctx):
         classes = list(ws.classes_by_name.get(scope, []))
         owners = [u for u in ws.units_by_name.get(scope, []) if u.kind == "package"]
     else:
-        scopes = {(None, None), (package, None)} | {(p, None) for p in imports}
+        scopes = {(None, None), (package, None)} | {(p.split("::")[0], None) for p in imports}
         classes = [ctx] if isinstance(ctx, ClassInfo) else \
             [c for c in ws.classes_by_name.get(ctx.owner_class, []) if c.package == package] \
             if isinstance(ctx, Typedef) and ctx.owner_class else []
