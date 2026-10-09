@@ -208,7 +208,7 @@ On this machine (WSL2, Python 3.14, pyslang 12):
 | Hover while the synthetic project elaborates | median 0.4 ms as when idle, slowest 14 ms (it runs in its own process) |
 | Peak memory of the elaboration process: ALU example / synthetic project | 0.1 GB / 0.9 GB (freed when it exits) |
 
-The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench. Its two rows are CPU seconds of the single-threaded index (`time.process_time`, the same as wall time on an idle machine); a garbage-collection pass lands on some edits and adds up to 0.02 s to one.
+The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench. Its full-index and edit rows are CPU seconds of the single-threaded index (`time.process_time`, the same as wall time on an idle machine); a garbage-collection pass lands on some edits and adds up to 0.02 s to one.
 
 ## Where this stands against DVT
 
