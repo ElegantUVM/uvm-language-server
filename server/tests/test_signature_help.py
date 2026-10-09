@@ -866,3 +866,48 @@ def test_tb_top_calls(client, tb, unit_scope):
         signature(help_at(d, 'uvm_top.print_topology('), ['uvm_printer printer = null'])
     finally:
         d.close()
+
+
+def test_typedefs_inherited_or_from_an_enclosing_class(tmp_path):
+    text = '''class decoy;
+  function void f(real wrong); endfunction
+endclass
+class box;
+  function void f(int a, int b); endfunction
+endclass
+class holder #(type T = int);
+  T item;
+endclass
+class base #(type T = int);
+  typedef box box_t;
+  typedef holder #(T) held_t;
+endclass
+class child extends base #(box);
+  box_t b;
+  held_t h;
+  function void t();
+    box_t lb;
+    b.f(1, 2);
+    lb.f(3, 4);
+    h.item.f(5, 6);
+  endfunction
+endclass
+class grand extends child;
+  box_t gb;
+  function void t2(); gb.f(7, 8); endfunction
+endclass
+class caller;
+  typedef box box_t;
+  class inner;
+    box_t value;
+    function void t(); value.f(9, 10); endfunction
+  endclass
+endclass
+'''
+    f = 'function void f(int a, int b)'
+    assert labels_in(tmp_path, text, ['b.f(1,', 'lb.f(3,', 'h.item.f(5,', 'gb.f(7,', 'value.f(9,']) == [f] * 5
+    from uvmls.navigation import Navigator
+    from test_fixes import index
+    ws = index(tmp_path, {'t.sv': text})
+    line = text.splitlines().index('    b.f(1, 2);')
+    assert 'f(int a, int b)' in Navigator(ws).hover(str(tmp_path / 't.sv'), line, 6, text)

@@ -536,9 +536,10 @@ class Workspace:
     def resolve_spec(self, name: str, scope: str | None = None, args: list[str] | None = None,
                      ctx: ClassInfo | None = None, depth: int = 0, *,
                      package: str | None = None, imports: list[str] | None = None, strict: bool = False,
-                     near: Range | None = None) -> Spec | None:
+                     near: Range | None = None, members: bool = True) -> Spec | None:
         """Resolve a type name (following typedefs) to an indexed or built-in class. A strict
-        lookup sees only what is visible at `near` (by default the context class)."""
+        lookup sees only what is visible at `near` (by default the context class). `members`
+        includes the typedefs the context class declares, inherits or is nested in."""
         if depth > 8:
             return None
         package = package if package is not None else ctx.package if ctx else None
@@ -550,7 +551,7 @@ class Workspace:
             here = Scope.of(ctx, package, imports, site)
             args = [a if isinstance(a, Bound) else Bound(a, here) for a in args]
         cache_key = (name, scope, tuple((a, a.scope, a.spec is None) for a in args), ctx.qualname if ctx else None,
-                     package, tuple(imports), strict, near)
+                     package, tuple(imports), strict, near, members)
         if depth == 0 and cache_key in self._spec_cache:
             return self._spec_cache[cache_key]
         result: Spec | None = None
@@ -564,6 +565,8 @@ class Workspace:
             cls = self.find_class(name, scope or package, [scope] if scope else imports, strict, near)
             if cls is not None and (scope is None or cls.package == scope or not cls.package):
                 result = Spec(name=cls.name, cls=cls, args=args)
+        if result is None and ctx is not None and not scope and members:
+            result = self._class_typedef(ctx, name, depth, strict)
         if result is None:
             td = self.find_typedef(name, scope or package, ctx.name if ctx else None,
                                    [scope] if scope else imports, strict, near)
@@ -577,6 +580,29 @@ class Workspace:
             self._spec_cache[cache_key] = result
         return result
 
+    def _class_typedef(self, cls: ClassInfo, name: str, depth: int, strict: bool) -> Spec | None:
+        """The typedef `name` that code in `cls` sees: its own, a base class's or an enclosing class's."""
+        if not any(t.owner_class for t in self.typedefs_by_name.get(name, ())):
+            return None
+        for c in [cls, *self.outer_classes(cls)]:
+            hit = self.find_member(c, name)
+            if hit is not None:
+                td = hit[1]
+                if not isinstance(td, Typedef) or td.target is None:
+                    return None
+                inner = self.resolve_type_ref(td.target, hit[0], hit[2], strict, depth + 1)
+                return Spec(inner.name, inner.cls, inner.args, td) if inner is not None else None
+        return None
+
+    def outer_classes(self, cls: ClassInfo) -> list[ClassInfo]:
+        """The classes a nested class is declared in, innermost first."""
+        out, cur = [], cls
+        while cur is not None and cur.outer_class and len(out) < 16:
+            cur = self.find_class(cur.outer_class, cur.package)
+            if cur is not None:
+                out.append(cur)
+        return out
+
     def _spec_from_typedef(self, td: Typedef, ctx, depth, strict=False) -> Spec | None:
         inner = self.resolve_spec(td.target.name, td.target.scope, td.target.args, ctx, depth + 1,
                                   package=td.package, imports=td.imports, strict=strict, near=td.range)
@@ -584,7 +610,8 @@ class Workspace:
             return Spec(name=inner.name, cls=inner.cls, args=inner.args, via_typedef=td)
         return None
 
-    def resolve_type_text(self, text: str, ctx: ClassInfo | None = None, strict: bool = False) -> Spec | None:
+    def resolve_type_text(self, text: str, ctx: ClassInfo | None = None, strict: bool = False, depth: int = 0,
+                          members: bool = True) -> Spec | None:
         """Resolve type text written in `ctx`; a bound argument resolves where it was written."""
         where = {}
         if isinstance(text, Bound):
@@ -596,28 +623,28 @@ class Workspace:
         if not parsed:
             return None
         scope, name, args = parsed
-        return self.resolve_spec(name, scope, args, ctx, strict=strict, **where)
+        return self.resolve_spec(name, scope, args, ctx, depth, strict=strict, members=members, **where)
 
     def resolve_type_ref(self, ref: TypeRef, ctx: ClassInfo | None = None, bindings: dict[str, str] | None = None,
-                         strict: bool = False, **where) -> Spec | None:
+                         strict: bool = False, depth: int = 0, **where) -> Spec | None:
         """Resolve an indexed type reference with the type parameters in scope bound. The structured
         reference keeps scopes such as `cls #(4)::inner_t` that the type text cannot. Outside a
         class, `where` gives the package, imports and position that see the reference."""
         bindings = bindings or {}
         if ref.scope is None and ref.name in bindings:
-            return self.resolve_type_text(bindings[ref.name], ctx, strict=strict)
+            return self.resolve_type_text(bindings[ref.name], ctx, strict, depth)
         scope = ref.scope
         if scope in bindings:  # T::inner_t
-            outer = self.resolve_type_text(bindings[scope], ctx, strict=strict)
+            outer = self.resolve_type_text(bindings[scope], ctx, strict, depth)
             if outer is not None and outer.cls is not None:
                 scope = outer.cls.qualname
             else:
                 parsed = parse_type_text(bindings[scope])
                 scope = "::".join(p for p in parsed[:2] if p) if parsed else scope
-        args = [self._bind_arg(a, ctx, bindings, strict) for a in ref.args]
-        return self.resolve_spec(ref.name, scope, args, ctx, strict=strict, **where)
+        args = [self._bind_arg(a, ctx, bindings, strict, depth) for a in ref.args]
+        return self.resolve_spec(ref.name, scope, args, ctx, depth, strict=strict, **where)
 
-    def _bind_arg(self, arg: str, ctx: ClassInfo | None, bindings: dict[str, str], strict: bool) -> str:
+    def _bind_arg(self, arg: str, ctx: ClassInfo | None, bindings: dict[str, str], strict: bool, depth: int) -> str:
         """A type argument written in `ctx` with its parameters bound. A typedef member of the
         class (`this_type`) means nothing elsewhere: it becomes the type it names."""
         value = substitute_params(arg, bindings)
@@ -626,7 +653,7 @@ class Workspace:
         hit = self.find_member(ctx, arg, bindings)
         if hit is None or not isinstance(hit[1], Typedef):
             return value
-        spec = self.member_type_spec(hit[0], hit[1], hit[2], strict)
+        spec = self.member_type_spec(hit[0], hit[1], hit[2], strict, depth + 1)
         if spec is None or spec.cls is None:
             return value
         text = spec.cls.name + ("#(" + ",".join(spec.args) + ")" if spec.args else "")
@@ -642,8 +669,8 @@ class Workspace:
             bound = (bindings or {}).get(ref.name)
             if bound is None:
                 bound = next(p.default for p in cls.params if p.name == ref.name)
-            return self.resolve_type_text(bound, cls)
-        return self.resolve_spec(ref.name, ref.scope, ref.args, cls)
+            return self.resolve_type_text(bound, cls, members=False)
+        return self.resolve_spec(ref.name, ref.scope, ref.args, cls, members=False)
 
     def chain(self, cls: ClassInfo, bindings: dict[str, str] | None = None) -> list[ChainEntry]:
         """The class followed by all its ancestors, with type parameter bindings."""
@@ -736,23 +763,24 @@ class Workspace:
                     return entry.spec.name, t, entry.bindings
         return None
 
-    def member_type_spec(self, owner, member, bindings: dict[str, str], strict: bool = False) -> Spec | None:
+    def member_type_spec(self, owner, member, bindings: dict[str, str], strict: bool = False,
+                         depth: int = 0) -> Spec | None:
         ctx = owner if isinstance(owner, ClassInfo) else None
         if isinstance(member, Variable):
             if member.type is None:
                 return None
-            return self.resolve_type_ref(member.type, ctx, bindings, strict)
+            return self.resolve_type_ref(member.type, ctx, bindings, strict, depth)
         if isinstance(member, Method):
             parsed = parse_type_text(member.return_type)
             if parsed:
-                return self.resolve_type_text(bindings.get(parsed[1], member.return_type), ctx, strict=strict)
+                return self.resolve_type_text(bindings.get(parsed[1], member.return_type), ctx, strict, depth)
             return None
         if isinstance(member, Typedef) and member.target is not None:
-            return self.resolve_type_ref(member.target, ctx, bindings, strict)
+            return self.resolve_type_ref(member.target, ctx, bindings, strict, depth)
         if isinstance(member, str):  # built-in member type text
             parsed = parse_type_text(member)
             if parsed:
-                return self.resolve_type_text(bindings.get(parsed[1], member), ctx, strict=strict)
+                return self.resolve_type_text(bindings.get(parsed[1], member), ctx, strict, depth)
         return None
 
     def calls_of(self, cls: ClassInfo) -> CallSet:

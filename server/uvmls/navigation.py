@@ -169,7 +169,7 @@ class Navigator:
             hit = ws.find_member(cls, name)
             if hit is not None:
                 return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
-            for c in self._outer_classes(cls):
+            for c in ws.outer_classes(cls):
                 hit = ws.find_member(c, name)
                 if hit is not None:
                     return [Target(hit[1], owner=hit[0], bindings=hit[2], note=name)]
@@ -211,15 +211,6 @@ class Navigator:
             if spec is not None:
                 return [Target(spec.cls or spec.name, spec=spec)]
         return []
-
-    def _outer_classes(self, cls: ClassInfo):
-        out = []
-        cur = cls
-        while cur is not None and cur.outer_class:
-            cur = self.ws.find_class(cur.outer_class, cur.package)
-            if cur is not None:
-                out.append(cur)
-        return out
 
     def type_of(self, t: Target, strict: bool = False) -> Spec | None:
         ws = self.ws
