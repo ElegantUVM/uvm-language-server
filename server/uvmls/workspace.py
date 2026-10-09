@@ -263,7 +263,7 @@ class Workspace:
         self._visible_packages: dict = {}
         self._roots_by_file: dict[str, set[str]] | None = None
         self._include_sites: dict[str, list[Range]] | None = None
-        self._including: dict[tuple[str, bool], DesignUnit | None] = {}
+        self._including: dict[tuple[str, bool], tuple[DesignUnit | None, ...]] = {}
 
     def configure(self, config: ProjectConfig):
         with self.lock:
@@ -509,12 +509,18 @@ class Workspace:
 
     def unit_at(self, rng: Range, packages: bool = False) -> DesignUnit | None:
         """The module, interface or program (or package) around a position, in its file or
-        around the `include that brings the file in."""
+        around the first `include that brings the file in, as the index keeps a shared header's
+        classes from the first root that reaches it."""
+        return next(filter(None, self.units_at(rng, packages)), None)
+
+    def units_at(self, rng: Range, packages: bool = False) -> tuple[DesignUnit | None, ...]:
+        """Each unit a position is compiled in: the one around it in its file, or else those
+        around every `include that brings the file in, None for $unit."""
         unit = next((u for u in self.by_path.get(rng.path, ()) if isinstance(u, DesignUnit)
                      and (packages or u.kind != "package") and u.decl_range.contains(rng.line, rng.col)), None)
-        return unit if unit is not None else self._unit_including(rng.path, packages)
+        return (unit,) if unit is not None else self._units_including(rng.path, packages)
 
-    def _unit_including(self, path: str, packages: bool) -> DesignUnit | None:
+    def _units_including(self, path: str, packages: bool) -> tuple[DesignUnit | None, ...]:
         if self._include_sites is None:
             self._include_sites = {}
             for idx in self.indices.values():
@@ -523,9 +529,11 @@ class Workspace:
                         self._include_sites.setdefault(target, []).append(site)
         key = (path, packages)
         if key not in self._including:
-            self._including[key] = None  # an include cycle ends here
-            self._including[key] = next(filter(None, (self.unit_at(site, packages)
-                                                      for site in self._include_sites.get(path, ()))), None)
+            self._including[key] = ()  # an include cycle ends here
+            units: list[DesignUnit | None] = []
+            for site in self._include_sites.get(path, ()):
+                units += [u for u in self.units_at(site, packages) if all(u is not v for v in units)]
+            self._including[key] = tuple(units) or (None,)
         return self._including[key]
 
     def _visible(self, cands: list, package: str | None, imports, near: Range | None):
@@ -552,9 +560,10 @@ class Workspace:
             levels = [[c for c in cands if c.package is None], named, wildcard]
         else:
             unit = self.unit_at(near)
-            outside = [(c, self.unit_at(c.range)) for c in cands if c.package is None]
-            local = [c for c, u in outside if u is not None and u is unit]
-            in_unit = [c for c, u in outside if u is None]
+            # A header several units include declares its classes in each of them.
+            outside = [(c, self.units_at(c.range)) for c in cands if c.package is None]
+            local = [c for c, us in outside if unit is not None and any(u is unit for u in us)]
+            in_unit = [c for c, us in outside if None in us]
             together = [c for c in in_unit if self._compiled_together(c.range.path, near.path)]
             elsewhere = [c for c in in_unit if all(c is not t for t in together)]
             if unit:

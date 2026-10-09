@@ -145,13 +145,24 @@ SCOPES = {
     'included_typedef': {'tb/top.sv': 'module top;\nimport uvm_pkg::*;\n`include "uvm_macros.svh"\n' +
                          COMP.replace('NAME', 'my_comp') + 'typedef my_comp comp_t;\n`include "env.svh"\nendmodule\n',
                          'tb/env.svh': USER.replace('USER', 'my_env').replace('my_comp c;', 'comp_t c;')},
+    # a header included in the modules of two testbenches declares its class in each
+    'shared': {**{f'{tb}_tb/top.sv': f'module {tb}_top;\nimport uvm_pkg::*;\n`include "uvm_macros.svh"\n'
+                  '`include "../common/comp.svh"\n' + USER.replace('USER', f'{tb}_env') + 'endmodule\n'
+                  for tb in ('block', 'chip')},
+               'common/comp.svh': COMP.replace('NAME', 'my_comp')},
+    # and a header both include sees the class of the first one
+    'shared_user': {**{f'{tb}_tb/top.sv': f'module {tb}_top;\nimport uvm_pkg::*;\n`include "uvm_macros.svh"\n' +
+                       COMP.replace('NAME', 'my_comp') + '`include "../common/env.svh"\nendmodule\n'
+                       for tb in ('block', 'chip')},
+                    'common/env.svh': USER.replace('USER', 'my_env')},
     # a $unit class hides the one a $unit import brings (IEEE 1800 26.3)
     'shadow': {'top.sv': PKG.replace('foo(int a, int b)', 'other(string s)').replace(
         'uvm_component parent)', 'uvm_component parent, int extra = 0)', 1) +
         'import uvm_pkg::*;\nimport agent_pkg::*;\n`include "uvm_macros.svh"\n' + COMP.replace('NAME', 'my_comp') +
         'module top;\n' + USER.replace('USER', 'my_env') + 'endmodule\n'},
 }
-OWNERS = {'included': 'tb/top.sv', 'included_typedef': 'tb/top.sv'}
+OWNERS = {'included': 'tb/top.sv', 'included_typedef': 'tb/top.sv', 'shared': 'common/comp.svh',
+          'shared_user': 'block_tb/top.sv'}
 
 
 @pytest.mark.parametrize('case', SCOPES)
