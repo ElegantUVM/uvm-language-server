@@ -199,8 +199,8 @@ On this machine (WSL2, Python 3.14, pyslang 12):
 | Bundled Accellera UVM 1.2 (142 files, 75k lines, 323 classes): parse + index, doc comments included | 0.27 s |
 | ALU example (19 classes), full index: bundled UVM 1.2 / built-in model | 0.30 s / 0.013 s |
 | ALU example, re-index after editing one file: bundled UVM 1.2 / built-in model | 0.014 s / 0.004 s |
-| Synthetic project: 2,400 files, 2,002 classes, full index: bundled UVM 1.2 / built-in model | 2.6 s / 1.6 s |
-| Same project, re-index after editing one file: bundled UVM 1.2 / built-in model | 0.018 s / 0.011 s |
+| Synthetic project: 2,400 files, 2,400 classes, full index: bundled UVM 1.2 / built-in model | 7.0 s / 2.3 s |
+| Same project, re-index after editing one file (median of five edits): bundled UVM 1.2 / built-in model | 0.04 s / 0.03 s |
 | Same project, class graph / topology (800 instances) | 0.07 s / 0.02 s |
 | Webview first render, same project (package overview) | 1.1 s; drill-down 0.2 s; all 2,000 classes in one diagram 11 s |
 | Elaboration, ALU example with the bundled UVM 1.2: compile + elaborate (with slang's analysis pass) / through the server's worker process / `elab -f` CLI | 0.11 s / 0.20 s / 0.20 s |
@@ -208,7 +208,7 @@ On this machine (WSL2, Python 3.14, pyslang 12):
 | Hover while the synthetic project elaborates | median 0.4 ms as when idle, slowest 14 ms (it runs in its own process) |
 | Peak memory of the elaboration process: ALU example / synthetic project | 0.1 GB / 0.9 GB (freed when it exits) |
 
-The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench.
+The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench. Its two rows are CPU seconds of the single-threaded index (`time.process_time`, the same as wall time on an idle machine); a garbage-collection pass lands on some edits and adds up to 0.02 s to one.
 
 ## Where this stands against DVT
 
