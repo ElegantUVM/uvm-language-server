@@ -124,6 +124,13 @@ class Formatter:
         if len(endings) > 1 or "\r" in endings:
             self.log("formatter: mixed or unsupported line endings; no edits returned")
             return None
+        try:
+            data = source.encode("utf-8")
+        except UnicodeEncodeError as e:  # a lone surrogate the client sent as a \uXXXX escape
+            line = source.count("\n", 0, e.start) + 1
+            self.log(f"formatter: line {line} holds a lone UTF-16 surrogate, which is not valid UTF-8; "
+                     "no edits returned")
+            return None
         binary = executable(settings.path, roots)
         if binary is None:
             key = (settings, tuple(roots), os.environ.get("PATH"), expand_path(settings.path, roots))
@@ -148,7 +155,7 @@ class Formatter:
         try:
             proc = await asyncio.shield(spawn)
             self.processes.add(proc)
-            communication = asyncio.ensure_future(proc.communicate(source.encode("utf-8")))
+            communication = asyncio.ensure_future(proc.communicate(data))
             try:
                 out, err = await asyncio.wait_for(asyncio.shield(communication), TIMEOUT)
             except asyncio.TimeoutError:

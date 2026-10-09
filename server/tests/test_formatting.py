@@ -362,6 +362,18 @@ def test_macro_shim_is_library(clients, fake, tmp_path, bundled):
     assert not fake.record.exists()
 
 
+@pytest.mark.parametrize("ranged", [False, True])
+def test_lone_surrogate_does_not_spawn(clients, fake, tmp_path, ranged):
+    c = clients(tmp_path, {"path": str(fake.path)})
+    doc = document(c, tmp_path)
+    doc.change('// BAD\n// "\ud83d"\n')  # JSON carries it as the escape \ud83d
+    assert (format_range(doc, (0, 0), (1, 0)) if ranged else format_doc(doc)) == []
+    c.wait_for("window/logMessage", lambda m: "line 2 holds a lone UTF-16 surrogate" in m["params"]["message"])
+    assert not fake.record.exists()
+    doc.change("// BAD\n")
+    assert applied(doc.text, format_doc(doc)) == "// good\n"
+
+
 def test_zero_indentation_does_not_spawn(clients, fake, tmp_path):
     c = clients(tmp_path, {"path": str(fake.path)})
     doc = document(c, tmp_path)
