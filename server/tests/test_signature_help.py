@@ -163,6 +163,20 @@ def test_end_of_a_comment(doc, eol, call, needle, active):
                   active)
 
 
+def test_calls_in_macro_arguments(doc):
+    calls = ('`uvm_info("ID", $sformatf("v=%0d", inner(1, 2)), UVM_LOW)\n'
+             "    `WRAP(void'(this.inner(7, 8)));\n"
+             "    `TWICE(void'(inner(3, 4)));\n"
+             "    void'(`CALLF(inner));")
+    doc.change('`define WRAP(x) x\n`define TWICE(x) x; x\n`define CALLF(f) f(1, 2)\n' +
+               SOURCE.replace('CALL', calls))
+    for needle in ['inner(1,', 'inner(1, 2', 'this.inner(7,', '`TWICE(void\'(inner(3,']:
+        signature(help_at(doc, needle), ['int a', 'int b'], 1, 'function int inner(int a, int b)')
+    # The macro's own arguments, and parentheses a macro body writes, are not a call.
+    for needle in ['`uvm_info("ID", ', '$sformatf("v=%0d", ', 'inner(1, 2)', '`CALLF(inner']:
+        assert help_at(doc, needle) is None
+
+
 def test_declaration_is_not_a_call(doc):
     doc.change(SOURCE.replace("CALL", ""))
     assert help_at(doc, "function void public_api(") is None

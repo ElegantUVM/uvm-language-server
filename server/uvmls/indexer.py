@@ -540,6 +540,7 @@ class Extractor:
         self.out = FileIndex(root=root, library=library)
         self._paths: dict[int, str | None] = {}
         self._line_starts: dict[int, list[int] | None] = {}
+        self._argument_calls: set[Range] = set()
 
     # -- locations -----------------------------------------------------------
 
@@ -599,10 +600,21 @@ class Extractor:
         r = tok.range
         return self.make_range(r.start, r.end)[0]
 
-    def keyword_range(self, tok) -> Range | None:
-        """plain_range of a keyword or delimiter, which cannot span lines."""
-        loc = tok.location
-        if self.sm.isMacroLoc(loc):
+    def written(self, loc):
+        """Where the text at a location is written in a file, through the macro arguments that
+        carry it; None when a macro body wrote it."""
+        sm = self.sm
+        while sm.isMacroLoc(loc):
+            if not sm.isMacroArgLoc(loc):
+                return None
+            loc = sm.getOriginalLoc(loc)
+        return loc
+
+    def keyword_range(self, tok, arguments=False) -> Range | None:
+        """plain_range of a keyword or delimiter, which cannot span lines; with `arguments`, also
+        where a macro argument spells it."""
+        loc = self.written(tok.location) if arguments else tok.location
+        if loc is None or self.sm.isMacroLoc(loc):
             return None
         path = self.path_of(loc.buffer)
         if path is None:
@@ -1212,10 +1224,17 @@ class Extractor:
         if arguments is None or arguments.openParen.isMissing:
             return
         tokens = iter_tokens(head)
-        if not tokens or any(t.isMissing or self.sm.isMacroLoc(t.location) for t in tokens):
+        if not tokens or any(t.isMissing or self.written(t.location) is None for t in tokens):
             return
-        opening = self.keyword_range(arguments.openParen)
-        closing = None if arguments.closeParen.isMissing else self.keyword_range(arguments.closeParen)
+        opening = self.keyword_range(arguments.openParen, True)
+        closing = None if arguments.closeParen.isMissing else self.keyword_range(arguments.closeParen, True)
+        if opening is None or closing is None and not arguments.closeParen.isMissing:
+            return
+        if self.sm.isMacroLoc(arguments.openParen.location):
+            # Written in a macro argument, which its `)` must end; one the macro uses twice is one call.
+            if closing is None or opening in self._argument_calls:
+                return
+            self._argument_calls.add(opening)
         rng = self.node_range(head)
         boundary = None
         if closing is None:
@@ -1230,7 +1249,7 @@ class Extractor:
             boundary = self.make_range(self.file_loc(parent.getFirstToken().location)[0], self.file_loc(end)[0])[0]
             if boundary is None:
                 return
-        if opening is None or rng is None or rng.path != opening.path:
+        if rng is None or rng.path != opening.path:
             return
         segs = tuple((s.name, tuple(s.args), s.sep) for s in call_segments(head))
         target = self.assignment_target(node) if node.kind == K.NewClassExpression else None
@@ -1238,7 +1257,7 @@ class Extractor:
         commas, names = [], []
         for arg in arguments.parameters:
             if isinstance(arg, Token):
-                comma = self.keyword_range(arg)
+                comma = self.keyword_range(arg, True)
                 if arg.kind == TK.Comma and comma is not None:
                     commas.append((comma.end_line, comma.end_col))
             else:

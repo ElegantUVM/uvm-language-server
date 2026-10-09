@@ -406,6 +406,33 @@ endclass
     assert len(ws.invocations_by_file[path]) == 1
 
 
+def test_calls_written_in_macro_arguments(tmp_path):
+    from test_fixes import index
+    from uvmls.fixes import FileText
+
+    text = '''`define WRAP(x) x
+`define TWICE(x) x; x
+`define OUTER `WRAP(f(1, 2))
+`define CALLF(g) g(1, 2)
+class C;
+ function void f(int a, int b); endfunction
+ function void run();
+   `WRAP(f(3, 4));
+   `TWICE(f(5, 6));
+   `OUTER;
+   `CALLF(f);
+ endfunction
+endclass
+'''
+    ws = index(tmp_path, {'t.sv': text})
+    path = str(tmp_path / 't.sv')
+    ft = FileText(path, text)
+    calls = ws.invocations_by_file[path]
+    # Only calls written at the usage; one a macro expands twice is recorded once.
+    assert [text[ft.span(c.head)[0]:ft.span(c.closing)[1]] for c in calls] == ['f(3, 4)', 'f(5, 6)']
+    assert [len(c.commas) for c in calls] == [1, 1]
+
+
 def test_directive_ranges_across_includes_and_edits(tmp_path):
     from test_fixes import index
     from uvmls.fixes import FileText
