@@ -1214,3 +1214,33 @@ endclass
 endpackage
 '''
     assert labels_in(tmp_path, text, ['(); go(', 'v.go(']) == [None, 'function void go(int a)']
+
+
+def test_a_class_scope_typedef_hides_a_package_class(tmp_path):
+    text = '''package p;
+class box; function void f(int a, int b); endfunction endclass
+class box_t; function void f(string wrong); endfunction endclass
+class base; typedef box box_t; endclass
+class child extends base;
+  box_t v;
+  function void t(); v.f(1, 2); endfunction
+endclass
+class plain;
+  typedef int box_t;
+  box_t w;
+  function void t(); w.f(3, 4); endfunction
+endclass
+class same;
+  typedef box box;
+  box b;
+  function void t(); b.f(5, 6); endfunction
+endclass
+endpackage
+'''
+    f = 'function void f(int a, int b)'
+    assert labels_in(tmp_path, text, ['v.f(1,', 'w.f(3,', 'b.f(5,']) == [f, None, f]
+    from test_fixes import index
+    from uvmls.navigation import Navigator
+    line = text.splitlines().index('  function void t(); v.f(1, 2); endfunction')
+    nav = Navigator(index(tmp_path, {'t.sv': text}))
+    assert [r.line for r in nav.definition(str(tmp_path / 't.sv'), line, 23, text)] == [1]

@@ -578,44 +578,50 @@ class Workspace:
         if depth == 0 and cache_key in self._spec_cache:
             return self._spec_cache[cache_key]
         result: Spec | None = None
+        settled = False  # a class scope's typedef hides the names outside it
         if scope and scope in self.class_by_qual or (scope and self.classes_by_name.get(scope)):
             # Class-scoped typedef such as outer::inner_t.
             owner = self.class_by_qual.get(scope) or self.find_class(scope, package, imports, strict, near)
             td = self.find_typedef(name, owner.package, owner.name, strict=strict, near=owner.range) if owner else None
             if td and td.target:
                 result = self._spec_from_typedef(td, owner, depth, strict)
-        if result is None:
+        elif ctx is not None and not scope and members:
+            found, result = self._class_typedef(ctx, name, depth, strict)
+            settled = found and strict
+        if result is None and not settled:
             cls = self.find_class(name, scope or package, [scope] if scope else imports, strict, near)
             if cls is not None and (scope is None or cls.package == scope or not cls.package):
                 result = Spec(name=cls.name, cls=cls, args=args)
-        if result is None and ctx is not None and not scope and members:
-            result = self._class_typedef(ctx, name, depth, strict)
-        if result is None:
+        if result is None and not settled:
             td = self.find_typedef(name, scope or package, ctx.name if ctx else None,
                                    [scope] if scope else imports, strict, near)
             if strict and scope and td and td.package != scope and td.owner_class != scope:
                 td = None
             if td is not None and td.target is not None:
                 result = self._spec_from_typedef(td, ctx, depth, strict)
-        if result is None and name in BUILTIN_CLASSES:
+        if result is None and not settled and name in BUILTIN_CLASSES:
             result = Spec(name=name, args=args)
         if depth == 0:
             self._spec_cache[cache_key] = result
         return result
 
-    def _class_typedef(self, cls: ClassInfo, name: str, depth: int, strict: bool) -> Spec | None:
-        """The typedef `name` that code in `cls` sees: its own, a base class's or an enclosing class's."""
+    def _class_typedef(self, cls: ClassInfo, name: str, depth: int, strict: bool) -> tuple[bool, Spec | None]:
+        """Whether code in `cls` sees a member `name` that is a typedef (its own, a base class's or an
+        enclosing class's), and the class type it names."""
         if not any(t.owner_class for t in self.typedefs_by_name.get(name, ())):
-            return None
+            return False, None
         for c in [cls, *self.outer_classes(cls)]:
             hit = self.find_member(c, name, strict=strict)
             if hit is not None:
                 td = hit[1]
-                if not isinstance(td, Typedef) or td.target is None:
-                    return None
-                inner = self.resolve_type_ref(td.target, hit[0], hit[2], strict, depth + 1)
-                return Spec(inner.name, inner.cls, inner.args, td) if inner is not None else None
-        return None
+                if not isinstance(td, Typedef):
+                    return False, None
+                # `typedef box box;` names the box outside the class.
+                outside = td.target is not None and td.target.scope is None and td.target.name == name
+                inner = self.resolve_type_ref(td.target, hit[0], hit[2], strict, depth + 1,
+                                              members=not outside) if td.target else None
+                return True, Spec(inner.name, inner.cls, inner.args, td) if inner is not None else None
+        return False, None
 
     def outer_classes(self, cls: ClassInfo) -> list[ClassInfo]:
         """The classes a nested class is declared in, innermost first."""
