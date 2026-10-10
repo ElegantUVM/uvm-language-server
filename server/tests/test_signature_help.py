@@ -1859,3 +1859,16 @@ module top;
 endmodule
 '''
     assert labels_in(tmp_path, text, ['middle::go(1,']) == [label]
+
+
+def test_an_import_by_name_through_another_package_outranks_a_wildcard(tmp_path):
+    """`import bridge::go` reaches aa's go through bridge's re-export; it still ranks above the
+    `go` a wildcard import brings in, and alone it is found through the chain."""
+    text = '''package aa; function void go(int aa_arg); endfunction endpackage
+package bridge; import aa::go; export aa::go; endpackage
+package zz; function void go(string zz_arg); endfunction endpackage
+package middle; import bridge::go; import zz::*; export *::*; endpackage
+package alone; import bridge::go; export *::*; endpackage
+module top; initial begin middle::go(1); alone::go(2); end endmodule
+'''
+    assert labels_in(tmp_path, text, ['middle::go(1', 'alone::go(2']) == ['function void go(int aa_arg)'] * 2

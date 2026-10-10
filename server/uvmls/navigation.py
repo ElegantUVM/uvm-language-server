@@ -392,13 +392,12 @@ class Navigator:
             # The package's own items, then what its imports by name re-export, then what its
             # wildcard imports re-export (IEEE 1800 26.6). Strict: a name several wildcard
             # re-exports supply is ambiguous, and an explicit import outranks them.
-            reached = {p for level in ws.import_scopes(name, t.obj.name, [t.obj.name]) for p in level}
-            by_name = [i.split("::")[0] for i in t.obj.imports if i.endswith("::" + name)]
-            wildcard = [i for i in t.obj.imports if "::" not in i]
-            for level in ([t.obj.name], by_name, wildcard):
+            # import_scopes expands each of the package's own imports through what it re-exports,
+            # so an import by name through another package still ranks above a wildcard one.
+            for level in ws.import_scopes(name, t.obj.name, t.obj.imports):
                 found = []
                 for p in dict.fromkeys(level):
-                    pkg = t.obj if p == t.obj.name else ws.find_unit(p, "package") if p in reached else None
+                    pkg = t.obj if p == t.obj.name else ws.find_unit(p, "package")
                     if pkg is not None:
                         found += self._package_item(ws, pkg, name, strict)
                 if found:
