@@ -1,24 +1,28 @@
+import * as path from "path";
 import * as vscode from "vscode";
 import { expandPath } from "./settings";
 
 export const PROVIDER_ID = "uvmls.mcp";
 export const LABEL = "UVM Language Server";
 
-/** `python -m uvmls mcp` arguments for a workspace folder: the uvm settings as the CLI's flags. */
+/** `python -m uvmls mcp` arguments for a workspace folder: the uvm settings as the CLI's flags.
+ * Paths are made absolute, because the server resolves relative ones against its working
+ * directory, which is the server's own (see McpProvider.definition), not the folder. */
 export function mcpArguments(folder: string, cfg: vscode.WorkspaceConfiguration): string[] {
+  const absolute = (p: string) => path.resolve(folder, expandPath(p));
   const args = ["-m", "uvmls", "mcp", folder];
   for (const f of cfg.get<string[]>("filelists") ?? []) {
-    args.push("-f", expandPath(f));
+    args.push("-f", absolute(f));
   }
   for (const d of cfg.get<string[]>("includeDirs") ?? []) {
-    args.push("-I", expandPath(d));
+    args.push("-I", absolute(d));
   }
   for (const [name, value] of Object.entries(cfg.get<Record<string, string>>("defines") ?? {})) {
     args.push("-D", value === "" ? name : `${name}=${value}`);
   }
   const uvmHome = cfg.get<string>("uvmHome");
   if (uvmHome) {
-    args.push("--uvm-home", expandPath(uvmHome));
+    args.push("--uvm-home", absolute(uvmHome));
   }
   if (cfg.get<boolean>("useBundledUvm") === false) {
     args.push("--no-bundled-uvm");
@@ -70,7 +74,9 @@ export class McpProvider implements vscode.McpServerDefinitionProvider<vscode.Mc
     const python = this.hosts.knownPython() ?? (process.platform === "win32" ? "python" : "python3");
     const server = new vscode.McpStdioServerDefinition(
       LABEL, python, mcpArguments(folder.uri.fsPath, cfg), { PYTHONPATH: this.hosts.serverDir }, this.hosts.version);
-    server.cwd = folder.uri;
+    // `python -m` searches the working directory first, so it is the server's own directory, as for
+    // the language server: in the workspace, a file named uvmls.py would run instead of the server.
+    server.cwd = vscode.Uri.file(this.hosts.serverDir);
     return server;
   }
 

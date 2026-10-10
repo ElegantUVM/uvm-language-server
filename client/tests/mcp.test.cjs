@@ -37,6 +37,7 @@ function mock({ root = path.resolve("project"), settings = {} } = {}) {
   }
   const vscode = {
     McpStdioServerDefinition, EventEmitter,
+    Uri: { file: (p) => ({ fsPath: p }) },
     workspace: {
       workspaceFolders: root ? [{ uri: { fsPath: root } }] : undefined,
       getConfiguration: () => ({ get: (key) => settings[key] }),
@@ -51,12 +52,13 @@ const SETTINGS = {
   uvmHome: "/opt/uvm", useBundledUvm: false, exclude: ["legacy/**"],
 };
 
-test("the uvm settings become the CLI's flags", () => {
+test("the uvm settings become the CLI's flags, with every path absolute", () => {
   const m = mock({ settings: SETTINGS });
   const { mcpArguments } = load("mcp.ts", m.vscode);
   assert.deepEqual(plain(mcpArguments(m.root, m.vscode.workspace.getConfiguration("uvm"))), [
-    "-m", "uvmls", "mcp", m.root, "-f", "alu_tb.f", "-f", `${m.root}/sim/tb.f`, "-I", path.join(os.homedir(), "inc"),
-    "-D", "SIM=1", "-D", "GATE", "--uvm-home", "/opt/uvm", "--no-bundled-uvm", "--exclude", "legacy/**",
+    "-m", "uvmls", "mcp", m.root, "-f", path.join(m.root, "alu_tb.f"), "-f", `${m.root}/sim/tb.f`,
+    "-I", path.join(os.homedir(), "inc"), "-D", "SIM=1", "-D", "GATE", "--uvm-home", "/opt/uvm", "--no-bundled-uvm",
+    "--exclude", "legacy/**",
   ]);
   const bare = mock({ settings: {} });
   assert.deepEqual(plain(load("mcp.ts", bare.vscode).mcpArguments(bare.root, bare.vscode.workspace.getConfiguration("uvm"))),
@@ -76,11 +78,24 @@ test("the provider gives one stdio server on the first folder, with cwd, PYTHONP
   const [server] = provider(m, { knownPython: () => "/known/python" }).provideMcpServerDefinitions();
   assert.equal(server.label, "UVM Language Server");
   assert.equal(server.command, "/known/python");
-  assert.deepEqual(plain(server.args), ["-m", "uvmls", "mcp", m.root, "-f", "alu_tb.f"]);
+  assert.deepEqual(plain(server.args), ["-m", "uvmls", "mcp", m.root, "-f", path.join(m.root, "alu_tb.f")]);
   assert.deepEqual(plain(server.env), { PYTHONPATH: "/ext/server" });
-  assert.equal(server.cwd.fsPath, m.root);
+  assert.equal(server.cwd.fsPath, "/ext/server");
   assert.equal(server.version, "0.1.0");
-  assert.match(m.log[0][1], /^provided: \/known\/python -m uvmls mcp .* \(cwd .*, PYTHONPATH=\/ext\/server\)$/);
+  assert.match(m.log[0][1], /^provided: \/known\/python -m uvmls mcp .* \(cwd \/ext\/server, PYTHONPATH=\/ext\/server\)$/);
+});
+
+test("the server never runs with the workspace as its working directory", () => {
+  // `python -m uvmls` imports from the working directory first: a workspace uvmls.py must not be it.
+  const m = mock({ settings: { filelists: ["tb/alu_tb.f", "../shared/common.f"], includeDirs: ["inc", "${workspaceFolder}/rtl"] } });
+  const [server] = provider(m).provideMcpServerDefinitions();
+  assert.equal(server.cwd.fsPath, "/ext/server");
+  assert.notEqual(server.cwd.fsPath, m.root);
+  assert.equal(server.args[3], m.root, "the folder is the DIR argument");
+  const values = server.args.filter((a, i) => ["-f", "-I"].includes(server.args[i - 1]));
+  assert.deepEqual(plain(values), [path.join(m.root, "tb/alu_tb.f"), path.resolve(m.root, "../shared/common.f"),
+    path.join(m.root, "inc"), path.join(m.root, "rtl")]);
+  assert.ok(values.every((v) => path.isAbsolute(v)), "every path is absolute, since cwd is not the folder");
 });
 
 test("no server when disabled or without a folder; a refresh fires the change event", () => {
@@ -99,7 +114,7 @@ test("resolving probes for the interpreter and logs the exact command line", asy
   const [server] = p.provideMcpServerDefinitions();
   const resolved = await p.resolveMcpServerDefinition(server);
   assert.equal(resolved.command, "/venv/bin/python");
-  assert.equal(m.log.at(-1)[1], `starting: /venv/bin/python -m uvmls mcp ${m.root} (cwd ${m.root}, PYTHONPATH=/ext/server)`);
+  assert.equal(m.log.at(-1)[1], `starting: /venv/bin/python -m uvmls mcp ${m.root} (cwd /ext/server, PYTHONPATH=/ext/server)`);
   const missing = mock();
   assert.equal(await provider(missing, { findPython: async () => undefined }).resolveMcpServerDefinition(server), undefined);
   assert.equal(missing.log.at(-1)[0], "warn");

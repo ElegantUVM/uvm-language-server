@@ -301,7 +301,9 @@ async function main() {
       assert.equal(provided.command[0], fixture.python, "the command is uvm.pythonPath");
       assert.deepEqual(provided.command.slice(1), ["-m", "uvmls", "mcp", fixture.ws, "-f", path.join(fixture.ws, "alu_tb.f")],
         "the arguments are the mcp subcommand on the folder plus the uvm settings as flags");
-      assert.equal(provided.cwd, fixture.ws, "cwd is the workspace folder");
+      // Never the workspace: `python -m` imports from the working directory first, and a workspace
+      // file named uvmls.py would run instead of the server. The folder is the DIR argument.
+      assert.equal(provided.cwd, provided.pythonPath, "cwd is the server directory");
       assert.ok(fs.existsSync(path.join(provided.pythonPath, "uvmls", "mcp.py")), `PYTHONPATH ${provided.pythonPath} has no uvmls/mcp.py`);
       assert.ok(!provided.pythonPath.startsWith(fixture.repo), "PYTHONPATH must be the installed extension's bundled server, not the checkout");
       return `${path.basename(path.dirname(path.dirname(path.dirname(log.file))))}/.../${CHANNEL}.log: ${provided.line}`;
