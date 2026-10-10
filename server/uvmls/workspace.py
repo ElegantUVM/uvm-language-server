@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from .indexer import EOL_RE, Indexer, argument_spans, mask
@@ -590,44 +591,61 @@ class Workspace:
         return (unit,) if unit is not None else self._units_including(rng.path, packages)
 
     def _sites(self) -> dict[str, list[Range]]:
-        """The `include sites that bring each file in."""
+        """The `include sites that bring each file in, each once (every root that reaches a
+        header records its sites)."""
         if self._include_sites is None:
-            self._include_sites = {}
+            self._include_sites, seen = {}, set()
             for idx in self.indices.values():
                 for sites in idx.includes.values():
                     for target, site in sites:
-                        self._include_sites.setdefault(target, []).append(site)
+                        if (target, site) not in seen:
+                            seen.add((target, site))
+                            self._include_sites.setdefault(target, []).append(site)
         return self._include_sites
 
-    def _seen_from(self, rng: Range, path: str) -> Range | None:
-        """Where `rng` is in `path`: itself, or the first `include site (through nested includes)
-        that brings its file in; None when none does."""
+    def _climb(self, rng: Range, path: str):
+        """Each `include site in `path` that brings `rng`'s file in (through nested includes),
+        with `rng`'s place in `path` in compilation order: that site, the sites below it, `rng`."""
         if rng.path == path:
-            return rng
-        sites, seen, todo = self._sites(), set(), [rng.path]
+            yield rng, [(rng.line, rng.col)]
+            return
+        sites, via, todo = self._sites(), {rng.path: None}, deque([rng.path])
         while todo:
-            p = todo.pop(0)
-            if p in seen:
-                continue
-            seen.add(p)
-            for site in sites.get(p, ()):
+            f = todo.popleft()
+            for site in sites.get(f, ()):
                 if site.path == path:
-                    return site
-                todo.append(site.path)
-        return None
+                    chain, cur = [(site.line, site.col)], f
+                    while via[cur] is not None:
+                        below, cur = via[cur]
+                        chain.append((below.line, below.col))
+                    chain.append((rng.line, rng.col))
+                    yield site, chain
+                elif site.path not in via:
+                    via[site.path] = (site, f)
+                    todo.append(site.path)
+
+    def _seen_from(self, rng: Range, path: str) -> Range | None:
+        """Where `rng` is in `path`: itself, or the first `include site that brings its file in."""
+        return next((site for site, _ in self._climb(rng, path)), None)
+
+    def _placed(self, rng: Range, outer: ClassInfo) -> list[tuple[int, int]] | None:
+        """`rng`'s place in the body of `outer`, in compilation order; None outside it."""
+        body = outer.decl_range
+        return next((chain for site, chain in self._climb(rng, body.path) if body.contains(site.line, site.col)), None)
 
     def _encloses(self, outer: ClassInfo, cls: ClassInfo) -> bool:
         """Whether `cls` is declared in the body of `outer`, directly or in a file it includes."""
-        if cls.outer_class != outer.name:
-            return False
-        at = self._seen_from(cls.range, outer.decl_range.path)
-        return at is not None and outer.decl_range.contains(at.line, at.col)
+        return cls.outer_class == outer.name and self._placed(cls.range, outer) is not None
 
-    def _precedes(self, cls: ClassInfo, at: Range) -> bool:
-        """Whether `cls` is declared before `at`: by its `typedef class` forward declaration when
-        it has one; when the index cannot place the two, it counts as declared."""
-        pos = self._seen_from(cls.forward or cls.range, at.path)
-        return pos is None or (pos.line, pos.col) < (at.line, at.col)
+    def _precedes(self, cls: ClassInfo, at: Range, outer: ClassInfo) -> bool:
+        """Whether `cls`, nested in `outer`, is declared before `at`: by its `typedef class`
+        forward declaration when it has one. `at` outside the body (an out-of-block method) comes
+        after the whole class."""
+        here = self._placed(at, outer)
+        if here is None:
+            return True
+        declared = [p for r in (cls.forward, cls.range) if r is not None and (p := self._placed(r, outer)) is not None]
+        return bool(declared) and min(declared) < here
 
     def _units_including(self, path: str, packages: bool) -> tuple[DesignUnit | None, ...]:
         self._sites()
@@ -849,12 +867,14 @@ class Workspace:
                 if owner is None:
                     continue
                 found = [c for c in cands if self._encloses(owner, c)]
+                ordered = owner is outer and before is not None
                 if not found and len(self.classes_by_name.get(owner.name, ())) == 1:
                     # The index cannot place the declaration (an include it does not see): the
-                    # only class of the outer's name owns it.
+                    # only class of the outer's name owns it, and it counts as declared.
                     found = [c for c in cands if c.outer_class == owner.name and c.package == owner.package]
+                    ordered = False
                 for c in found:
-                    if owner is not outer or before is None or self._precedes(c, before):
+                    if not ordered or self._precedes(c, before, owner):
                         return c
         return None
 

@@ -1104,9 +1104,8 @@ class Extractor:
         for item in nodes(n.items):
             self.class_item(cls, item, package, imports)
         for nested in self.out.classes[start:]:
-            fwd = forwards.get(nested.name) if nested.outer_class == cls.name else None
-            if fwd is not None and (fwd.path, fwd.line, fwd.col) < (nested.range.path, nested.range.line, nested.range.col):
-                nested.forward = fwd
+            if nested.outer_class == cls.name and nested.name in forwards:
+                nested.forward = forwards[nested.name]
         self.out.classes.append(cls)
 
     def forward_classes(self, items) -> dict[str, Range]:
