@@ -1378,6 +1378,69 @@ module tb; initial middle::go(1); endmodule
     assert labels_in(tmp_path, text, ['middle::go(']) == [None]
 
 
+def test_explicit_export_names_its_declaration(tmp_path):
+    """`export aa::go` imports aa's go (IEEE 1800 26.6): it is what middle passes on, over the
+    wildcard-imported zz::go."""
+    text = '''package aa; function void go(int right); endfunction endpackage
+package zz; function void go(string wrong); endfunction endpackage
+package middle;
+ import aa::*;
+ import zz::*;
+ export aa::go;
+ export *::*;
+endpackage
+module tb; import middle::*; initial begin go(1); middle::go(1); end endmodule
+'''
+    assert labels_in(tmp_path, text, ['begin go(', 'middle::go(']) == ['function void go(int right)'] * 2
+
+
+def test_long_reexport_chain(tmp_path):
+    """Six hundred packages each re-exporting the previous one's item resolve through them all."""
+    text = 'package p0; class item; static function void go(int right); endfunction endclass endpackage\n'
+    text += '\n'.join(f'package p{i}; import p{i - 1}::item; export p{i - 1}::item; endpackage' for i in range(1, 600))
+    text += '\nmodule tb; initial p599::item::go(1); endmodule\n'
+    assert labels_in(tmp_path, text, ['item::go(']) == ['function void go(int right)']
+
+
+@pytest.mark.parametrize('declaration,use', [
+    (' class item; function void go(int right); endfunction endclass\n function item get(); return null; endfunction',
+     'get().go('),
+    (' class item; function void go(int right); endfunction endclass\n holder #(item) h;', 'h.value.go('),
+    (' typedef class item;\n item obj;\n class item; function void go(int right); endfunction endclass', 'obj.go('),
+], ids=['return-type', 'type-argument', 'forward-declaration'])
+def test_nested_class_declared_before_its_use(tmp_path, declaration, use):
+    """A method's return type and a type argument name the nested `item` declared before them,
+    not the global one, and a `typedef class item;` declares the name from there on."""
+    text = '''class item; function void go(string wrong); endfunction endclass
+class holder #(type T=int); T value; endclass
+class outer;
+DECLARATION
+ function void run(); USE1); endfunction
+endclass
+module tb; outer o; endmodule
+'''.replace('DECLARATION', declaration).replace('USE', use)
+    assert labels_in(tmp_path, text, [use]) == ['function void go(int right)']
+
+
+def test_nested_class_in_an_included_file(tmp_path):
+    """A nested class declared in a header the outer class includes is the outer's."""
+    from test_fixes import index
+    from uvmls import signatures
+    from uvmls.navigation import Navigator
+
+    text = '''class outer;
+ `include "inner.svh"
+ item obj;
+ function void run(); obj.go(1); endfunction
+endclass
+module tb; outer o; endmodule
+'''
+    ws = index(tmp_path, {'t.sv': text, 'inner.svh': 'class item; function void go(int right); endfunction endclass\n'})
+    line = text.splitlines().index(' function void run(); obj.go(1); endfunction')
+    found = signatures.signature(Navigator(ws), str(tmp_path / 't.sv'), line, len(' function void run(); obj.go('))
+    assert found and found[2] == 'function void go(int right)'
+
+
 @pytest.mark.parametrize('imports,label', [
     ('import first::*;\nimport second::*;', None),
     ('', None),

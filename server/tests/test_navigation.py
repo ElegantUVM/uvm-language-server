@@ -83,6 +83,53 @@ module tb; outer::child c; endmodule
             if e['source'] == 'outer::child' and e['kind'] == 'extends'] == ['base']
 
 
+def test_references_either_side_of_a_nested_declaration_keep_their_own_type(tmp_path):
+    """A property before outer's nested `item` has the global type and one after it the nested:
+    signatures, hover, definition and completion agree and do not share a cached answer; after
+    an edit moves the first property below the declaration, both are the nested one."""
+    from test_fixes import index
+    from uvmls import signatures
+
+    text = '''class item;
+ function void go(int global_arg); endfunction
+ int global_only;
+endclass
+class outer;
+ item before_obj;
+ class item;
+  function void go(int nested_arg); endfunction
+  int nested_only;
+ endclass
+ item after_obj;
+ function void run(); before_obj.go(1); after_obj.go(1); endfunction
+endclass
+module tb; outer o; endmodule
+'''
+    ws = index(tmp_path, {'t.sv': text})
+    path = str(tmp_path / 't.sv')
+
+    def label(source, var):
+        prefix = source[:source.index(var + '.go(') + len(var) + 4]
+        found = signatures.signature(Navigator(ws), path, prefix.count('\n'), len(prefix.rsplit('\n', 1)[-1]))
+        return found[2] if found else None
+
+    for _ in range(2):
+        for var, arg in [('after_obj', 'nested_arg'), ('before_obj', 'global_arg')]:
+            assert label(text, var) == f'function void go(int {arg})'
+            nav = Navigator(ws)
+            line = text.splitlines().index(' function void run(); before_obj.go(1); after_obj.go(1); endfunction')
+            col = text.splitlines()[line].index(var + '.go(') + len(var) + 1
+            assert arg in nav.hover(path, line, col, text)
+            [found] = nav.definition(path, line, col, text)
+            assert arg in text.splitlines()[found.line]
+            fields = {c['label'] for c in nav.completions(path, line, col, text)}
+            assert ('nested_only' if var == 'after_obj' else 'global_only') in fields
+    moved = text.replace(' item before_obj;\n', '').replace(' item after_obj;', ' item before_obj;\n item after_obj;')
+    ws.update_document(path, moved)
+    assert ws._spec_cache == {}
+    assert [label(moved, var) for var in ('before_obj', 'after_obj')] == ['function void go(int nested_arg)'] * 2
+
+
 def test_types_scoped_by_a_specialization_resolve(tmp_path):
     from test_fixes import findings, index
     from uvmls import signatures
