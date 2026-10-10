@@ -335,6 +335,14 @@ class Workspace:
             found = [r for r, idx in self.indices.items() if real in idx.files]
         return found
 
+    def update_documents(self, paths: list[str]) -> list[str]:
+        """Re-parse the roots that include any of several files changed on disk, each root once
+        (a batch of saves). Returns the affected roots."""
+        with self.lock:
+            roots = list(dict.fromkeys(r for p in paths for r in self.roots_for(norm(p))))
+            self._reparse(roots)
+            return roots
+
     def update_document(self, path: str, text: str | None) -> list[str]:
         """Re-parse whatever depends on `path`. Returns the affected roots."""
         path = norm(path)
@@ -358,13 +366,19 @@ class Workspace:
                     return []
                 roots = [path]
                 self.ephemeral.add(path)
-            self._trees = {}
-            trees = self._trees if len(roots) <= TREES_KEPT else None
-            for root in roots:
-                lib = self.sources is not None and root in self.sources.library_roots
-                self.indices[root] = self.indexer.parse(root, self.overrides, library=lib, trees=trees)
-            self._rebuild()
+            self._reparse(roots)
             return roots
+
+    def _reparse(self, roots: list[str]):
+        if self.indexer is None:
+            self.reindex_all()
+            return
+        self._trees = {}
+        trees = self._trees if len(roots) <= TREES_KEPT else None
+        for root in roots:
+            lib = self.sources is not None and root in self.sources.library_roots
+            self.indices[root] = self.indexer.parse(root, self.overrides, library=lib, trees=trees)
+        self._rebuild()
 
     def _rebuild(self):
         self._clear_maps()

@@ -28,7 +28,7 @@ from .elab import ELAB_TIMEOUT, PACKAGE_PARENT, displayed, request_for, skip_rea
 from .indexer import SHIM_FILE
 from .model import ClassInfo, CreateCall, Range, SeqStart, Variable, utf8_prefix
 from .navigation import Navigator, expr_at
-from .project import ProjectConfig, discover_files, is_bundled, is_sv_file, norm
+from .project import DEFAULT_EXCLUDES, ProjectConfig, _exclusion, discover_files, is_bundled, is_sv_file, norm
 from .uvm import ROLE_ORDER
 from .views import config_db_report, effective_type, list_tests, topology
 from .workspace import Spec, Workspace
@@ -42,7 +42,8 @@ RESOURCE_NOT_FOUND = -32002
 EOF = object()  # the reader's end-of-input mark; a JSON null on a line is a message
 DEFAULT_LIMIT, MAX_LIMIT = 200, 2000
 REFRESH_SECONDS = 1.0
-EMPTY_LISTING = (frozenset(), frozenset())
+Listing = tuple[frozenset[tuple[str, str | None]], frozenset[tuple[str, str | None]]]
+EMPTY_LISTING: Listing = (frozenset(), frozenset())
 LOCATION_KEYS = ("file", "line", "col", "endLine", "endCol")
 INSTRUCTIONS = ("Facts about a UVM testbench from a static index of its sources on disk (unsaved editor "
                 "text is not visible; the index refreshes when files change). Locations have 1-based "
@@ -328,7 +329,7 @@ class McpServer:
         self.roots = [norm(r) for r in ws.config.workspace_roots]
         self.real_roots = [os.path.realpath(r) for r in self.roots]
         self.stamps: dict[str, tuple[int, int] | None] = {}
-        self.listings: dict[str, tuple[frozenset[str], frozenset[str]]] = {}  # per watched directory
+        self.listings: dict[str, Listing] = {}  # per watched directory
         self.filelists: set[str] = set()
         self._key_of_real: dict[str, str] = {}  # real path -> index key, for keys that are not real
         self._keys_version = -1
@@ -522,14 +523,14 @@ class McpServer:
     # -- freshness -----------------------------------------------------------
 
     def watched(self) -> tuple[set[str], set[str]]:
-        """(files, directories) a refresh stats: the indexed files and every filelist read (nested
-        ones too), and the directories a new or recreated file would land in, whose stamps a
-        creation or deletion changes: every directory under the roots in discovery mode; with a
-        filelist, those of the filelists and of the testbench's files, and the include directories
-        with their subdirectories (`include "sub/x.svh")."""
+        """(files, directories) a refresh stats: the indexed files, every filelist read (nested
+        ones too) and the headers `include could not open, and the directories a new or recreated
+        file would land in, whose stamps a creation or deletion changes: every directory under the
+        roots in discovery mode; with a filelist, those of the filelists and of the testbench's
+        files, and the include directories with their subdirectories (`include "sub/x.svh")."""
         ws = self.ws
         s = ws.sources
-        files = ws.files()
+        files = ws.files() | self._missing_includes()
         filelists = self._filelists()
         dirs = set(self.roots)
         stamps: dict = {}
@@ -545,20 +546,37 @@ class McpServer:
         s = self.ws.sources
         return set(self.ws.config.filelists) | set(s.filelists if s else ())
 
+    def _missing_includes(self) -> set[str]:
+        """Where a header an `include could not open would appear, by its exact name whatever its
+        extension: next to the including file, or in an include directory (slang's search order)."""
+        ws = self.ws
+        dirs = list(ws.sources.include_dirs) if ws.sources else []
+        out = set()
+        for idx in ws.indices.values():
+            if idx.library:
+                continue
+            for d in idx.diagnostics:
+                if d.code == "CouldNotOpenIncludeFile" and d.data:
+                    for base in [os.path.dirname(d.range.path)] + dirs:
+                        out.add(norm(os.path.join(base, d.data["include"])))
+        return out
+
     def _relevant(self, directory: str, name: str) -> bool:
         """Whether an entry of a directory can change the index: a source file by name, or a filelist."""
         return is_sv_file(name) or os.path.join(directory, name) in self.filelists
 
-    def _listing(self, directory: str) -> tuple[frozenset[str], frozenset[str]]:
-        """(source files and filelists, subdirectories) a directory holds, by name; empty when it
-        cannot be read. A vim .swp, an editor's temporary file or a log leaves it unchanged."""
+    def _listing(self, directory: str) -> Listing:
+        """(source files and filelists, subdirectories) a directory holds, by name and, for a
+        link, its target (retargeting a link changes neither name nor stamp of what the index
+        names); empty when it cannot be read. A vim .swp, an editor's temporary file or a log
+        leaves it unchanged."""
         try:
             with os.scandir(directory) as it:
-                entries = [(e.name, e.is_dir()) for e in it]
+                entries = [(e.name, e.is_dir(), os.readlink(e.path) if e.is_symlink() else None) for e in it]
         except OSError:
             return EMPTY_LISTING
-        return (frozenset(n for n, d in entries if not d and self._relevant(directory, n)),
-                frozenset(n for n, d in entries if d))
+        return (frozenset((n, t) for n, d, t in entries if not d and self._relevant(directory, n)),
+                frozenset((n, t) for n, d, t in entries if d))
 
     def _restamp(self):
         files, dirs = self.watched()
@@ -573,20 +591,31 @@ class McpServer:
 
     def _directory_needs_reindex(self, directory: str) -> bool:
         """Whether a directory whose stamp changed needs the index rebuilt: a source file or
-        filelist came or went, or a new subdirectory holds one. A new subdirectory without any
-        (`include "sub/x.svh"` before x.svh exists) is only watched from now on."""
+        filelist came, went or was retargeted, or a new subdirectory holds one. A new subdirectory
+        without any (`include "sub/x.svh"` before x.svh exists) is only watched from now on."""
         before, after = self.listings.get(directory, EMPTY_LISTING), self._listing(directory)
         if before[0] != after[0]:
             return True
-        new_dirs = [os.path.join(directory, d) for d in after[1] - before[1]]
-        stamps: dict = {}
-        if new_dirs and discover_files(new_dirs, self.ws.config.exclude, directory_stamps=stamps):
-            return True
-        for d in stamps:  # the stamp before the listing, so a file landing between them is noticed
-            self.stamps[d] = _stamp(d)
-            self.listings[d] = self._listing(d)
+        excluded = _exclusion(DEFAULT_EXCLUDES + self.ws.config.exclude)
+        found = False
+        for name, _ in after[1] - before[1]:
+            if not excluded(name, os.path.join(directory, name)):
+                found |= self._watch_tree(os.path.join(directory, name), name, excluded)
         self.listings[directory] = after
-        return False
+        return found
+
+    def _watch_tree(self, directory: str, rel: str, excluded) -> bool:
+        """Watch a new directory and those below it (not through links, as discovery does not);
+        whether one holds a source. The stamp is taken before the listing and the listing before
+        the walk below, so a file landing meanwhile is in the listing or changes a stamp the
+        next refresh compares against the one recorded."""
+        self.stamps[directory] = _stamp(directory)
+        listing = self.listings[directory] = self._listing(directory)
+        found = bool(listing[0])
+        for name, target in listing[1]:
+            if target is None and not excluded(f"{rel}/{name}", os.path.join(directory, name)):
+                found |= self._watch_tree(os.path.join(directory, name), f"{rel}/{name}", excluded)
+        return found
 
     def refresh(self, force: bool = False):
         """Bring the index up to date with the disk: a changed file is re-parsed with the roots
@@ -610,12 +639,11 @@ class McpServer:
         if rebuild:
             self.ws.reindex_all()
         else:
-            for path, stamp in changed.items():
-                self.stamps[path] = stamp
-                if path not in self.listings:
-                    self.ws.update_document(path, None)
-            if all(p in self.listings for p in changed):
-                return  # nothing re-parsed
+            self.stamps.update(changed)  # the stamps from before the listings: a later change still differs
+            saved = [p for p in changed if p not in self.listings]
+            if not saved:
+                return
+            self.ws.update_documents(saved)  # each root once, however many of its headers were saved
         self.indexed_at = time.time()
         self._restamp()
 
