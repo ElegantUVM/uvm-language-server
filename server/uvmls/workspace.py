@@ -539,9 +539,9 @@ class Workspace:
         key = (package, name)
         if key not in self._reach:
             suffix = "::" + name
-            out, seen, todo = [], set(), [package]
+            out, seen, todo = [], set(), deque([package])
             while todo:
-                p = todo.pop(0)
+                p = todo.popleft()
                 if p in seen:
                     continue
                 seen.add(p)
@@ -549,8 +549,12 @@ class Workspace:
                 if unit is None or self._declares(unit, name):
                     out.append(p)
                     continue
-                named = [i[:-len(suffix)] for i in [*unit.imports, *unit.exports] if i.endswith(suffix)]
-                sources = named or [i for i in unit.imports if "::" not in i]
+                wildcard = [i for i in unit.imports if "::" not in i]
+                named = [i[:-len(suffix)] for i in unit.imports if i.endswith(suffix)]
+                # An explicit export names the imported declaration: there must be an import of it.
+                named += [e[:-len(suffix)] for e in unit.exports
+                          if e.endswith(suffix) and (e in unit.imports or e[:-len(suffix)] in wildcard)]
+                sources = named or wildcard
                 todo += [q for q in sources if any(e in ("*", q, q + suffix) for e in unit.exports)]
             self._reach[key] = out
         return self._reach[key]
