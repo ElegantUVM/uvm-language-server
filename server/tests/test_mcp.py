@@ -13,6 +13,7 @@ import pytest
 from conftest import EXAMPLE
 from uvmls import mcp
 from uvmls.cli import main as cli
+from uvmls.indexer import Indexer
 from uvmls.project import ProjectConfig
 from uvmls.workspace import Workspace
 
@@ -721,3 +722,135 @@ def test_a_header_in_a_new_subdirectory_of_an_include_dir_is_noticed(tmp_path, m
     (root / "inc" / "sub" / "x.svh").write_text("class x_class; endclass\nclass x_more; endclass\n")  # edited in place
     server.refresh(force=True)
     assert count == [2] and class_names(server) == ["top_class", "x_class", "x_more", "y_class"]
+
+
+def test_a_linked_root_source_navigates_its_members(tmp_path):
+    """The index names a root by the path slang resolves, as it names the locations in it: through
+    a linked workspace folder, a member's location the server returned must hover and resolve."""
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "top.sv").write_text("class probe_class;\n  int member;\n  function void action();\n"
+                                 "    member = 1;\n  endfunction\nendclass\n")
+    (real / "tb.f").write_text("top.sv\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    c = serve(alias, "-f", str(alias / "tb.f"))  # by its alias: the server's cwd resolves a relative one
+    try:
+        cls = c.data("class", {"name": "probe_class"})
+        [prop] = cls["properties"]
+        [method] = cls["methods"]
+        assert prop["location"]["file"] == method["location"]["file"] == "top.sv"
+        for file in ("top.sv", str(alias / "top.sv"), str(real / "top.sv")):
+            at = {"file": file, "line": prop["location"]["line"], "col": prop["location"]["col"]}
+            assert "int member" in c.data("hover", at)["markdown"], file
+            assert c.data("definition", at)["locations"] == [prop["location"]]
+            use = {"file": file, "line": 4, "col": 5}  # `member = 1` inside action(): the enclosing class is known
+            assert "int member" in c.data("hover", use)["markdown"], file
+            assert c.data("definition", use)["locations"] == [prop["location"]]
+            assert c.data("references", use)["total"] == 2
+        at = {"file": "top.sv", "line": method["location"]["line"], "col": method["location"]["col"]}
+        assert "function void action()" in c.data("hover", at)["markdown"]
+        assert [i["file"] for i in c.data("includes")["items"]] == ["top.sv"]
+        clean(c)
+    finally:
+        c.close()
+
+
+def test_retargeting_an_included_link_is_noticed(tmp_path, monkeypatch):
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "one.svh").write_text("class old_target; endclass\n")
+    (root / "two.svh").write_text("class new_target; endclass\n")
+    (root / "selected.svh").symlink_to(root / "one.svh")
+    (root / "top.sv").write_text('`include "selected.svh"\nclass top; endclass\n')
+    (root / "tb.f").write_text("top.sv\n")
+    server = in_process(root, "tb.f")
+    count = counting(server, monkeypatch)
+    assert class_names(server) == ["old_target", "top"]
+    (root / "selected.tmp").symlink_to(root / "two.svh")
+    os.replace(root / "selected.tmp", root / "selected.svh")  # the name and its stamp stay; the target changes
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["new_target", "top"]
+    (root / "two.svh").write_text("class new_target; endclass\nclass more; endclass\n")  # the target edited in place
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["more", "new_target", "top"]
+
+
+def test_a_missing_header_of_any_extension_is_noticed_when_it_appears(tmp_path, monkeypatch):
+    root = tmp_path / "ws"
+    (root / "inc").mkdir(parents=True)
+    (root / "top.sv").write_text('`include "generated.inc"\n`include "gen/other.inc"\nclass top; endclass\n')
+    (root / "tb.f").write_text("+incdir+inc\ntop.sv\n")
+    server = in_process(root, "tb.f")
+    count = counting(server, monkeypatch)
+    assert class_names(server) == ["top"]
+    assert {os.path.basename(p) for p in server.stamps if server.stamps[p] is None} >= {"generated.inc", "other.inc"}
+    (root / "generated.inc").write_text("class generated_header; endclass\n")  # next to the including file
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["generated_header", "top"]
+    (root / "inc" / "gen").mkdir()
+    (root / "inc" / "gen" / "other.inc").write_text("class other_header; endclass\n")  # in an include directory
+    server.refresh(force=True)
+    assert count == [2] and class_names(server) == ["generated_header", "other_header", "top"]
+    (root / "generated.inc").write_text("class generated_header; endclass\nclass second; endclass\n")
+    server.refresh(force=True)
+    assert count == [2] and class_names(server) == ["generated_header", "other_header", "second", "top"]
+
+
+def test_a_batch_of_saves_parses_each_root_once(tmp_path, monkeypatch):
+    root = tmp_path / "ws"
+    root.mkdir()
+    headers = []
+    for i in range(40):
+        header = root / f"d{i:02d}" / "h.svh"
+        header.parent.mkdir()
+        header.write_text(f"class c{i}; endclass\n")
+        headers.append(header)
+    (root / "top.sv").write_text("".join(f'`include "{h.relative_to(root)}"\n' for h in headers))
+    (root / "tb.f").write_text("top.sv\n")
+    server = in_process(root, "tb.f")
+    count = counting(server, monkeypatch)
+    parses = []
+    original = Indexer.parse
+    monkeypatch.setattr(Indexer, "parse", lambda self, root, *a, **k: (parses.append(root), original(self, root, *a, **k))[1])
+    for header in headers:
+        tmp = header.with_suffix(".tmp")
+        tmp.write_text(header.read_text().replace("; endclass", "_saved; endclass"))
+        os.replace(tmp, header)
+    server.refresh(force=True)
+    assert count == [0] and parses == [str(root / "top.sv")]
+    assert class_names(server) == sorted(f"c{i}_saved" for i in range(40))
+
+
+def test_a_source_landing_right_after_a_new_directory_is_listed_is_indexed(tmp_path, monkeypatch):
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "top.sv").write_text("class top; endclass\n")
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(root)], bundled_uvm=False))  # discovery
+    server = mcp.McpServer(ws)
+    new = root / "newdir"
+    new.mkdir()
+    original = server._listing
+
+    def listing(directory):
+        out = original(directory)
+        if directory == str(new) and not (new / "h.sv").exists():
+            (new / "h.sv").write_text("class arrived; endclass\n")  # lands right after the listing
+        return out
+    monkeypatch.setattr(server, "_listing", listing)
+    server.refresh(force=True)
+    server.refresh(force=True)  # the directory's recorded stamp predates the file: a change to notice
+    assert class_names(server) == ["arrived", "top"]
+    later = root / "later"
+    later.mkdir()
+    stamp = mcp._stamp
+
+    def stamped(path):
+        out = stamp(path)
+        if path == str(later) and not (later / "h.sv").exists():
+            (later / "h.sv").write_text("class between; endclass\n")  # lands between the stamp and the listing
+        return out
+    monkeypatch.setattr(mcp, "_stamp", stamped)
+    server.refresh(force=True)  # in the listing: rebuilt at once
+    assert class_names(server) == ["arrived", "between", "top"]
