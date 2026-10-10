@@ -100,6 +100,7 @@ class SourceSet:
     uvm_guard: str | None = None  # the include guard of its uvm_pkg.sv (UVM_PKG_SV)
     timescale: str | None = None  # a filelist's -timescale, for elaboration
     filelists: list[str] = field(default_factory=list)  # every filelist read, nested ones included
+    absent_include_dirs: list[str] = field(default_factory=list)  # configured, but no directory yet
 
 
 def norm(p: str) -> str:
@@ -514,7 +515,8 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
 
     seen = set()
     roots = [r for r in roots if not (r in seen or seen.add(r))]
-    include_dirs = [d for d in dict.fromkeys(norm(d) for d in include_dirs) if os.path.isdir(d)]
+    wanted = list(dict.fromkeys(norm(d) for d in include_dirs))
+    include_dirs = [d for d in wanted if os.path.isdir(d)]
     has_real = any(_is_uvm_src(d) for d in include_dirs)
     # Library first so its classes exist before user code refers to them.
     roots.sort(key=lambda r: r not in library_roots)
@@ -523,4 +525,4 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
                      mode=mode, warnings=warnings, uvm_source=uvm_source, uvm_dir=uvm_dir,
                      uvm_version=uvm_version(uvm_dir) if uvm_dir else None,
                      uvm_guard=uvm_guard(uvm_dir) if uvm_dir else None, timescale=timescale,
-                     filelists=filelists)
+                     filelists=filelists, absent_include_dirs=[d for d in wanted if d not in include_dirs])

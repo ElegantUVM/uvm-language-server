@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import stat
 import sys
 import threading
 import time
@@ -99,12 +100,17 @@ def workspace_for(args) -> Workspace:
     return _workspace(args, config=ProjectConfig.from_settings([root], settings))
 
 
-def _stamp(path: str) -> tuple[int, int] | None:
+def _stamp(path: str) -> tuple[int, ...] | None:
+    """What a change to a file or directory alters; for a link, its own identity too, so a
+    retarget (a new link renamed over it) counts; a dangling link is as good as gone."""
     try:
-        st = os.stat(path)
+        st = os.lstat(path)
+        if not stat.S_ISLNK(st.st_mode):
+            return st.st_mtime_ns, st.st_size
+        target = os.stat(path)
     except OSError:
         return None
-    return st.st_mtime_ns, st.st_size
+    return target.st_mtime_ns, target.st_size, st.st_ino, st.st_mtime_ns
 
 
 # -- schemas ---------------------------------------------------------------------
@@ -328,9 +334,10 @@ class McpServer:
         self.nav = Navigator(ws)
         self.roots = [norm(r) for r in ws.config.workspace_roots]
         self.real_roots = [os.path.realpath(r) for r in self.roots]
-        self.stamps: dict[str, tuple[int, int] | None] = {}
+        self.stamps: dict[str, tuple[int, ...] | None] = {}
         self.listings: dict[str, Listing] = {}  # per watched directory
         self.filelists: set[str] = set()
+        self.header_names: set[str] = set()  # of every header included or missing, whatever the extension
         self._key_of_real: dict[str, str] = {}  # real path -> index key, for the keys that are not real
         self._real_of: dict[str, str] = {}  # index key -> real path, kept while the sources stay
         self._aligned = (-1, None)  # (ws.version, ws.sources) the mapping was built for
@@ -541,6 +548,7 @@ class McpServer:
             dirs |= {os.path.dirname(p) for p in (files - ws.library_files) | filelists}
             discover_files(list(s.include_dirs) if s else [], ws.config.exclude, match=lambda name: False,
                            directory_stamps=stamps)
+            dirs |= set(s.absent_include_dirs) if s else set()  # gone until created: then worth a look
         return files | filelists, dirs | set(stamps)
 
     def _filelists(self) -> set[str]:
@@ -549,9 +557,11 @@ class McpServer:
 
     def _missing_includes(self) -> set[str]:
         """Where a header an `include could not open would appear, by its exact name whatever its
-        extension: next to the including file, or in an include directory (slang's search order)."""
+        extension: next to the including file, or in an include directory (slang's search order),
+        one not created yet included."""
         ws = self.ws
-        dirs = list(ws.sources.include_dirs) if ws.sources else []
+        s = ws.sources
+        dirs = list(s.include_dirs) + list(s.absent_include_dirs) if s else []
         out = set()
         for idx in ws.indices.values():
             if idx.library:
@@ -562,26 +572,42 @@ class McpServer:
                         out.add(norm(os.path.join(base, d.data["include"])))
         return out
 
-    def _relevant(self, directory: str, name: str) -> bool:
-        """Whether an entry of a directory can change the index: a source file by name, or a filelist."""
-        return is_sv_file(name) or os.path.join(directory, name) in self.filelists
+    def _header_names(self) -> set[str]:
+        """The names of the headers the testbench includes or fails to include, whatever their
+        extension: one appearing or vanishing under such a name can change what an `include finds."""
+        ws = self.ws
+        out = set()
+        for idx in ws.indices.values():
+            if idx.library:
+                continue
+            out |= {os.path.basename(t) for sites in idx.includes.values() for t, _ in sites}
+            out |= {os.path.basename(d.data["include"]) for d in idx.diagnostics
+                    if d.code == "CouldNotOpenIncludeFile" and d.data}
+        return out
+
+    def _relevant(self, directory: str, name: str, target: str | None) -> bool:
+        """Whether an entry of a directory can change the index: a source file by name, a header's
+        name, a filelist, or any link (one an `include names may have any extension)."""
+        return is_sv_file(name) or name in self.header_names or target is not None \
+            or os.path.join(directory, name) in self.filelists
 
     def _listing(self, directory: str) -> Listing:
-        """(source files and filelists, subdirectories) a directory holds, by name and, for a
-        link, its target (retargeting a link changes neither name nor stamp of what the index
-        names); empty when it cannot be read. A vim .swp, an editor's temporary file or a log
-        leaves it unchanged."""
+        """(source files, headers, filelists and links; subdirectories) a directory holds, by name
+        and, for a link, its target (retargeting a link changes neither name nor stamp of what
+        the index names); empty when it cannot be read. A vim .swp, an editor's temporary file
+        or a log leaves it unchanged."""
         try:
             with os.scandir(directory) as it:
                 entries = [(e.name, e.is_dir(), os.readlink(e.path) if e.is_symlink() else None) for e in it]
         except OSError:
             return EMPTY_LISTING
-        return (frozenset((n, t) for n, d, t in entries if not d and self._relevant(directory, n)),
+        return (frozenset((n, t) for n, d, t in entries if not d and self._relevant(directory, n, t)),
                 frozenset((n, t) for n, d, t in entries if d))
 
     def _restamp(self):
         self._align()
         self.filelists = self._filelists()
+        self.header_names = self._header_names()
         files, dirs = self.watched()
         stamps = {p: _stamp(p) for p in files | dirs}
         for path in self.stamps:
