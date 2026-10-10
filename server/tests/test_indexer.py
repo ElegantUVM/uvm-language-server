@@ -747,3 +747,24 @@ def test_a_library_header_folds_the_same_whichever_file_asked_first(tmp_path):
     before = ws.folds_in(header)
     ws.folds_in(str(tmp_path / 'top.sv'))
     assert ws.folds_in(header) == before and before
+
+
+@pytest.mark.parametrize("configured_alias", [False, True])
+@pytest.mark.parametrize("file", ["top.sv", "h.svh"])
+def test_an_editor_text_sent_under_a_linked_path_reaches_the_index(tmp_path, configured_alias, file):
+    """The editor may name a file through a link (a workspace folder that is one) while the
+    index, or its configuration, names it resolved: the unsaved text must still be indexed."""
+    real, alias = tmp_path / "real", tmp_path / "alias"
+    real.mkdir()
+    alias.symlink_to(real, target_is_directory=True)
+    (real / "top.sv").write_text('`include "h.svh"\nclass top; endclass\n')
+    (real / "h.svh").write_text("class header; endclass\n")
+    (real / "tb.f").write_text("top.sv\n")
+    folder = alias if configured_alias else real
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(folder)], filelists=[str(folder / "tb.f")], bundled_uvm=False))
+    ws.update_document(str(alias / file), (real / file).read_text() + "class unsaved; endclass\n")
+    assert "unsaved" in ws.classes_by_name and "top" in ws.classes_by_name
+    assert any("class unsaved;" in t for t in ws.texts.values())
+    ws.update_document(str(alias / file), None)
+    assert "unsaved" not in ws.classes_by_name and "top" in ws.classes_by_name

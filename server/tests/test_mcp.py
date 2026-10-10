@@ -854,3 +854,49 @@ def test_a_source_landing_right_after_a_new_directory_is_listed_is_indexed(tmp_p
     monkeypatch.setattr(mcp, "_stamp", stamped)
     server.refresh(force=True)  # in the listing: rebuilt at once
     assert class_names(server) == ["arrived", "between", "top"]
+
+
+def test_retargeting_an_included_link_of_any_name_is_noticed(tmp_path, monkeypatch):
+    """A link an `include names may have any extension and point outside the workspace: the
+    listing tracks every link's target, and the real header it points at is read, not the link."""
+    root, outside = tmp_path / "ws", tmp_path / "external"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "one").write_text("class old_target; endclass\n")
+    (outside / "two").write_text("class new_target; endclass\n")
+    (root / "top.sv").write_text('`include "selected.inc"\nclass top; endclass\n')
+    (root / "tb.f").write_text("top.sv\n")
+    (root / "selected.inc").symlink_to(outside / "one")
+    server = in_process(root, "tb.f")
+    count = counting(server, monkeypatch)
+    assert class_names(server) == ["old_target", "top"]
+    (root / "swap.tmp").symlink_to(outside / "two")
+    os.replace(root / "swap.tmp", root / "selected.inc")
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["new_target", "top"]
+    (outside / "two").write_text("class newer_target; endclass\n")
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["newer_target", "top"]
+    with pytest.raises(mcp.ToolError, match="outside the workspace"):
+        server.path_of(str(root / "selected.inc"))
+
+
+def test_a_missing_header_in_an_include_dir_absent_at_startup_is_noticed(tmp_path, monkeypatch):
+    root = tmp_path / "ws"
+    (root / "inc1").mkdir(parents=True)
+    (root / "top.sv").write_text('`include "generated.inc"\nclass top; endclass\n')
+    (root / "tb.f").write_text("+incdir+inc1+inc2\ntop.sv\n")  # inc2 does not exist yet
+    server = in_process(root, "tb.f")
+    count = counting(server, monkeypatch)
+    assert server.ws.sources.absent_include_dirs == [str(root / "inc2")]
+    assert server.stamps[str(root / "inc2")] is None and server.stamps[str(root / "inc2" / "generated.inc")] is None
+    (root / "inc2").mkdir()
+    server.refresh(force=True)
+    assert count == [0] and class_names(server) == ["top"]  # created but still empty
+    (root / "inc2" / "generated.inc").write_text("class generated; endclass\n")
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["generated", "top"]
+    assert server.ws.sources.absent_include_dirs == []
+    (root / "inc1" / "generated.inc").write_text("class shadowing; endclass\n")  # earlier in the search order
+    server.refresh(force=True)
+    assert count == [2] and class_names(server) == ["shadowing", "top"]
