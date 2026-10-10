@@ -331,8 +331,9 @@ class McpServer:
         self.stamps: dict[str, tuple[int, int] | None] = {}
         self.listings: dict[str, Listing] = {}  # per watched directory
         self.filelists: set[str] = set()
-        self._key_of_real: dict[str, str] = {}  # real path -> index key, for keys that are not real
-        self._keys_version = -1
+        self._key_of_real: dict[str, str] = {}  # real path -> index key, for the keys that are not real
+        self._real_of: dict[str, str] = {}  # index key -> real path, kept while the sources stay
+        self._aligned = (-1, None)  # (ws.version, ws.sources) the mapping was built for
         self._checked = 0.0
         self.indexed_at = time.time()
         self._out = None
@@ -579,8 +580,9 @@ class McpServer:
                 frozenset((n, t) for n, d, t in entries if d))
 
     def _restamp(self):
-        files, dirs = self.watched()
+        self._align()
         self.filelists = self._filelists()
+        files, dirs = self.watched()
         stamps = {p: _stamp(p) for p in files | dirs}
         for path in self.stamps:
             if path not in stamps and _stamp(path) is None:
@@ -702,33 +704,48 @@ class McpServer:
         real = os.path.realpath(path)
         return any(real == root or real.startswith(root + os.sep) for root in self.real_roots)
 
-    def _indexed(self, path: str) -> str | None:
-        """The index's key for a path under the workspace: itself, its real path, or the key
-        whose real path it is (an index keyed by unresolved paths)."""
-        known = self.ws.texts.keys() | self.ws.library_files
-        real = os.path.realpath(path)
-        for candidate in (path, real):
-            if candidate in known:
-                return candidate
-        if self._keys_version != self.ws.version:
-            self._key_of_real = {os.path.realpath(k): k for k in known}
-            self._keys_version = self.ws.version
-        return self._key_of_real.get(real)
+    def _align(self):
+        """The index names a root by the path it was given and every location by the path slang
+        resolved. For a root given through a link they differ: its real path is mapped to the
+        key, and its text is made reachable by its real path too, so the navigator's lookups,
+        which start from a location's path, find the text and the declarations together."""
+        ws = self.ws
+        if self._aligned == (ws.version, ws.sources):
+            return
+        if self._aligned[1] is not ws.sources:
+            self._real_of = {}  # a reindex may have followed a link elsewhere
+        self._key_of_real = {}
+        for key in ws.files():
+            real = self._real_of.get(key)
+            if real is None:
+                real = self._real_of[key] = os.path.realpath(key)
+            if real != key:
+                self._key_of_real[real] = key
+                if key in ws.texts:
+                    ws.texts.setdefault(real, ws.texts[key])
+        self._aligned = (ws.version, ws.sources)
 
     def path_of(self, file: str) -> str:
-        """The indexed file a `file` argument names: relative to a workspace root, or absolute
-        under one."""
+        """The real path of the indexed file a `file` argument names: relative to a workspace
+        root, or absolute under one. Every location the index holds is by real path; the key the
+        index files a root under is `key_of` it."""
         candidates = [norm(file)] if os.path.isabs(file) else [norm(os.path.join(r, file)) for r in self.roots]
         inside = [p for p in candidates if self._inside(p)]
         if not inside:
             library = any(p in self.ws.library_files or is_bundled(p) for p in candidates)
             raise ToolError(f"outside the workspace: {file}" + (
                 " (a UVM library file; only the testbench's own files can be asked about)" if library else ""))
+        self._align()
+        ws = self.ws
         for path in inside:
-            key = self._indexed(path)
-            if key is not None:
-                return key
+            real = os.path.realpath(path)
+            if real in ws.texts or real in ws.library_files or real in self._key_of_real:
+                return real
         raise ToolError(f"not indexed: {file}")
+
+    def key_of(self, real: str) -> str:
+        """The index's key for a real path: the path the root was given by, else itself."""
+        return self._key_of_real.get(real, real)
 
     def is_library(self, path: str) -> bool:
         return path in self.ws.library_files or is_bundled(path) or os.path.normpath(path) == SHIM_FILE
@@ -1133,7 +1150,7 @@ class McpServer:
         forward, backward = self._include_edges()
         if "file" in args:
             path = self.path_of(args["file"])
-            return {"file": self.relative(path), "roots": [self.relative(r) for r in ws.roots_for(path)],
+            return {"file": self.relative(path), "roots": [self.relative(r) for r in ws.roots_for(self.key_of(path))],
                     "library": path in ws.library_files,
                     "includes": [{"file": self.relative(t), "location": self.loc(site)} for t, site in forward.get(path, [])],
                     "includedBy": [{"file": self.relative(s), "location": self.loc(site)} for s, site in backward.get(path, [])]}
