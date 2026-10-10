@@ -217,17 +217,6 @@ class _PerFile(dict):
         return found if found or default is None else default
 
 
-def _encloses(outer: ClassInfo, cls: ClassInfo) -> bool:
-    """Whether `cls` is declared in the body of `outer`."""
-    return cls.outer_class == outer.name and cls.range.path == outer.decl_range.path and \
-        outer.decl_range.contains(cls.range.line, cls.range.col)
-
-
-def _precedes(cls: ClassInfo, at: Range) -> bool:
-    """Whether `cls` is declared before `at`; in another file, the index cannot tell."""
-    return cls.range.path != at.path or (cls.range.line, cls.range.col) < (at.line, at.col)
-
-
 def _never(cond: tuple[str, str], given: set[str], known: set[str]) -> bool:
     """Whether an `ifdef branch condition is false whatever order files are read in: `ifndef of a
     macro the configuration defines, or `ifdef of one nothing defines."""
@@ -599,13 +588,48 @@ class Workspace:
                      and (packages or u.kind != "package") and u.decl_range.contains(rng.line, rng.col)), None)
         return (unit,) if unit is not None else self._units_including(rng.path, packages)
 
-    def _units_including(self, path: str, packages: bool) -> tuple[DesignUnit | None, ...]:
+    def _sites(self) -> dict[str, list[Range]]:
+        """The `include sites that bring each file in."""
         if self._include_sites is None:
             self._include_sites = {}
             for idx in self.indices.values():
                 for sites in idx.includes.values():
                     for target, site in sites:
                         self._include_sites.setdefault(target, []).append(site)
+        return self._include_sites
+
+    def _seen_from(self, rng: Range, path: str) -> Range | None:
+        """Where `rng` is in `path`: itself, or the first `include site (through nested includes)
+        that brings its file in; None when none does."""
+        if rng.path == path:
+            return rng
+        sites, seen, todo = self._sites(), set(), [rng.path]
+        while todo:
+            p = todo.pop(0)
+            if p in seen:
+                continue
+            seen.add(p)
+            for site in sites.get(p, ()):
+                if site.path == path:
+                    return site
+                todo.append(site.path)
+        return None
+
+    def _encloses(self, outer: ClassInfo, cls: ClassInfo) -> bool:
+        """Whether `cls` is declared in the body of `outer`, directly or in a file it includes."""
+        if cls.outer_class != outer.name:
+            return False
+        at = self._seen_from(cls.range, outer.decl_range.path)
+        return at is not None and outer.decl_range.contains(at.line, at.col)
+
+    def _precedes(self, cls: ClassInfo, at: Range) -> bool:
+        """Whether `cls` is declared before `at`; when the index cannot place the two, it counts
+        as declared."""
+        pos = self._seen_from(cls.range, at.path)
+        return pos is None or (pos.line, pos.col) < (at.line, at.col)
+
+    def _units_including(self, path: str, packages: bool) -> tuple[DesignUnit | None, ...]:
+        self._sites()
         key = (path, packages)
         if key not in self._including:
             self._including[key] = ()  # an include cycle ends here
@@ -797,7 +821,7 @@ class Workspace:
         """The classes a nested class is declared in, innermost first."""
         out, cur = [], cls
         while cur is not None and cur.outer_class and len(out) < 16:
-            cur = next((c for c in self.classes_by_name.get(cur.outer_class, ()) if _encloses(c, cur)), None) \
+            cur = next((c for c in self.classes_by_name.get(cur.outer_class, ()) if self._encloses(c, cur)), None) \
                 or self.find_class(cur.outer_class, cur.package)
             if cur is not None:
                 out.append(cur)
@@ -821,8 +845,13 @@ class Workspace:
                 owner = entry.spec.cls
                 if owner is None:
                     continue
-                for c in cands:
-                    if _encloses(owner, c) and (owner is not outer or before is None or _precedes(c, before)):
+                found = [c for c in cands if self._encloses(owner, c)]
+                if not found and len(self.classes_by_name.get(owner.name, ())) == 1:
+                    # The index cannot place the declaration (an include it does not see): the
+                    # only class of the outer's name owns it.
+                    found = [c for c in cands if c.outer_class == owner.name and c.package == owner.package]
+                for c in found:
+                    if owner is not outer or before is None or self._precedes(c, before):
                         return c
         return None
 
