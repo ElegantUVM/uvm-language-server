@@ -13,6 +13,8 @@ import pytest
 from conftest import EXAMPLE
 from uvmls import mcp
 from uvmls.cli import main as cli
+from uvmls.project import ProjectConfig
+from uvmls.workspace import Workspace
 
 SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(SERVER_DIR), "tools"))
@@ -600,3 +602,122 @@ def test_nested_filelists_and_new_files_refresh(tmp_path):
         clean(c)
     finally:
         c.close()
+
+
+def test_a_linked_workspace_folder_round_trips_its_own_locations(tmp_path):
+    """slang names files by their real path, so a root that is a link (an automounted home, macOS
+    /tmp) or a linked include directory must still accept the locations the server returns."""
+    real = tmp_path / "real"
+    (real / "tb").mkdir(parents=True)
+    (real / "headers" / "sub").mkdir(parents=True)
+    (real / "tb" / "top.sv").write_text('`include "hdr.svh"\n`include "sub/deep.svh"\n'
+                                        'class in_ws extends hdr_class; endclass\n')
+    (real / "headers" / "hdr.svh").write_text("class hdr_class; endclass\n")
+    (real / "headers" / "sub" / "deep.svh").write_text("class deep_class; endclass\n")
+    (real / "inc").symlink_to(real / "headers", target_is_directory=True)
+    (real / "tb.f").write_text("+incdir+inc\ntb/top.sv\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    c = serve(alias, "-f", "tb.f")
+    try:
+        classes = {i["name"]: i["location"] for i in c.data("classes")["items"]}
+        assert set(classes) == {"deep_class", "hdr_class", "in_ws"}
+        for name, loc in classes.items():  # every location is relative to the root, and hovers
+            assert not os.path.isabs(loc["file"]), loc
+            assert name in c.data("hover", {"file": loc["file"], "line": loc["line"], "col": loc["col"]})["markdown"]
+        base = c.data("definition", {"file": "tb/top.sv", "line": 3, "col": 22})["locations"]
+        assert base == [classes["hdr_class"]]
+        graph = c.data("includes", {"file": "tb/top.sv"})
+        assert {i["file"] for i in graph["includes"]} == {classes["hdr_class"]["file"], classes["deep_class"]["file"]}
+        header = c.data("includes", {"file": classes["hdr_class"]["file"]})
+        assert header["roots"] == ["tb/top.sv"] and [i["file"] for i in header["includedBy"]] == ["tb/top.sv"]
+        for name in ("tb/top.sv", classes["hdr_class"]["file"], "inc/hdr.svh", "headers/sub/deep.svh",
+                     str(alias / "inc" / "hdr.svh"), str(real / "headers" / "hdr.svh")):
+            assert c.read_resource(f"uvm://file/{name}")["contents"][0]["text"].startswith(("`include", "class")), name
+        assert c.data("includes", {"file": str(real / "headers" / "hdr.svh")})["file"] == classes["hdr_class"]["file"]
+        outside = {"file": str(tmp_path / "x.svh"), "line": 1, "col": 1}
+        assert c.error_text("hover", outside).startswith("outside the workspace")
+        assert c.error_text("hover", {"file": "../x.svh", "line": 1, "col": 1}).startswith("outside the workspace")
+        clean(c)
+    finally:
+        c.close()
+
+
+def in_process(root, filelist: str):
+    """A server over a workspace of its own in this process, so a test can count its reindexes."""
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(root)], filelists=[str(root / filelist)], bundled_uvm=False))
+    return mcp.McpServer(ws)
+
+
+def counting(server: mcp.McpServer, monkeypatch) -> list[int]:
+    """How many times reindex_all ran, kept in a one-element list."""
+    count = [0]
+    original = server.ws.reindex_all
+
+    def reindex_all():
+        count[0] += 1
+        original()
+    monkeypatch.setattr(server.ws, "reindex_all", reindex_all)
+    return count
+
+
+def class_names(server: mcp.McpServer) -> list[str]:
+    return sorted(i["name"] for i in server.tool_classes({})["items"])
+
+
+def test_an_atomic_save_or_a_swap_file_does_not_reindex_everything(tmp_path, monkeypatch):
+    root = tmp_path / "ws"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "a.sv").write_text("class a_class; endclass\n")
+    (root / "src" / "b.sv").write_text("class b_class; endclass\n")
+    (root / "tb.f").write_text("src/a.sv\nsrc/b.sv\n")
+    server = in_process(root, "tb.f")
+    count = counting(server, monkeypatch)
+    version = server.ws.version
+    a = root / "src" / "a.sv"
+    tmp = root / "src" / "a.sv.tmp~"
+    tmp.write_text("class a_class; endclass\nclass a_second; endclass\n")
+    os.replace(tmp, a)  # an atomic save: a new inode, and the directory's stamp changes
+    server.refresh(force=True)
+    assert count == [0] and server.ws.version == version + 1
+    assert class_names(server) == ["a_class", "a_second", "b_class"]
+    swap = root / "src" / ".a.sv.swp"
+    swap.write_text("vim")
+    server.refresh(force=True)
+    swap.unlink()
+    (root / "src" / "run.log").write_text("log")  # a stray file that is not a source
+    server.refresh(force=True)
+    assert count == [0] and server.ws.version == version + 1
+    (root / "src" / "c.sv").write_text("class c_class; endclass\n")  # unlisted, but it could be included
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["a_class", "a_second", "b_class"]
+    (root / "src" / "b.sv").unlink()
+    server.refresh(force=True)
+    assert count == [2] and class_names(server) == ["a_class", "a_second"]
+    (root / "tb.f").write_text("src/a.sv\nsrc/c.sv\n")
+    server.refresh(force=True)
+    assert count == [3] and class_names(server) == ["a_class", "a_second", "c_class"]
+
+
+def test_a_header_in_a_new_subdirectory_of_an_include_dir_is_noticed(tmp_path, monkeypatch):
+    root = tmp_path / "ws"
+    (root / "inc").mkdir(parents=True)
+    (root / "top.sv").write_text('`include "sub/x.svh"\n`include "deep/er/y.svh"\nclass top_class; endclass\n')
+    (root / "tb.f").write_text("+incdir+inc\ntop.sv\n")
+    server = in_process(root, "tb.f")
+    count = counting(server, monkeypatch)
+    assert class_names(server) == ["top_class"]
+    (root / "inc" / "sub").mkdir()  # created after the start, empty: watched from now on, no reindex
+    server.refresh(force=True)
+    assert count == [0] and str(root / "inc" / "sub") in server.stamps
+    (root / "inc" / "sub" / "x.svh").write_text("class x_class; endclass\n")
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["top_class", "x_class"]
+    (root / "inc" / "deep" / "er").mkdir(parents=True)  # a subtree created with its header before a refresh
+    (root / "inc" / "deep" / "er" / "y.svh").write_text("class y_class; endclass\n")
+    server.refresh(force=True)
+    assert count == [2] and class_names(server) == ["top_class", "x_class", "y_class"]
+    (root / "inc" / "sub" / "x.svh").write_text("class x_class; endclass\nclass x_more; endclass\n")  # edited in place
+    server.refresh(force=True)
+    assert count == [2] and class_names(server) == ["top_class", "x_class", "x_more", "y_class"]
