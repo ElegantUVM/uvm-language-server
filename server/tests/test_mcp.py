@@ -900,3 +900,79 @@ def test_a_missing_header_in_an_include_dir_absent_at_startup_is_noticed(tmp_pat
     (root / "inc1" / "generated.inc").write_text("class shadowing; endclass\n")  # earlier in the search order
     server.refresh(force=True)
     assert count == [2] and class_names(server) == ["shadowing", "top"]
+
+
+def linked_pair(tmp_path, files: dict) -> tuple[mcp.McpServer, mcp.McpServer]:
+    """Two servers over one testbench: by its real folder and through a link to it."""
+    real, alias = tmp_path / "real", tmp_path / "alias"
+    real.mkdir()
+    for name, text in files.items():
+        (real / name).write_text(text)
+    alias.symlink_to(real, target_is_directory=True)
+    return in_process(real, "tb.f"), in_process(alias, "tb.f")
+
+
+def test_signature_help_through_a_linked_root(tmp_path):
+    """The call records are merged lazily from the roots that record for a file, by its key, and
+    read by the real path a location names: a root given through a link needs both."""
+    normal, linked = linked_pair(tmp_path, {
+        "tb.f": "top.sv\n",
+        "top.sv": "class c;\n function void f(int arg); endfunction\n function void g();\n  f(1);\n endfunction\nendclass\n"})
+    at = {"file": "top.sv", "line": 4, "col": 5}
+    expected = normal.tool_signature(at)
+    assert expected["signature"]["label"] == "function void f(int arg)"
+    assert linked.tool_signature(at) == expected
+    assert linked.tool_signature({"file": str(tmp_path / "real" / "top.sv"), "line": 4, "col": 5}) == expected
+    (tmp_path / "real" / "top.sv").write_text(
+        "class c;\n function void f(int arg, int more); endfunction\n function void g();\n  f(1);\n endfunction\nendclass\n")
+    for server in (normal, linked):
+        server.refresh(force=True)
+    assert linked.tool_signature(at) == normal.tool_signature(at)
+    assert linked.tool_signature(at)["signature"]["formals"] == ["int arg", "int more"]
+
+
+def test_the_complete_include_graph_through_a_linked_root(tmp_path):
+    normal, linked = linked_pair(tmp_path, {
+        "tb.f": "top.sv\n", "top.sv": '`include "h.svh"\nclass top; endclass\n', "h.svh": "class h; endclass\n"})
+    expected, actual = normal.tool_includes({}), linked.tool_includes({})
+    assert actual == expected and expected["total"] == 2
+    [top] = [i for i in expected["items"] if i["file"] == "top.sv"]
+    assert top["includes"] == ["h.svh"] and top["roots"] == ["top.sv"]
+    assert linked.tool_includes({"file": "top.sv"})["includes"][0]["file"] == "h.svh"
+
+
+def test_the_real_path_cache_holds_the_live_files_only(tmp_path):
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "top.sv").write_text("class top; endclass\n")
+    (root / "tb.f").write_text("top.sv\n")
+    for i in range(20):
+        (root / f"h{i}.inc").write_text(f"class h{i}; endclass\n")
+    server = in_process(root, "tb.f")
+    sources = server.ws.sources
+    for i in range(20):
+        (root / "top.sv").write_text(f'`include "h{i}.inc"\nclass top; endclass\n')
+        server.refresh(force=True)
+        server.path_of("top.sv")
+        assert set(server._real_of) == server.ws.files() == {str(root / "top.sv"), str(root / f"h{i}.inc")}
+    assert server.ws.sources is sources and len(server.ws.texts) == 2
+
+
+def test_discovery_watches_an_include_dir_outside_the_roots(tmp_path, monkeypatch):
+    root, first, last = tmp_path / "ws", tmp_path / "first", tmp_path / "last"
+    root.mkdir()
+    last.mkdir()
+    (last / "generated.inc").write_text("class fallback; endclass\n")
+    (root / "top.sv").write_text('`include "generated.inc"\nclass top; endclass\n')
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(root)], include_dirs=[str(first), str(last)], bundled_uvm=False))
+    server = mcp.McpServer(ws)
+    count = counting(server, monkeypatch)
+    assert class_names(server) == ["fallback", "top"]
+    first.mkdir()  # absent at the start, earlier in the search order
+    (first / "generated.inc").write_text("class preferred; endclass\n")
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["preferred", "top"]
+    (first / "generated.inc").write_text("class preferred; endclass\nclass more; endclass\n")
+    server.refresh(force=True)
+    assert count == [1] and class_names(server) == ["more", "preferred", "top"]
