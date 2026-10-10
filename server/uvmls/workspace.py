@@ -328,7 +328,12 @@ class Workspace:
         return self.lines[path]
 
     def roots_for(self, path: str) -> list[str]:
-        return [r for r, idx in self.indices.items() if path in idx.files]
+        """The roots that include a file, which the index names by its real path: a path through
+        a link (a workspace folder that is one) finds them once resolved."""
+        found = [r for r, idx in self.indices.items() if path in idx.files]
+        if not found and (real := os.path.realpath(path)) != path:
+            found = [r for r, idx in self.indices.items() if real in idx.files]
+        return found
 
     def update_document(self, path: str, text: str | None) -> list[str]:
         """Re-parse whatever depends on `path`. Returns the affected roots."""

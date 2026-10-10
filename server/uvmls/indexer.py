@@ -604,7 +604,7 @@ class Indexer:
             return built
         if trees is not None:
             trees[root] = built
-        extractor = Extractor(*built, root, library, overrides, self.library_dirs)
+        extractor = Extractor(*built, library, overrides, self.library_dirs)
         idx = extractor.run()
         if complete:
             extractor.collect_structures()
@@ -620,10 +620,12 @@ class Indexer:
             built = self._tree(root, overrides, library)
             if isinstance(built, FileIndex):
                 return [], [], []
-        return Extractor(*built, root, library, overrides, self.library_dirs).collect_structures()
+        return Extractor(*built, library, overrides, self.library_dirs).collect_structures()
 
     def _tree(self, root: str, overrides: dict[str, str], library: bool):
-        """(syntax tree, source manager), or the index of a root that cannot be read."""
+        """(syntax tree, source manager, the root's path), or the index of a root that cannot be
+        read. A root read from disk is keyed by the path slang names it by, links resolved, as
+        every location in it and every header it includes are; an editor's text keeps its path."""
         sm = ps.SourceManager()
         for path, text in overrides.items():
             if path != root:
@@ -646,6 +648,9 @@ class Indexer:
                 buffers.append(sm.assignText(root, to_slang(overrides[root])))
             else:
                 buffers.append(sm.readSource(root))
+                full = str(sm.getFullPath(buffers[-1].id) or "")
+                if full and not full.startswith("<"):
+                    root = os.path.normpath(os.path.abspath(full))
         except Exception as e:  # unreadable file
             idx = FileIndex(root=root, library=library)
             idx.diagnostics.append(Diag(Range(root, 0, 0, 0, 0), f"cannot read file: {e}", "error", "io"))
@@ -656,7 +661,7 @@ class Indexer:
             # the compilation unit, or -uvm), so predefine the real ones, as the shim would be.
             prelude = sm.assignText(UVM_MACROS_PRELUDE, '`include "uvm_macros.svh"\n')
             tree = S.SyntaxTree.fromBuffers([prelude] + buffers, sm, bag)
-        return tree, sm
+        return tree, sm, root
 
 
 class Extractor:

@@ -568,7 +568,7 @@ endclass
     path = str(tmp_path / 't.sv')
     user = ws.indices[path]
     assert user.structures_pending and user.structures == user.folds == user.directives == []
-    ex = Extractor(*ws.indexer._tree(path, {}, False), path, False, {}, ws.indexer.library_dirs)
+    ex = Extractor(*ws.indexer._tree(path, {}, False), False, {}, ws.indexer.library_dirs)
     made, original = [], Extractor.make_range
     with patch.object(Extractor, 'make_range', lambda self, *a: made.append(original(self, *a)) or made[-1]):
         ex.collect_identifiers()
@@ -686,14 +686,14 @@ def test_library_fold_walk_skips_only_structureless_syntax(tmp_path, source):
     ws = index(tmp_path, files, bundled=True)
     root = next(r for r, idx in ws.indices.items() if idx.library) if source == "library" else str(tmp_path / "t.sv")
     built = ws.indexer._tree(root, {}, True)
-    full = Extractor(*built, root, True, {}, ws.indexer.library_dirs)
+    full = Extractor(*built, True, {}, ws.indexer.library_dirs)
     stack = [built[0].root]
     while stack:
         n = stack.pop()
         if n.kind in STRUCTURE_KINDS:
             full.structural_pair(n)
         stack.extend(c for c in n if isinstance(c, SyntaxNode))
-    pruned, folds, _ = Extractor(*built, root, True, {}, ws.indexer.library_dirs).collect_structures()
+    pruned, folds, _ = Extractor(*built, True, {}, ws.indexer.library_dirs).collect_structures()
     assert len(full.out.structures) > (1000 if source == "library" else 15)
     assert sorted(pruned, key=repr) == sorted(full.out.structures, key=repr)
     assert folds
@@ -708,7 +708,7 @@ def test_library_fold_walk_sees_directives_inside_skipped_syntax(tmp_path):
             "endfunction\n`endif\n")
     ws = index(tmp_path, {"t.sv": text})
     root = str(tmp_path / "t.sv")
-    _, folds, _ = Extractor(*ws.indexer._tree(root, {}, True), root, True, {}, ws.indexer.library_dirs).collect_structures()
+    _, folds, _ = Extractor(*ws.indexer._tree(root, {}, True), True, {}, ws.indexer.library_dirs).collect_structures()
     # The `ifdef inside the expression would otherwise close the outer `ifndef's branch.
     expected = [(0, 15, "branch"), (2, 14, None), (5, 6, "branch"), (7, 8, "branch"), (11, 12, "comment")]
     assert sorted((f.start, f.end, f.kind) for f in folds) == expected
