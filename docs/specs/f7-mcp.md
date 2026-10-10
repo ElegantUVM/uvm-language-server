@@ -107,8 +107,10 @@ Resource templates listed through `resources/templates/list`.
   and the extension calls `vscode.lm.registerMcpServerDefinitionProvider` (final in VS Code 1.101:
   bump `engines.vscode` to `^1.101.0` and `@types/vscode` to `~1.101.0`; client/src uses no API newer
   than that). The provider returns one `McpStdioServerDefinition(label, command, args, env, version)`
-  with `cwd` set to the first workspace folder and `env.PYTHONPATH` set as `extension.ts` sets it for
-  the language server (or `-m uvmls` fails when packaged), command = the resolved `uvm.pythonPath`,
+  with `cwd` set to the server directory, never a workspace folder (`python -m` imports from the
+  working directory first, so a workspace `uvmls.py` would run instead of the server), and
+  `env.PYTHONPATH` set as `extension.ts` sets it for the language server (or `-m uvmls` fails when
+  packaged), command = the resolved `uvm.pythonPath`,
   args = `-m uvmls mcp <folder>` plus the whole `uvm` configuration passed as flags (`-f` per filelist,
   `-I` per include dir, `-D` per define, `--uvm-home`, `--no-bundled-uvm`, excludes), and it fires
   `onDidChangeMcpServerDefinitions` when those settings change. Setting `uvm.mcp.enabled` (default
