@@ -188,8 +188,13 @@ class _PerFile(dict):
         self.ws, self.kind, self.path_of, self.key_of = ws, kind, path_of, key_of
 
     def __missing__(self, path: str) -> list:
+        return self.collect(path)
+
+    def collect(self, path: str, roots_of: str | None = None) -> list:
+        """The records for `path`, merged; `roots_of` names the file as the roots know it when
+        that differs (a root given through a link, whose records name it resolved)."""
         out, seen = [], None
-        for root in self.ws._recording_roots(path):  # the same roots the lazy walk collects from
+        for root in self.ws._recording_roots(roots_of or path):  # the same roots the lazy walk collects from
             records = self.ws._records(self.ws.indices[root], self.kind, self.path_of).get(path, ())
             if not records:
                 continue

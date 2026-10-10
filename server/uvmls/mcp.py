@@ -534,8 +534,8 @@ class McpServer:
         """(files, directories) a refresh stats: the indexed files, every filelist read (nested
         ones too) and the headers `include could not open, and the directories a new or recreated
         file would land in, whose stamps a creation or deletion changes: every directory under the
-        roots in discovery mode; with a filelist, those of the filelists and of the testbench's
-        files, and the include directories with their subdirectories (`include "sub/x.svh")."""
+        roots in discovery mode, with a filelist those of the filelists and of the testbench's
+        files, and in both the include directories with their subdirectories (`include "sub/x.svh")."""
         ws = self.ws
         s = ws.sources
         files = ws.files() | self._missing_includes()
@@ -546,9 +546,9 @@ class McpServer:
             discover_files(self.roots, ws.config.exclude, match=lambda name: False, directory_stamps=stamps)
         else:
             dirs |= {os.path.dirname(p) for p in (files - ws.library_files) | filelists}
-            discover_files(list(s.include_dirs) if s else [], ws.config.exclude, match=lambda name: False,
-                           directory_stamps=stamps)
-            dirs |= set(s.absent_include_dirs) if s else set()  # gone until created: then worth a look
+        if s is not None:  # include directories outside the roots too; an absent one is gone until created
+            discover_files(s.include_dirs, ws.config.exclude, match=lambda name: False, directory_stamps=stamps)
+            dirs |= set(s.absent_include_dirs)
         return files | filelists, dirs | set(stamps)
 
     def _filelists(self) -> set[str]:
@@ -738,18 +738,28 @@ class McpServer:
         ws = self.ws
         if self._aligned == (ws.version, ws.sources):
             return
-        if self._aligned[1] is not ws.sources:
-            self._real_of = {}  # a reindex may have followed a link elsewhere
-        self._key_of_real = {}
+        known = self._real_of if self._aligned[1] is ws.sources else {}  # a reindex may follow links elsewhere
+        self._real_of, self._key_of_real = {}, {}
         for key in ws.files():
-            real = self._real_of.get(key)
-            if real is None:
-                real = self._real_of[key] = os.path.realpath(key)
+            real = self._real_of[key] = known.get(key) or os.path.realpath(key)
             if real != key:
                 self._key_of_real[real] = key
                 if key in ws.texts:
                     ws.texts.setdefault(real, ws.texts[key])
         self._aligned = (ws.version, ws.sources)
+
+    def _seed(self, real: str):
+        """The per-file records the navigation tools read (calls, directives, structures) for a
+        root given through a link: the workspace merges them from the roots that record for a
+        file, found by its key, under the paths the records name, its real path; neither path
+        alone reaches them, so they are collected here by key under the real path."""
+        ws = self.ws
+        key = self.key_of(real)
+        if key == real or real in ws.invocations_by_file:  # membership never triggers a collection
+            return
+        ws._collect_structures(key)
+        for table in (ws.invocations_by_file, ws.directives_by_file, ws.structures_by_file, ws.folds_by_file):
+            table.collect(real, key)
 
     def path_of(self, file: str) -> str:
         """The real path of the indexed file a `file` argument names: relative to a workspace
@@ -1025,6 +1035,7 @@ class McpServer:
         path = self.path_of(args["file"])
         if path not in self.ws.texts:
             raise ToolError(f"{args['file']} is a library file; only the testbench's own files can be asked about")
+        self._seed(path)
         lines = self.ws.lines_of(path)
         line = args["line"] - 1
         if line >= len(lines):
@@ -1180,9 +1191,12 @@ class McpServer:
                     "library": path in ws.library_files,
                     "includes": [{"file": self.relative(t), "location": self.loc(site)} for t, site in forward.get(path, [])],
                     "includedBy": [{"file": self.relative(s), "location": self.loc(site)} for s, site in backward.get(path, [])]}
-        files = sorted(ws.files() - ws.library_files)
-        return self._page(files, args, lambda f: {
-            "file": self.relative(f), "roots": [self.relative(r) for r in ws.roots_for(f)],
+        self._align()
+        keys: dict[str, set[str]] = {}  # by real path, the keys the index files it under
+        for f in ws.files() - ws.library_files:
+            keys.setdefault(self._real_of.get(f, f), set()).add(f)
+        return self._page(sorted(keys), args, lambda f: {
+            "file": self.relative(f), "roots": sorted({self.relative(r) for k in keys[f] for r in ws.roots_for(k)}),
             "includes": [self.relative(t) for t, _ in forward.get(f, [])],
             "includedBy": sorted({self.relative(s) for s, _ in backward.get(f, [])})})
 
