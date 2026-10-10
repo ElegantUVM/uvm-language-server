@@ -99,6 +99,7 @@ class SourceSet:
     uvm_version: str | None = None
     uvm_guard: str | None = None  # the include guard of its uvm_pkg.sv (UVM_PKG_SV)
     timescale: str | None = None  # a filelist's -timescale, for elaboration
+    filelists: list[str] = field(default_factory=list)  # every filelist read, nested ones included
 
 
 def norm(p: str) -> str:
@@ -247,6 +248,7 @@ class FilelistResult:
     defines: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     timescale: str | None = None
+    filelists: list[str] = field(default_factory=list)  # every filelist read: nested and missing ones too
 
 
 def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | None = None,
@@ -265,6 +267,7 @@ def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | 
     if path in seen:
         return result
     seen.add(path)
+    result.filelists.append(path)
     base = os.path.dirname(path)
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -433,6 +436,7 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
     library_roots: set[str] = set()
     roots: list[str] = []
     timescale = None
+    filelists: list[str] = []
 
     uvm_src = None
     for name, home in (("uvmHome", config.uvm_home), ("$UVM_HOME", config.env_uvm_home)):
@@ -453,6 +457,7 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
             defines.update(r.defines)
             roots += r.files
             timescale = r.timescale or timescale
+            filelists += r.filelists
     else:
         mode = "discovery"
         files = discover_files(config.workspace_roots, config.exclude)
@@ -517,4 +522,5 @@ def build_source_set(config: ProjectConfig) -> SourceSet:
                      library_roots=library_roots, has_real_uvm_macros=has_real,
                      mode=mode, warnings=warnings, uvm_source=uvm_source, uvm_dir=uvm_dir,
                      uvm_version=uvm_version(uvm_dir) if uvm_dir else None,
-                     uvm_guard=uvm_guard(uvm_dir) if uvm_dir else None, timescale=timescale)
+                     uvm_guard=uvm_guard(uvm_dir) if uvm_dir else None, timescale=timescale,
+                     filelists=filelists)

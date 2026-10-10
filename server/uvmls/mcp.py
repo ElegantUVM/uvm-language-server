@@ -28,7 +28,7 @@ from .elab import ELAB_TIMEOUT, PACKAGE_PARENT, displayed, request_for, skip_rea
 from .indexer import SHIM_FILE
 from .model import ClassInfo, CreateCall, Range, SeqStart, Variable, utf8_prefix
 from .navigation import Navigator, expr_at
-from .project import ProjectConfig, is_bundled, norm
+from .project import ProjectConfig, discover_files, is_bundled, norm
 from .uvm import ROLE_ORDER
 from .views import config_db_report, effective_type, list_tests, topology
 from .workspace import Spec, Workspace
@@ -39,6 +39,7 @@ PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
 LATEST = PROTOCOL_VERSIONS[-1]
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL_ERROR = -32700, -32600, -32601, -32602, -32603
 RESOURCE_NOT_FOUND = -32002
+EOF = object()  # the reader's end-of-input mark; a JSON null on a line is a message
 DEFAULT_LIMIT, MAX_LIMIT = 200, 2000
 REFRESH_SECONDS = 1.0
 LOCATION_KEYS = ("file", "line", "col", "endLine", "endCol")
@@ -199,8 +200,8 @@ TOOLS = [
           "Compile and elaborate the whole design with slang in a subprocess and report what a "
           "simulator's elaboration would: type errors, unknown members, wrong argument counts, missing "
           "modules or packages. Returns the top modules, counts and the first diagnostics (truncated when "
-          f"the display limits cut the list); it is stopped after {ELAB_TIMEOUT:.0f} s. Other tool calls "
-          "wait for it; ping does not.",
+          f"the display limits cut the list); a run that cannot start, fails or is stopped after "
+          f"{ELAB_TIMEOUT:.0f} s is an error result. Other tool calls wait for it; ping does not.",
           {"tops": {"type": "array", "items": {"type": "string"}, "description": "top modules (default: slang picks)"}}),
     _tool("definition", "Go to definition",
           "Where the identifier at a position is declared; a config_db field literal goes to the field's "
@@ -311,6 +312,11 @@ def _tool_error(message: str) -> dict:
     return {"content": [{"type": "text", "text": message}], "isError": True}
 
 
+def _valid_id(rid) -> bool:
+    """A request id MCP allows: a string or an integer, never a bool, a float or null."""
+    return isinstance(rid, (str, int)) and not isinstance(rid, bool)
+
+
 # -- server ----------------------------------------------------------------------
 
 
@@ -319,6 +325,7 @@ class McpServer:
         self.ws = ws
         self.nav = Navigator(ws)
         self.roots = [norm(r) for r in ws.config.workspace_roots]
+        self.real_roots = [os.path.realpath(r) for r in self.roots]
         self.stamps: dict[str, tuple[int, int] | None] = {}
         self._checked = 0.0
         self.indexed_at = time.time()
@@ -339,7 +346,7 @@ class McpServer:
         threading.Thread(target=self._read, args=(stdin or sys.stdin.buffer, loop, queue), daemon=True).start()
         while True:
             message = await queue.get()
-            if message is None:
+            if message is EOF:
                 return 0
             await self._handle(message)
 
@@ -355,17 +362,30 @@ class McpServer:
                 except ValueError as e:
                     self._send(_error_reply(None, PARSE_ERROR, f"parse error: {e}"))
                     continue
-                if isinstance(message, dict) and message.get("method") == "ping" and "id" in message:
+                except RecursionError:
+                    self._send(_error_reply(None, PARSE_ERROR, "parse error: nested too deeply"))
+                    continue
+                if isinstance(message, dict) and message.get("method") == "ping" and message.get("jsonrpc") == "2.0" \
+                        and "id" in message and _valid_id(message["id"]) and isinstance(message.get("params", {}), dict):
                     self._send({"jsonrpc": "2.0", "id": message["id"], "result": {}})
                     continue
                 loop.call_soon_threadsafe(queue.put_nowait, message)
         except (OSError, ValueError) as e:
             log.warning("stdin: %s", e)
         finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
+            loop.call_soon_threadsafe(queue.put_nowait, EOF)
 
-    def _send(self, message: dict):
-        data = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
+    def _send(self, message):
+        """One line of JSON, ASCII only: a lone surrogate echoed from a request is escaped rather
+        than failing to encode, and a reply that cannot be serialized becomes an error reply."""
+        try:
+            text = json.dumps(message, ensure_ascii=True)
+        except (TypeError, ValueError) as e:
+            log.exception("serializing a reply")
+            rid = message.get("id") if isinstance(message, dict) else None
+            text = json.dumps(_error_reply(rid if _valid_id(rid) else None, INTERNAL_ERROR,
+                                           f"the reply could not be serialized: {type(e).__name__}: {e}"))
+        data = (text + "\n").encode("ascii")
         with self._write_lock:
             try:
                 self._out.write(data)
@@ -374,30 +394,46 @@ class McpServer:
                 log.warning("stdout: %s", e)
 
     async def _handle(self, message):
-        if isinstance(message, list):  # a batch (protocol 2025-03-26)
-            for item in message:
-                await self._handle(item)
+        if isinstance(message, list):  # a batch (protocol 2025-03-26): one array of replies, in order
+            if not message:
+                self._send(_error_reply(None, INVALID_REQUEST, "an empty batch"))
+                return
+            replies = [r for r in [await self._answer(item) for item in message] if r is not None]
+            if replies:
+                self._send(replies)
             return
+        reply = await self._answer(message)
+        if reply is not None:
+            self._send(reply)
+
+    async def _answer(self, message) -> dict | None:
+        """The reply to one message: an error for a bad envelope, none for a notification."""
         if not isinstance(message, dict):
-            self._send(_error_reply(None, INVALID_REQUEST, "a request must be an object"))
-            return
-        rid, method = message.get("id"), message.get("method")
+            return _error_reply(None, INVALID_REQUEST, "a request must be an object")
+        rid = message.get("id")
+        if "id" in message and not _valid_id(rid):
+            return _error_reply(None, INVALID_REQUEST, "id must be a string or an integer")
+        method, params = message.get("method"), message.get("params")
+        if "method" not in message:
+            if "result" in message or "error" in message:
+                return None  # a reply, to a request this server never makes
+            return _error_reply(rid, INVALID_REQUEST, "a request needs a method")
         if not isinstance(method, str):
-            if "result" not in message and "error" not in message:  # not a reply to a request of ours
-                self._send(_error_reply(rid, INVALID_REQUEST, "a request needs a method"))
-            return
+            return _error_reply(rid, INVALID_REQUEST, "method must be a string")
+        if message.get("jsonrpc") != "2.0":
+            return _error_reply(rid, INVALID_REQUEST, 'jsonrpc must be "2.0"')
+        if params is not None and not isinstance(params, (dict, list)):
+            return _error_reply(rid, INVALID_REQUEST, "params must be an object or an array")
         if "id" not in message:
-            return  # a notification is never answered
+            return None  # a notification is never answered
         try:
-            result = await self._dispatch(method, message.get("params") or {})
+            result = await self._dispatch(method, {} if params is None else params)
         except RpcError as e:
-            self._send(_error_reply(rid, e.code, e.message))
-            return
+            return _error_reply(rid, e.code, e.message)
         except Exception as e:
             log.exception("%s", method)
-            self._send(_error_reply(rid, INTERNAL_ERROR, f"{type(e).__name__}: {e}"))
-            return
-        self._send({"jsonrpc": "2.0", "id": rid, "result": result})
+            return _error_reply(rid, INTERNAL_ERROR, f"{type(e).__name__}: {e}")
+        return {"jsonrpc": "2.0", "id": rid, "result": result}
 
     async def _dispatch(self, method: str, params) -> dict:
         if not isinstance(params, dict):
@@ -440,13 +476,13 @@ class McpServer:
             result = getattr(self, "tool_" + name)(args)
             if asyncio.iscoroutine(result):
                 result = await result
+            text = json.dumps(result, ensure_ascii=False)
         except ToolError as e:
             return _tool_error(str(e))
         except Exception as e:
             log.exception("tool %s", name)
             return _tool_error(f"{type(e).__name__}: {e}")
-        return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
-                "structuredContent": result, "isError": False}
+        return {"content": [{"type": "text", "text": text}], "structuredContent": result, "isError": False}
 
     def _read_resource(self, params: dict) -> dict:
         uri = params.get("uri")
@@ -481,17 +517,30 @@ class McpServer:
     # -- freshness -----------------------------------------------------------
 
     def watched(self) -> list[str]:
-        """The files whose stamps decide a refresh: the indexed files, the filelists and, in
-        discovery mode, the directories of the testbench's files (a creation or deletion changes
-        a directory's stamp)."""
+        """What a refresh stats: the indexed files, every filelist read (nested ones too) and the
+        directories a new or recreated file would land in, whose stamps a creation or deletion
+        changes: every directory under the roots in discovery mode; with a filelist, those of the
+        filelists, the testbench's files and the include directories."""
         ws = self.ws
-        paths = ws.files() | set(ws.config.filelists)
-        if ws.sources is not None and ws.sources.mode == "discovery":
-            paths |= {os.path.dirname(p) for p in ws.files() - ws.library_files} | set(self.roots)
+        s = ws.sources
+        files = ws.files()
+        filelists = set(ws.config.filelists) | set(s.filelists if s else ())
+        paths = files | filelists | set(self.roots)
+        if s is not None and s.mode == "discovery":
+            stamps: dict = {}
+            discover_files(self.roots, ws.config.exclude, match=lambda name: False, directory_stamps=stamps)
+            paths |= set(stamps)
+        else:
+            paths |= {os.path.dirname(p) for p in (files - ws.library_files) | filelists}
+            paths |= set(s.include_dirs if s else ())
         return sorted(paths)
 
     def _restamp(self):
-        self.stamps = {p: _stamp(p) for p in self.watched()}
+        stamps = {p: _stamp(p) for p in self.watched()}
+        for path in self.stamps:
+            if path not in stamps and _stamp(path) is None:
+                stamps[path] = None  # gone: its return is a change to notice
+        self.stamps = stamps
         self._checked = time.monotonic()
 
     def refresh(self, force: bool = False):
@@ -554,11 +603,21 @@ class McpServer:
             return {**{k: self.convert(v) for k, v in rest.items()}, "location": self.loc_of(obj)}
         return {k: self.convert(v) for k, v in obj.items()}
 
+    def _inside(self, path: str) -> bool:
+        """Under a workspace root as written and once symlinks are resolved: a link inside the
+        workspace to a file outside it stays outside."""
+        real = os.path.realpath(path)
+        for root, real_root in zip(self.roots, self.real_roots):
+            if (path == root or path.startswith(root + os.sep)) and \
+                    (real == real_root or real.startswith(real_root + os.sep)):
+                return True
+        return False
+
     def path_of(self, file: str) -> str:
         """The indexed file a `file` argument names: relative to a workspace root, or absolute
         under one."""
         candidates = [norm(file)] if os.path.isabs(file) else [norm(os.path.join(r, file)) for r in self.roots]
-        inside = [p for p in candidates if any(p == r or p.startswith(r + os.sep) for r in self.roots)]
+        inside = [p for p in candidates if self._inside(p)]
         if not inside:
             library = any(p in self.ws.library_files or is_bundled(p) for p in candidates)
             raise ToolError(f"outside the workspace: {file}" + (
@@ -764,13 +823,15 @@ class McpServer:
             raise ToolError(f"elaboration skipped: {reason}")
         request = request_for(ws, tops=args.get("tops") or ())
         result = await self._run_worker(request)
+        if result.get("error"):
+            raise ToolError(f"elaboration failed: {result['error']}")
         listed, more = displayed(result.get("diagnostics") or [])
         counts = result.get("counts") or {}
 
         def at(d: dict) -> dict | None:
             return self.location(d["file"], d["line"], d["col"], d["endLine"], d["endCol"]) if d.get("file") else None
 
-        return {"error": result.get("error"), "tops": result.get("tops") or [], "counts": counts,
+        return {"tops": result.get("tops") or [], "counts": counts,
                 "seconds": result.get("seconds"), "uvm": uvm_label(ws.sources),
                 "diagnostics": [{"code": d["code"], "severity": d["severity"], "message": d["message"], "location": at(d),
                                  "related": [{"message": n["message"], "location": at({**n, "endLine": n["line"], "endCol": n["col"]})}
@@ -779,7 +840,8 @@ class McpServer:
 
     async def _run_worker(self, request: dict) -> dict:
         """`python -m uvmls elab-worker` on the request, as the language server's run_worker does:
-        pyslang holds the GIL while it compiles, so it must not compile in this process."""
+        pyslang holds the GIL while it compiles, so it must not compile in this process. A worker
+        that cannot start, overruns ELAB_TIMEOUT or answers no result is a ToolError."""
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join(
             [PACKAGE_PARENT] + [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p])
@@ -789,23 +851,25 @@ class McpServer:
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, env=env)
         except OSError as e:
-            return {"error": f"cannot start {sys.executable}: {e}"}
+            raise ToolError(f"elaboration failed: cannot start {sys.executable}: {e}") from None
         try:
             out, err = await asyncio.wait_for(proc.communicate(json.dumps(request).encode()), ELAB_TIMEOUT)
         except asyncio.TimeoutError:
-            return {"error": f"it took longer than {ELAB_TIMEOUT:.0f} s and was stopped"}
+            raise ToolError(f"elaboration failed: it took longer than {ELAB_TIMEOUT:.0f} s and was stopped") from None
         finally:
             if proc.returncode is None:
                 try:
                     proc.kill()
                 except ProcessLookupError:
                     pass
+                await proc.wait()
         if err.strip():
             log.info("elaboration worker: %s", err.decode(errors="replace")[-4000:])
         try:
             return json.loads(out)
         except ValueError:
-            return {"error": f"the worker exited with status {proc.returncode}"}
+            raise ToolError(f"elaboration failed: the worker exited with status {proc.returncode} "
+                            "without a result") from None
 
     # -- tools: navigation ---------------------------------------------------
 
