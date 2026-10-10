@@ -495,12 +495,13 @@ class Workspace:
                     self.directives_by_file.pop(name, None)
 
     def _recording_roots(self, path: str) -> list[str]:
-        """The roots whose walk records anything for a file. A user root leaves the library's
-        files to the library's roots (Extractor.in_library): a request for a UVM header must not
-        walk every user root that includes the macros."""
-        dirs = self.indexer.library_dirs if self.indexer is not None else ()
-        return [root for root in self.roots_for(path)
-                if self.indices[root].library or root == path or not path.startswith(dirs)]
+        """The roots whose walk records anything for a file. A file of the configured library is
+        left to the library's own roots: a request for a UVM header must not walk every user root
+        that includes the macros. A header under the library directory that the library's roots
+        do not reach (a project's extra file beside it) is still a user root's to record."""
+        if path not in self.library_files:
+            return self.roots_for(path)
+        return [root for root in self.roots_for(path) if self.indices[root].library or root == path]
 
     def _records(self, idx, kind: str, path_of) -> dict[str, list]:
         """A root's records of one kind by file, kept while the root's index is unchanged."""

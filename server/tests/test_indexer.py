@@ -726,3 +726,24 @@ def test_an_open_buffer_with_a_lone_surrogate_does_not_stop_indexing(tmp_path):
     assert {'a_c', 'edited_c'} <= set(ws.classes_by_name)
     ws.reindex_all()
     assert {'a_c', 'edited_c'} <= set(ws.classes_by_name)
+
+
+def test_a_library_header_folds_the_same_whichever_file_asked_first(tmp_path):
+    # A user root records nothing for the library's files: their folds come from the library's own
+    # roots, so they do not depend on which file was folded first.
+    lib = tmp_path / 'lib'
+    lib.mkdir()
+    (lib / 'uvm_pkg.sv').write_text('package uvm_pkg;\n`include "header.svh"\nendpackage\n')
+    (lib / 'uvm_macros.svh').write_text('// macros\n')
+    (lib / 'header.svh').write_text('class c;\n  function void f();\n    begin\n    end\n  endfunction\nendclass\n')
+    (tmp_path / 'top.sv').write_text('`include "header.svh"\nclass top;\nendclass\n')
+    (tmp_path / 'tb.f').write_text('top.sv\n')
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / 'tb.f')],
+                               uvm_home=str(lib), bundled_uvm=False, include_dirs=[str(lib)]))
+    header = str(lib / 'header.svh')
+    assert header in ws.library_files and len(ws.roots_for(header)) == 2
+    assert [r for r in ws._recording_roots(header)] == [str(lib / 'uvm_pkg.sv')]
+    before = ws.folds_in(header)
+    ws.folds_in(str(tmp_path / 'top.sv'))
+    assert ws.folds_in(header) == before and before
