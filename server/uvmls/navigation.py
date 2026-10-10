@@ -386,23 +386,36 @@ class Navigator:
                 return [Target(m, owner=pkg)]
         return []
 
+    def _package_member(self, ws, pkg, name: str, strict: bool, seen: set) -> list[Target]:
+        """What `pkg::name` means (IEEE 1800 26.6): the package's own declaration, else what the
+        name means in the package an import by that name comes from, else in the packages its
+        wildcard imports bring in, each as far as `pkg` exports it. Strict: a tie within one of
+        those levels is withheld, not guessed."""
+        if pkg.name in seen:
+            return []
+        seen = seen | {pkg.name}
+        exported = {p for level in ws.import_scopes(name, pkg.name, [pkg.name]) for p in level}
+        own, named, wildcard = ws.import_order(name, pkg.name, pkg.imports)
+        for level in (own, named, wildcard):
+            found = []
+            for p in dict.fromkeys(level):
+                if p == pkg.name:
+                    found += self._package_item(ws, pkg, name, strict)
+                elif p in exported and (other := ws.find_unit(p, "package")) is not None:
+                    found += self._package_member(ws, other, name, strict, seen)
+            if found:
+                # Two routes to one declaration (a diamond of re-exports) are no tie.
+                distinct = list({id(f.obj): f for f in found}.values())
+                return distinct[:1] if not strict or len(distinct) == 1 else []
+        return []
+
     def step(self, t: Target, name: str, sep: str, ctx_cls, strict: bool = False) -> list[Target]:
         ws = self.ws
         if isinstance(t.obj, DesignUnit) and t.obj.kind == "package":
             # The package's own items, then what its imports by name re-export, then what its
             # wildcard imports re-export (IEEE 1800 26.6). Strict: a name several wildcard
             # re-exports supply is ambiguous, and an explicit import outranks them.
-            # import_scopes expands each of the package's own imports through what it re-exports,
-            # so an import by name through another package still ranks above a wildcard one.
-            for level in ws.import_scopes(name, t.obj.name, t.obj.imports):
-                found = []
-                for p in dict.fromkeys(level):
-                    pkg = t.obj if p == t.obj.name else ws.find_unit(p, "package")
-                    if pkg is not None:
-                        found += self._package_item(ws, pkg, name, strict)
-                if found:
-                    return found[:1] if not strict or len(found) == 1 else []
-            return []
+            return self._package_member(ws, t.obj, name, strict, set())
         if isinstance(t.obj, Variable) and t.obj.type is not None and t.obj.type.text.startswith("virtual"):
             iface = ws.find_unit(t.obj.type.name, "interface")
             if iface is not None:

@@ -1872,3 +1872,40 @@ package alone; import bridge::go; export *::*; endpackage
 module top; initial begin middle::go(1); alone::go(2); end endmodule
 '''
     assert labels_in(tmp_path, text, ['middle::go(1', 'alone::go(2']) == ['function void go(int aa_arg)'] * 2
+
+
+@pytest.mark.parametrize('b_body,label', [
+    ('import aa::*; export aa::*;\nfunction void go(int own_arg); endfunction', 'function void go(int own_arg)'),
+    ('import aa::*; import zz::go; export *::*;', 'function void go(int zz_arg)'),
+])
+def test_a_name_through_an_intermediate_package_means_what_it_means_there(tmp_path, b_body, label):
+    """`c::go` reached through b means what `go` means inside b: b's own declaration, or the one
+    b imports by name, ahead of what b's wildcard imports bring in."""
+    text = f'''package aa; function void go(int aa_arg); endfunction endpackage
+package zz; function void go(int zz_arg); endfunction endpackage
+package b;
+{b_body}
+endpackage
+package c; import b::*; export *::*; endpackage
+module top; initial c::go(1); endmodule
+'''
+    assert labels_in(tmp_path, text, ['c::go(1']) == [label]
+
+
+def test_two_routes_to_one_declaration_are_no_tie(tmp_path):
+    text = '''package aa; function void go(int aa_arg); endfunction endpackage
+package left; import aa::*; export aa::*; endpackage
+package right; import aa::*; export aa::*; endpackage
+package c; import left::*; import right::*; export *::*; endpackage
+module top; initial c::go(1); endmodule
+'''
+    assert labels_in(tmp_path, text, ['c::go(1']) == ['function void go(int aa_arg)']
+
+
+def test_a_package_exports_only_what_it_exports(tmp_path):
+    """`c::go` is not visible when c imports go but exports nothing of it."""
+    text = '''package aa; function void go(int aa_arg); endfunction endpackage
+package c; import aa::go; endpackage
+module top; initial c::go(1); endmodule
+'''
+    assert labels_in(tmp_path, text, ['c::go(1']) == [None]
