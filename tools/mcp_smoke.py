@@ -3,11 +3,11 @@
     python tools/mcp_smoke.py [--cwd DIR] [--env NAME=VALUE ...] [--protocol V] [--list]
                               [--call TOOL [JSON]] [--read URI] -- COMMAND ARGS...
 
-    python tools/mcp_smoke.py --call topology '{"test": "alu_error_test"}' -- \\
-        .venv/bin/python -m uvmls mcp examples/alu_tb -f alu_tb.f
+    PYTHONPATH=server python tools/mcp_smoke.py --call topology '{"test": "alu_error_test"}' -- \\
+        .venv/bin/python -m uvmls mcp examples/alu_tb -f examples/alu_tb/alu_tb.f
 
 The command after `--` is started as a subprocess with the given working directory and environment
-(entries added to this process's). The client does the initialize handshake, then runs the actions
+(entries added to this process's); the server's `-f` is relative to that working directory. The client does the initialize handshake, then runs the actions
 in the order given (tools/list by default) and prints each result as JSON on a line of its own.
 The exit status is 1 when the server answered an error or an isError result. As a module, `Smoke`
 gives request(), notify(), call(), data() and read_resource(), and keeps the server's stderr.
