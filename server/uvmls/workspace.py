@@ -179,7 +179,7 @@ def bind_params(params: list[tuple[str, str]], args: list[str], outer: dict[str,
 
 class _PerFile(dict):
     """One kind of per-file record (structures, folds, calls, directives) from every root that
-    reaches a file, merged when the file is first asked about: requests need one file's, and merging
+    records for a file (Workspace._recording_roots), merged when the file is first asked about: requests need one file's, and merging
     every file's after each edit cost more than the rest of a rebuild. The first root with records
     for the file gives all of them; another (a shared header) adds only those not seen yet."""
 
@@ -189,7 +189,7 @@ class _PerFile(dict):
 
     def __missing__(self, path: str) -> list:
         out, seen = [], None
-        for root in self.ws.roots_for(path):
+        for root in self.ws._recording_roots(path):  # the same roots the lazy walk collects from
             records = self.ws._records(self.ws.indices[root], self.kind, self.path_of).get(path, ())
             if not records:
                 continue

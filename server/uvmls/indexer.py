@@ -1845,7 +1845,7 @@ class Extractor:
         return self._foldable[bid]
 
     def fold_trivia(self, tok):
-        """The folds the trivia before a token makes, and (in user code) the directive ranges."""
+        """The folds the trivia before a token makes, and the directive ranges."""
         trivia = tok.trivia
         after, comments = 0, False  # where the trivia after the last directive start; any comments
         prev = None  # (index, start) of the directive just before
@@ -1862,7 +1862,7 @@ class Extractor:
             path = self.foldable(sr.start)
             if path is not None:
                 self.directive_folds(syntax, path, sr)
-            if self.library or syntax.kind == K.MacroUsage:
+            if syntax.kind == K.MacroUsage:
                 continue  # code: its arguments are as written and its expansion is parsed
             if path is None or sr.start.buffer != sr.end.buffer or sm.isMacroLoc(sr.end):
                 prev = None
@@ -1971,7 +1971,7 @@ class Extractor:
                     first = i + 1
 
     def collect_structures(self) -> tuple[list[StructuralPair], list[FoldRegion], list[Range]]:
-        """Structural pairs, folds and (in user code) directive ranges. User code is walked whole,
+        """Structural pairs, folds and directive ranges. User code is walked whole,
         for the bracket folds inside statements too; the library's walk skips the tokens of syntax
         that cannot hold a keyword structure, a comment or a directive."""
         if self.library:
