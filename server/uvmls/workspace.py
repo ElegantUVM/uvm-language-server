@@ -14,6 +14,11 @@ from .model import (
     Method, OverrideCall, Range, SeqStart, Typedef, TypeRef, Variable,
 )
 from .project import ProjectConfig, SourceSet, build_source_set, is_bundled, is_sv_file, norm
+# An edit keeps the parse of the roots it re-parsed for their first request, unless it was to
+# a header that more roots than this share: their trees would hold the project's text, and the
+# UVM headers each includes, many times over.
+TREES_KEPT = 4
+
 from .uvm import (
     BUILTIN_CLASSES, BUILTIN_MEMBERS, COMPONENT_ROLES, ROLE_OF_BASE, builtin_params,
     looks_like_config,
@@ -349,9 +354,10 @@ class Workspace:
                 roots = [path]
                 self.ephemeral.add(path)
             self._trees = {}
+            trees = self._trees if len(roots) <= TREES_KEPT else None
             for root in roots:
                 lib = self.sources is not None and root in self.sources.library_roots
-                self.indices[root] = self.indexer.parse(root, self.overrides, library=lib, trees=self._trees)
+                self.indices[root] = self.indexer.parse(root, self.overrides, library=lib, trees=trees)
             self._rebuild()
             return roots
 
@@ -475,7 +481,7 @@ class Workspace:
         if path in self._structured:
             return
         self._structured.add(path)
-        for root in self.roots_for(path):
+        for root in self._recording_roots(path):
             idx = self.indices[root]
             if idx.structures_pending:
                 idx.structures, idx.folds, idx.directives = self.indexer.structures(
@@ -487,6 +493,14 @@ class Workspace:
                     self.structures_by_file.pop(name, None)
                     self.folds_by_file.pop(name, None)
                     self.directives_by_file.pop(name, None)
+
+    def _recording_roots(self, path: str) -> list[str]:
+        """The roots whose walk records anything for a file. A user root leaves the library's
+        files to the library's roots (Extractor.in_library): a request for a UVM header must not
+        walk every user root that includes the macros."""
+        dirs = self.indexer.library_dirs if self.indexer is not None else ()
+        return [root for root in self.roots_for(path)
+                if self.indices[root].library or root == path or not path.startswith(dirs)]
 
     def _records(self, idx, kind: str, path_of) -> dict[str, list]:
         """A root's records of one kind by file, kept while the root's index is unchanged."""

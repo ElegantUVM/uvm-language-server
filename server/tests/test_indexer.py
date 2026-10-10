@@ -606,6 +606,51 @@ def test_an_edit_keeps_its_parse_for_the_first_request(tmp_path):
     assert Navigator(ws).folding_ranges(path) == folds and not ws._trees
 
 
+def test_an_edit_of_a_header_many_roots_share_keeps_no_parse(tmp_path):
+    from test_fixes import index
+    from uvmls.navigation import Navigator
+    from uvmls.workspace import TREES_KEPT
+
+    files = {f'c{i}.sv': '`include "shared.svh"\n' + ('`include "pair.svh"\n' if i < 2 else '')
+             + f'class c{i};\n  function void f();\n  endfunction\nendclass\n' for i in range(TREES_KEPT + 1)}
+    ws = index(tmp_path, {**files, 'shared.svh': '// shared\n', 'pair.svh': '// two roots\n'},
+               include_dirs=[str(tmp_path)])
+    assert len(ws.update_document(str(tmp_path / 'shared.svh'), '// edited\n')) == TREES_KEPT + 1
+    assert not ws._trees  # every root's tree would be kept: none is
+    folds = Navigator(ws).folding_ranges(str(tmp_path / 'c0.sv'))
+    assert folds  # parsed again for the request
+    assert set(ws.update_document(str(tmp_path / 'pair.svh'), '// edited\n')) == set(ws._trees)
+    assert len(ws._trees) == 2
+    assert Navigator(ws).folding_ranges(str(tmp_path / 'c0.sv')) == folds and set(ws._trees) == {str(tmp_path / 'c1.sv')}
+
+
+def test_folding_a_library_header_walks_only_the_library(tmp_path):
+    from unittest.mock import patch
+
+    from tools.gen_big import generate
+    from uvmls.navigation import Navigator
+    from uvmls.project import ProjectConfig
+    from uvmls.workspace import Workspace
+
+    filelist = generate(tmp_path, 21)
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(filelist)],
+                               include_dirs=[str(tmp_path / 'inc')]))
+    path = next(p for p in ws.library_files if p.endswith('uvm_object_defines.svh'))
+    users = [root for root, idx in ws.indices.items() if not idx.library]
+    assert len(users) == 21 and all(path in ws.indices[root].files for root in users)  # via the macros
+    with patch.object(ws.indexer, 'structures', wraps=ws.indexer.structures) as walk:
+        assert Navigator(ws).folding_ranges(path)
+    # The user roots that include the macros record nothing for the header: none is walked for it.
+    assert [c.args[0] for c in walk.call_args_list] == list(ws.sources.library_roots)
+    assert all(ws.indices[root].structures_pending for root in users)
+    # A user header shared by user roots still collects from each of them.
+    header = str(tmp_path / 'inc' / 'sub' / 'hdr.svh')
+    with patch.object(ws.indexer, 'structures', wraps=ws.indexer.structures) as walk:
+        Navigator(ws).folding_ranges(header)
+    assert [c.args[0] for c in walk.call_args_list] == ws.roots_for(header) == [str(tmp_path / 'bench.sv')]
+
+
 
 STRUCTURES_EVERYWHERE = '''module m #(parameter N = 2) (input logic clk);
   for (genvar i = 0; i < N; i++) begin : g
