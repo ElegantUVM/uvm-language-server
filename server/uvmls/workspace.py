@@ -535,20 +535,27 @@ class Workspace:
             cached = self._grouped[key] = (idx, by_path)
         return cached[1]
 
-    def reach(self, package: str, name: str, seen: tuple = ()) -> list[str]:
+    def reach(self, package: str, name: str) -> list[str]:
         """The packages whose `name` the identifier `package::name` denotes: `package` itself when
-        it declares one (or is not indexed), else those its imports reach, by name before by
-        wildcard, that it exports (IEEE 1800 26.6); more than one is an ambiguity."""
+        it declares one (or is not indexed), else those its imports reach, by name (an explicit
+        export names its declaration too) before by wildcard, as far as its exports pass them on
+        (IEEE 1800 26.6); more than one is an ambiguity."""
         key = (package, name)
         if key not in self._reach:
-            out, unit = [package], self.find_unit(package, "package")
-            if unit is not None and package not in seen and not self._declares(unit, name):
-                suffix = "::" + name
-                named = [i[:-len(suffix)] for i in unit.imports if i.endswith(suffix)]
+            suffix = "::" + name
+            out, seen, todo = [], set(), [package]
+            while todo:
+                p = todo.pop(0)
+                if p in seen:
+                    continue
+                seen.add(p)
+                unit = self.find_unit(p, "package")
+                if unit is None or self._declares(unit, name):
+                    out.append(p)
+                    continue
+                named = [i[:-len(suffix)] for i in [*unit.imports, *unit.exports] if i.endswith(suffix)]
                 sources = named or [i for i in unit.imports if "::" not in i]
-                out = list(dict.fromkeys(
-                    p for q in sources if any(e in ("*", q, q + suffix) for e in unit.exports)
-                    for p in self.reach(q, name, (*seen, package))))
+                todo += [q for q in sources if any(e in ("*", q, q + suffix) for e in unit.exports)]
             self._reach[key] = out
         return self._reach[key]
 
