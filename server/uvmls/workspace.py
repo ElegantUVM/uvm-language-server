@@ -396,7 +396,12 @@ class Workspace:
             for cls in idx.classes:
                 key = (cls.range.path, cls.range.line, cls.name)
                 if key in seen_decl:
-                    continue  # the same file reached from two roots
+                    # The same file reached from two roots. A nested class compiled in another
+                    # package (its outer class includes the header in each) is a class of its own.
+                    if cls.outer_class and cls.qualname not in self.class_by_qual:
+                        self.classes_by_name[cls.name].append(cls)
+                        self.class_by_qual[cls.qualname] = cls
+                    continue
                 seen_decl.add(key)
                 self.classes.append(cls)
                 self.classes_by_name.setdefault(cls.name, []).append(cls)
@@ -635,7 +640,8 @@ class Workspace:
 
     def _encloses(self, outer: ClassInfo, cls: ClassInfo) -> bool:
         """Whether `cls` is declared in the body of `outer`, directly or in a file it includes."""
-        return cls.outer_class == outer.name and self._placed(cls.range, outer) is not None
+        return cls.outer_class == outer.name and cls.package == outer.package and \
+            self._placed(cls.range, outer) is not None
 
     def _precedes(self, cls: ClassInfo, at: Range, outer: ClassInfo) -> bool:
         """Whether `cls`, nested in `outer`, is declared before `at`: by its `typedef class`
