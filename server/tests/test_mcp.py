@@ -976,3 +976,17 @@ def test_discovery_watches_an_include_dir_outside_the_roots(tmp_path, monkeypatc
     (first / "generated.inc").write_text("class preferred; endclass\nclass more; endclass\n")
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["more", "preferred", "top"]
+
+
+def test_a_file_reached_by_its_real_path_and_through_a_link_keeps_both_roots_records(tmp_path):
+    # alias.sv is a root through a link to shared.svh, which parent.sv also includes by its real
+    # path with EXTRA defined: the call parent.sv's view records must survive the link's mapping.
+    (tmp_path / 'alias.sv').symlink_to(tmp_path / 'shared.svh')
+    (tmp_path / 'tb.f').write_text('alias.sv\nparent.sv\n')
+    (tmp_path / 'parent.sv').write_text('`define EXTRA\n`include "shared.svh"\n')
+    (tmp_path / 'shared.svh').write_text(
+        'class c;\n function void f(int arg); endfunction\n function void g();\n'
+        '`ifdef EXTRA\n  f(1);\n`else\n  f(2);\n`endif\n endfunction\nendclass\n')
+    server = in_process(tmp_path, 'tb.f')
+    found = server.tool_signature({'file': 'shared.svh', 'line': 5, 'col': 5})
+    assert found['signature'] and found['signature']['label'] == 'function void f(int arg)'

@@ -757,6 +757,10 @@ class McpServer:
         key = self.key_of(real)
         if key == real or real in ws.invocations_by_file:  # membership never triggers a collection
             return
+        if ws.roots_for(real):
+            # Roots that include the file by its real path record for it there already, each under
+            # its own defines; mixing in the link's view would merge their disabled text.
+            return
         ws._collect_structures(key)
         for table in (ws.invocations_by_file, ws.directives_by_file, ws.structures_by_file, ws.folds_by_file):
             table.collect(real, key)
