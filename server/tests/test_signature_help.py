@@ -1836,3 +1836,26 @@ def test_multiline_factory_create_with_a_comma_inside_its_first_argument(client,
         signature(help_at(d, '    m_driver    = alu_driver::type_id::create("m_driver",'), formals, 1)
     finally:
         d.close()
+
+
+@pytest.mark.parametrize('zz_import,label', [
+    ('import zz::go;', 'function void go(int correct, int second)'),  # an explicit import outranks aa::*
+    ('import zz::*;', None),                                            # two wildcard re-exports: ambiguous
+])
+def test_a_package_re_export_names_the_import_that_wins(tmp_path, zz_import, label):
+    """`middle::go` through `export *::*` means what `go` means inside middle (IEEE 1800 26.6):
+    the explicit import, or no one name when two wildcard imports supply it."""
+    text = f'''package aa;
+  function void go(string wrong); endfunction
+endpackage
+package zz;
+  function void go(int correct, int second); endfunction
+endpackage
+package middle;
+  import aa::*; {zz_import} export *::*;
+endpackage
+module top;
+  initial middle::go(1,2);
+endmodule
+'''
+    assert labels_in(tmp_path, text, ['middle::go(1,']) == [label]

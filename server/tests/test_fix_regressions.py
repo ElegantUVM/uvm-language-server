@@ -319,3 +319,28 @@ endclass
     if broken:
         assert "broken constructor fixer" in caplog.text
         assert not any(a.title.startswith("Add a constructor") for a in actions)
+
+
+def test_a_nested_class_declared_after_extends_is_not_the_base(tmp_path):
+    # `child extends base` names the global base: outer's own `base`, declared later in the
+    # file, is not visible at the header yet. Picking it made child an object and offered a
+    # utils-mismatch fix that breaks the constructor.
+    text = '''`include "uvm_macros.svh"
+import uvm_pkg::*;
+class base extends uvm_component;
+  function new(string name, uvm_component parent); super.new(name, parent); endfunction
+endclass
+class outer;
+  class child extends base;
+    `uvm_component_utils(child)
+    function new(string name, uvm_component parent); super.new(name, parent); endfunction
+  endclass
+  class base extends uvm_object;
+    function new(string name = ""); super.new(name); endfunction
+  endclass
+endclass
+'''
+    w = index(tmp_path, {'t.sv': text})
+    child = w.class_by_qual['outer::child']
+    assert w.role(child) == 'component' and w.base_spec(child).cls.qualname == 'base'
+    assert findings(w, 'utils-mismatch') == []

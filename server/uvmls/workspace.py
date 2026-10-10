@@ -794,6 +794,11 @@ class Workspace:
         base of those, nearest first: a nested class is a member, which subclasses inherit
         (IEEE 1800 8.25)."""
         cands = [c for c in self.classes_by_name.get(name, ()) if c.outer_class]
+        if not members:
+            # A base class is named at the class header: a nested class declared after it in the
+            # same file is not visible there yet, and the global class of that name is meant.
+            cands = [c for c in cands if c.range.path != cls.range.path or
+                     (c.range.line, c.range.col) < (cls.range.line, cls.range.col)]
         if not cands:
             return None
         for outer in [cls, *self.outer_classes(cls)] if members else self.outer_classes(cls):

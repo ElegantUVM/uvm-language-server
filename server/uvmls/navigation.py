@@ -369,26 +369,40 @@ class Navigator:
             cache[hint[0].line].append(hint)
         return [hint for line in line_numbers for hint in cache[line]]
 
+    @staticmethod
+    def _package_item(ws, pkg, name: str, strict: bool) -> list[Target]:
+        """A package's own class, typedef, variable or method of that name, at most one."""
+        for c in ws.classes_by_name.get(name, []):
+            if c.package == pkg.name:
+                return [Target(c, spec=Spec(c.name, c))]
+        td = ws.find_typedef(name, pkg.name, strict=strict)
+        if td is not None and td.package == pkg.name:
+            return [Target(td, spec=ws.resolve_spec(name, pkg.name, strict=strict))]
+        for v in pkg.variables:
+            if v.name == name:
+                return [Target(v, owner=pkg)]
+        for m in pkg.methods:
+            if m.name == name:
+                return [Target(m, owner=pkg)]
+        return []
+
     def step(self, t: Target, name: str, sep: str, ctx_cls, strict: bool = False) -> list[Target]:
         ws = self.ws
         if isinstance(t.obj, DesignUnit) and t.obj.kind == "package":
-            # The package's own items, then those it re-exports (IEEE 1800 26.6).
-            scopes = dict.fromkeys(p for level in ws.import_scopes(name, t.obj.name, [t.obj.name]) for p in level)
-            for pkg in (t.obj if p == t.obj.name else ws.find_unit(p, "package") for p in scopes):
-                if pkg is None:
-                    continue
-                for c in ws.classes_by_name.get(name, []):
-                    if c.package == pkg.name:
-                        return [Target(c, spec=Spec(c.name, c))]
-                td = ws.find_typedef(name, pkg.name, strict=strict)
-                if td is not None and td.package == pkg.name:
-                    return [Target(td, spec=ws.resolve_spec(name, pkg.name, strict=strict))]
-                for v in pkg.variables:
-                    if v.name == name:
-                        return [Target(v, owner=pkg)]
-                for m in pkg.methods:
-                    if m.name == name:
-                        return [Target(m, owner=pkg)]
+            # The package's own items, then what its imports by name re-export, then what its
+            # wildcard imports re-export (IEEE 1800 26.6). Strict: a name several wildcard
+            # re-exports supply is ambiguous, and an explicit import outranks them.
+            reached = {p for level in ws.import_scopes(name, t.obj.name, [t.obj.name]) for p in level}
+            by_name = [i.split("::")[0] for i in t.obj.imports if i.endswith("::" + name)]
+            wildcard = [i for i in t.obj.imports if "::" not in i]
+            for level in ([t.obj.name], by_name, wildcard):
+                found = []
+                for p in dict.fromkeys(level):
+                    pkg = t.obj if p == t.obj.name else ws.find_unit(p, "package") if p in reached else None
+                    if pkg is not None:
+                        found += self._package_item(ws, pkg, name, strict)
+                if found:
+                    return found[:1] if not strict or len(found) == 1 else []
             return []
         if isinstance(t.obj, Variable) and t.obj.type is not None and t.obj.type.text.startswith("virtual"):
             iface = ws.find_unit(t.obj.type.name, "interface")
