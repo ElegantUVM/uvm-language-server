@@ -290,6 +290,8 @@ Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this pr
 
 ## Roadmap (suggested order)
 
+[docs/STATUS.md](docs/STATUS.md) is the full, current list of what is done, planned, shelved and known to be wrong, with stable IDs.
+
 1. Run it on one or two real testbenches and fix what breaks: macros, `ifdef` configurations, parameterized classes.
 2. Topology precision: resolve `config_db` scopes against instance paths (which `set` reaches which `get`), propagate simple constant knobs (`is_active = UVM_PASSIVE`), and handle loop-created arrays of components.
 3. Sequence ↔ sequencer view (`start()`, `` `uvm_do_on ``, `p_sequencer`) and a register-model view.
