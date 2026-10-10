@@ -131,7 +131,7 @@ def class_graph(ws: Workspace) -> dict:
                 nid = entry.spec.key
             prev = nid
         for iface in cls.implements:
-            spec = ws.resolve_spec(iface.name, iface.scope, iface.args, cls)
+            spec = ws.resolve_spec(iface.name, iface.scope, iface.args, cls, at=iface.range)
             add_edge(cid, spec_node(spec) if spec else add_external(iface.name), "implements")
         # Type arguments of the base class, e.g. uvm_driver #(alu_item).
         base = ws.base_spec(cls)
@@ -161,7 +161,7 @@ def class_graph(ws: Workspace) -> dict:
         for cr in calls.creates:
             spec = None
             if cr.type is not None:
-                spec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls)
+                spec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls, at=cr.type.range)
             elif cr.target_base:
                 hit = ws.find_member(cls, cr.target_base)
                 if hit:
@@ -362,7 +362,7 @@ def _build_effective_type(ws: Workspace, test: str | None) -> EffectiveTypes:
         for cr in chain_calls.creates:
             cspec = None
             if cr.type is not None:
-                cspec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls)
+                cspec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls, at=cr.type.range)
             elif cr.target_base:
                 hit = ws.find_member(cls, cr.target_base)
                 if hit and isinstance(hit[1], Variable):

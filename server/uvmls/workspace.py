@@ -59,12 +59,13 @@ class Scope:
     imports: tuple[str, ...] = ()
     near: Range | None = None
     qualname: str | None = None  # ctx's, which tells scopes apart
+    at: Range | None = None  # where the text is written, which a nested class must be declared before
 
     @classmethod
-    def of(cls, ctx: ClassInfo | None, package=None, imports=None, near=None) -> "Scope":
+    def of(cls, ctx: ClassInfo | None, package=None, imports=None, near=None, at=None) -> "Scope":
         return cls(ctx, package if package is not None else ctx.package if ctx else None,
                    tuple(imports if imports is not None else ctx.imports if ctx else ()),
-                   near or (ctx.range if ctx else None), ctx.qualname if ctx else None)
+                   near or (ctx.range if ctx else None), ctx.qualname if ctx else None, at)
 
 
 class Bound(str):
@@ -757,10 +758,9 @@ class Workspace:
         near = site if strict else None
         args = list(args or [])
         if args:
-            here = Scope.of(ctx, package, imports, site)
+            here = Scope.of(ctx, package, imports, site, at)
             args = [a if isinstance(a, Bound) else Bound(a, here) for a in args]
         # The position tells only among nested classes: most names share one result per context.
-        # Without one (a type argument's text), a nested class counts as declared.
         at = at if ctx is not None and not scope and self._nested_named(name) else None
         cache_key = (name, scope, tuple(map(_arg_key, args)), ctx.qualname if ctx else None,
                      package, tuple(imports), strict, near, members, at)
@@ -780,7 +780,9 @@ class Workspace:
             if members:
                 found, result = self._class_typedef(ctx, name, depth, strict)
                 settled = found and strict
-            if result is None and not settled and (nested := self.nested_class(ctx, name, strict, members, at)):
+            # Without a position the index cannot tell a nested class from an earlier name: none.
+            if result is None and not settled and at is not None and \
+                    (nested := self.nested_class(ctx, name, strict, members, at)):
                 result = Spec(name=nested.name, cls=nested, args=args)
         if result is None and not settled:
             cls = self.find_class(name, scope or package, [scope] if scope else imports, strict, near)
@@ -873,7 +875,8 @@ class Workspace:
             if text.spec is not None:
                 return text.spec
             ctx = text.scope.ctx
-            where = {"package": text.scope.package, "imports": text.scope.imports, "near": text.scope.near}
+            where = {"package": text.scope.package, "imports": text.scope.imports, "near": text.scope.near,
+                     "at": text.scope.at}
         parsed = parse_type_text(text)
         if not parsed:
             return None
@@ -901,7 +904,7 @@ class Workspace:
         elif scope and ref.scope_args:  # wrap #(string)::item_t
             package, _, name = scope.rpartition("::")
             outer = self.resolve_spec(name, package or None,
-                                      [self._bind_arg(a, ctx, bindings, strict, depth) for a in ref.scope_args],
+                                      [self._bind_arg(a, ctx, bindings, strict, depth, ref.range) for a in ref.scope_args],
                                       ctx, depth, strict=strict, at=ref.range, **where)
         if outer is not None and outer.cls is not None:
             scope = outer.cls.qualname
@@ -910,7 +913,7 @@ class Workspace:
                     outer.cls, ref.name, self.specialize(outer.cls, outer.args, strict=strict), strict, depth)
                 if found:
                     return spec
-        args = [self._bind_arg(a, ctx, bindings, strict, depth) for a in ref.args]
+        args = [self._bind_arg(a, ctx, bindings, strict, depth, ref.range) for a in ref.args]
         return self.resolve_spec(ref.name, scope, args, ctx, depth, strict=strict, at=ref.range, **where)
 
     def _bound_member_typedef(self, cls: ClassInfo, name: str, bindings: dict[str, str], strict: bool,
@@ -926,15 +929,16 @@ class Workspace:
         inner = self.resolve_type_ref(td.target, hit[0], hit[2], strict, depth + 1)
         return True, Spec(inner.name, inner.cls, inner.args, td) if inner is not None else None
 
-    def _bind_arg(self, arg: str, ctx: ClassInfo | None, bindings: dict[str, str], strict: bool, depth: int) -> str:
-        """A type argument written in `ctx` with its parameters bound. In `pair #(T)`, pair means
-        what it means in ctx and T's value what it meant where it was written. A typedef member of
-        the class (`this_type`) means nothing elsewhere: it becomes the type it names."""
+    def _bind_arg(self, arg: str, ctx: ClassInfo | None, bindings: dict[str, str], strict: bool, depth: int,
+                  at: Range | None = None) -> str:
+        """A type argument written in `ctx` at `at` with its parameters bound. In `pair #(T)`, pair
+        means what it means in ctx and T's value what it meant where it was written. A typedef
+        member of the class (`this_type`) means nothing elsewhere: it becomes the type it names."""
         value = substitute_params(arg, bindings)
         if ctx is None or isinstance(value, Bound):
             return value
         if value != arg:
-            return self._bind_type(Bound(arg, Scope.of(ctx)), bindings, strict, depth, members=True)
+            return self._bind_type(Bound(arg, Scope.of(ctx, at=at)), bindings, strict, depth, members=True)
         if not any(t.owner_class for t in self.typedefs_by_name.get(arg, ())):
             return value
         hit = self.find_member(ctx, arg, bindings, strict)
@@ -944,7 +948,7 @@ class Workspace:
         if spec is None or spec.cls is None:
             return value
         text = spec.cls.name + ("#(" + ",".join(spec.args) + ")" if spec.args else "")
-        return Bound(text, Scope.of(ctx), spec)
+        return Bound(text, Scope.of(ctx, at=at), spec)
 
     def _bind_type(self, text: str, bindings: dict[str, str], strict: bool = False, depth: int = 0,
                    members: bool = False) -> str:
@@ -963,7 +967,8 @@ class Workspace:
         where = text.scope
         args = [self._bind_type(Bound(a, where), bindings, strict, depth, members) for a in parsed[2]]
         spec = self.resolve_spec(parsed[1], parsed[0], args, where.ctx, depth, package=where.package,
-                                 imports=where.imports, strict=strict, near=where.near, members=members)
+                                 imports=where.imports, strict=strict, near=where.near, members=members,
+                                 at=where.at)
         return Bound(value, where, spec, value.formal) if spec is not None else value
 
     def base_spec(self, cls: ClassInfo, bindings: dict[str, str] | None = None, strict: bool = False) -> Spec | None:
@@ -975,7 +980,7 @@ class Workspace:
         if ref.scope is None and not ref.args and any(p.is_type and p.name == ref.name for p in cls.params):
             bound = (bindings or {}).get(ref.name)
             if bound is None:
-                bound = next(p.default for p in cls.params if p.name == ref.name)
+                bound = Bound(next(p.default for p in cls.params if p.name == ref.name), Scope.of(cls, at=cls.range))
             return self.resolve_type_text(bound, cls, strict, members=False)
         spec = self.resolve_spec(ref.name, ref.scope, ref.args, cls, strict=strict, members=False, at=ref.range)
         if strict and (spec is None or spec.cls is None) and cls.package is None and ref.scope is None:
@@ -1038,13 +1043,13 @@ class Workspace:
             return {}
         return bind_params([(p.name, p.default) for p in cls.params], args, outer or {},
                            lambda text, bindings: self._bind_type(text, bindings, strict),
-                           Scope.of(cls) if len(args) < len(cls.params) else None)
+                           Scope.of(cls, at=cls.range) if len(args) < len(cls.params) else None)
 
     def formals(self, cls: ClassInfo) -> dict[str, str]:
         """A class's parameters as its own body sees them: unbound, resolving as their defaults."""
         key = id(cls)
         if key not in self._formals:
-            here = Scope.of(cls)
+            here = Scope.of(cls, at=cls.range)  # the header: before the body's nested classes
             self._formals[key] = {p.name: Bound(p.default, here, formal=p.name) for p in cls.params}
         return dict(self._formals[key])
 

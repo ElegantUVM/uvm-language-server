@@ -169,7 +169,7 @@ class Navigator:
                     return self.global_member_search(segs[i]) if i == len(segs) - 1 else []
                 current = self.step(current[0], segs[i], seps[i - 1], cls, strict=strict)
             if ce.args and ce.args[i] and len(current) == 1 and current[0].spec is not None:
-                here = Scope.of(cls, *self._package_scope(cls, unit), near)
+                here = Scope.of(cls, *self._package_scope(cls, unit), near, near)
                 current[0].spec = replace(current[0].spec, args=[Bound(a, here) for a in ce.args[i]])
         return current
 

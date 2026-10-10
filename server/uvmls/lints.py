@@ -378,7 +378,7 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
                     cls=cls.qualname, at=[cr.range.line, cr.range.col])
             if cr.kind != "factory" or cr.type is None:
                 continue
-            spec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls)
+            spec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls, at=cr.type.range)
             if spec is None:
                 continue
             target = spec.cls
