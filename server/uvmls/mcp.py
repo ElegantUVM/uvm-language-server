@@ -28,7 +28,7 @@ from .elab import ELAB_TIMEOUT, PACKAGE_PARENT, displayed, request_for, skip_rea
 from .indexer import SHIM_FILE
 from .model import ClassInfo, CreateCall, Range, SeqStart, Variable, utf8_prefix
 from .navigation import Navigator, expr_at
-from .project import ProjectConfig, discover_files, is_bundled, norm
+from .project import ProjectConfig, discover_files, is_bundled, is_sv_file, norm
 from .uvm import ROLE_ORDER
 from .views import config_db_report, effective_type, list_tests, topology
 from .workspace import Spec, Workspace
@@ -42,6 +42,7 @@ RESOURCE_NOT_FOUND = -32002
 EOF = object()  # the reader's end-of-input mark; a JSON null on a line is a message
 DEFAULT_LIMIT, MAX_LIMIT = 200, 2000
 REFRESH_SECONDS = 1.0
+EMPTY_LISTING = (frozenset(), frozenset())
 LOCATION_KEYS = ("file", "line", "col", "endLine", "endCol")
 INSTRUCTIONS = ("Facts about a UVM testbench from a static index of its sources on disk (unsaved editor "
                 "text is not visible; the index refreshes when files change). Locations have 1-based "
@@ -327,6 +328,10 @@ class McpServer:
         self.roots = [norm(r) for r in ws.config.workspace_roots]
         self.real_roots = [os.path.realpath(r) for r in self.roots]
         self.stamps: dict[str, tuple[int, int] | None] = {}
+        self.listings: dict[str, tuple[frozenset[str], frozenset[str]]] = {}  # per watched directory
+        self.filelists: set[str] = set()
+        self._key_of_real: dict[str, str] = {}  # real path -> index key, for keys that are not real
+        self._keys_version = -1
         self._checked = 0.0
         self.indexed_at = time.time()
         self._out = None
@@ -516,36 +521,78 @@ class McpServer:
 
     # -- freshness -----------------------------------------------------------
 
-    def watched(self) -> list[str]:
-        """What a refresh stats: the indexed files, every filelist read (nested ones too) and the
-        directories a new or recreated file would land in, whose stamps a creation or deletion
-        changes: every directory under the roots in discovery mode; with a filelist, those of the
-        filelists, the testbench's files and the include directories."""
+    def watched(self) -> tuple[set[str], set[str]]:
+        """(files, directories) a refresh stats: the indexed files and every filelist read (nested
+        ones too), and the directories a new or recreated file would land in, whose stamps a
+        creation or deletion changes: every directory under the roots in discovery mode; with a
+        filelist, those of the filelists and of the testbench's files, and the include directories
+        with their subdirectories (`include "sub/x.svh")."""
         ws = self.ws
         s = ws.sources
         files = ws.files()
-        filelists = set(ws.config.filelists) | set(s.filelists if s else ())
-        paths = files | filelists | set(self.roots)
+        filelists = self._filelists()
+        dirs = set(self.roots)
+        stamps: dict = {}
         if s is not None and s.mode == "discovery":
-            stamps: dict = {}
             discover_files(self.roots, ws.config.exclude, match=lambda name: False, directory_stamps=stamps)
-            paths |= set(stamps)
         else:
-            paths |= {os.path.dirname(p) for p in (files - ws.library_files) | filelists}
-            paths |= set(s.include_dirs if s else ())
-        return sorted(paths)
+            dirs |= {os.path.dirname(p) for p in (files - ws.library_files) | filelists}
+            discover_files(list(s.include_dirs) if s else [], ws.config.exclude, match=lambda name: False,
+                           directory_stamps=stamps)
+        return files | filelists, dirs | set(stamps)
+
+    def _filelists(self) -> set[str]:
+        s = self.ws.sources
+        return set(self.ws.config.filelists) | set(s.filelists if s else ())
+
+    def _relevant(self, directory: str, name: str) -> bool:
+        """Whether an entry of a directory can change the index: a source file by name, or a filelist."""
+        return is_sv_file(name) or os.path.join(directory, name) in self.filelists
+
+    def _listing(self, directory: str) -> tuple[frozenset[str], frozenset[str]]:
+        """(source files and filelists, subdirectories) a directory holds, by name; empty when it
+        cannot be read. A vim .swp, an editor's temporary file or a log leaves it unchanged."""
+        try:
+            with os.scandir(directory) as it:
+                entries = [(e.name, e.is_dir()) for e in it]
+        except OSError:
+            return EMPTY_LISTING
+        return (frozenset(n for n, d in entries if not d and self._relevant(directory, n)),
+                frozenset(n for n, d in entries if d))
 
     def _restamp(self):
-        stamps = {p: _stamp(p) for p in self.watched()}
+        files, dirs = self.watched()
+        self.filelists = self._filelists()
+        stamps = {p: _stamp(p) for p in files | dirs}
         for path in self.stamps:
             if path not in stamps and _stamp(path) is None:
                 stamps[path] = None  # gone: its return is a change to notice
         self.stamps = stamps
+        self.listings = {d: self._listing(d) for d in dirs}
         self._checked = time.monotonic()
+
+    def _directory_needs_reindex(self, directory: str) -> bool:
+        """Whether a directory whose stamp changed needs the index rebuilt: a source file or
+        filelist came or went, or a new subdirectory holds one. A new subdirectory without any
+        (`include "sub/x.svh"` before x.svh exists) is only watched from now on."""
+        before, after = self.listings.get(directory, EMPTY_LISTING), self._listing(directory)
+        if before[0] != after[0]:
+            return True
+        new_dirs = [os.path.join(directory, d) for d in after[1] - before[1]]
+        stamps: dict = {}
+        if new_dirs and discover_files(new_dirs, self.ws.config.exclude, directory_stamps=stamps):
+            return True
+        for d in stamps:  # the stamp before the listing, so a file landing between them is noticed
+            self.stamps[d] = _stamp(d)
+            self.listings[d] = self._listing(d)
+        self.listings[directory] = after
+        return False
 
     def refresh(self, force: bool = False):
         """Bring the index up to date with the disk: a changed file is re-parsed with the roots
-        that include it; a file created or deleted, or a changed filelist, rebuilds everything."""
+        that include it; a file created or deleted, or a changed filelist, rebuilds everything.
+        A directory's stamp changes on every creation, deletion or rename in it (an atomic save,
+        a .swp file, a log): only one that changes what the directory holds rebuilds."""
         now = time.monotonic()
         if not force and now - self._checked < REFRESH_SECONDS:
             return
@@ -554,20 +601,37 @@ class McpServer:
         if not changed:
             return
         files = self.ws.files()
-        if all(s is not None and p in files and os.path.isfile(p) for p, s in changed.items()):
-            for path in changed:
-                self.ws.update_document(path, None)
-        else:
+        rebuild = False
+        for path, stamp in changed.items():
+            if path in self.listings:
+                rebuild |= self._directory_needs_reindex(path)
+            else:
+                rebuild |= stamp is None or path not in files or not os.path.isfile(path)
+        if rebuild:
             self.ws.reindex_all()
+        else:
+            for path, stamp in changed.items():
+                self.stamps[path] = stamp
+                if path not in self.listings:
+                    self.ws.update_document(path, None)
+            if all(p in self.listings for p in changed):
+                return  # nothing re-parsed
         self.indexed_at = time.time()
         self._restamp()
 
     # -- locations and paths -------------------------------------------------
 
     def relative(self, path: str) -> str:
-        for root in self.roots:
+        """A path relative to its workspace root. The index names files by their real path (slang
+        resolves symlinks), the roots are as given: a root that is itself a link, or has a linked
+        component, is matched once resolved."""
+        for root in self.real_roots + self.roots:
             if path == root or path.startswith(root + os.sep):
                 return os.path.relpath(path, root)
+        real = os.path.realpath(path)
+        for root in self.real_roots:
+            if real == root or real.startswith(root + os.sep):
+                return os.path.relpath(real, root)
         return path
 
     def location(self, path: str, line: int, col: int, end_line: int, end_col: int) -> dict:
@@ -604,14 +668,24 @@ class McpServer:
         return {k: self.convert(v) for k, v in obj.items()}
 
     def _inside(self, path: str) -> bool:
-        """Under a workspace root as written and once symlinks are resolved: a link inside the
-        workspace to a file outside it stays outside."""
+        """Under a workspace root once symlinks are resolved, on both sides: a link inside the
+        workspace to a file outside it stays outside, and a root that is a link (an automounted
+        home, macOS /tmp) keeps the real paths the index and the results name."""
         real = os.path.realpath(path)
-        for root, real_root in zip(self.roots, self.real_roots):
-            if (path == root or path.startswith(root + os.sep)) and \
-                    (real == real_root or real.startswith(real_root + os.sep)):
-                return True
-        return False
+        return any(real == root or real.startswith(root + os.sep) for root in self.real_roots)
+
+    def _indexed(self, path: str) -> str | None:
+        """The index's key for a path under the workspace: itself, its real path, or the key
+        whose real path it is (an index keyed by unresolved paths)."""
+        known = self.ws.texts.keys() | self.ws.library_files
+        real = os.path.realpath(path)
+        for candidate in (path, real):
+            if candidate in known:
+                return candidate
+        if self._keys_version != self.ws.version:
+            self._key_of_real = {os.path.realpath(k): k for k in known}
+            self._keys_version = self.ws.version
+        return self._key_of_real.get(real)
 
     def path_of(self, file: str) -> str:
         """The indexed file a `file` argument names: relative to a workspace root, or absolute
@@ -623,8 +697,9 @@ class McpServer:
             raise ToolError(f"outside the workspace: {file}" + (
                 " (a UVM library file; only the testbench's own files can be asked about)" if library else ""))
         for path in inside:
-            if path in self.ws.texts or path in self.ws.library_files:
-                return path
+            key = self._indexed(path)
+            if key is not None:
+                return key
         raise ToolError(f"not indexed: {file}")
 
     def is_library(self, path: str) -> bool:
