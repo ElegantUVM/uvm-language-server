@@ -130,6 +130,63 @@ module tb; outer o; endmodule
     assert [label(moved, var) for var in ('before_obj', 'after_obj')] == ['function void go(int nested_arg)'] * 2
 
 
+def test_include_cycle_terminates_and_an_include_edit_reorders(tmp_path):
+    """Guarded headers including each other place a nested class; moving the `include below
+    the property changes what the property means."""
+    from test_fixes import index
+    from test_signature_help import label_in
+
+    text = '''class item; function void go(int global_arg); endfunction endclass
+class outer;
+ `include "a.svh"
+ item obj;
+ function void run(); obj.go(1); endfunction
+endclass
+module tb; outer o; endmodule
+'''
+    nested = 'class item; function void go(int nested_arg); endfunction endclass\n'
+    ws = index(tmp_path, {'t.sv': text, 'a.svh': '`ifndef A_SVH\n`define A_SVH\n`include "b.svh"\n`endif\n',
+                          'b.svh': '`ifndef B_SVH\n`define B_SVH\n`include "a.svh"\n' + nested + '`endif\n'})
+    assert label_in(ws, tmp_path / 't.sv', text, 'obj.go(') == 'function void go(int nested_arg)'
+    edited = text.replace(' `include "a.svh"\n item obj;', ' item obj;\n `include "a.svh"')
+    ws.update_document(str(tmp_path / 't.sv'), edited)
+    assert label_in(ws, tmp_path / 't.sv', edited, 'obj.go(') == 'function void go(int global_arg)'
+
+
+def test_include_sites_are_recorded_once(tmp_path):
+    """Every root that reaches a shared header records its `include sites: the workspace keeps
+    each once, so placing a declaration does not walk them per root."""
+    from test_fixes import index
+
+    n = 20
+    files = {'leaf.svh': '`ifndef LEAF\n`define LEAF\nclass item; endclass\n`endif\n',
+             'common.svh': ''.join(f'`include "h{i}.svh"\n' for i in range(n)),
+             'unrelated.svh': 'class outer; endclass\n', 'decoy.sv': 'module decoy;\n`include "unrelated.svh"\nendmodule\n'}
+    files.update({f'h{i}.svh': '`include "leaf.svh"\n' for i in range(n)})
+    files.update({f'r{i}.sv': f'module r{i};\nclass outer;\n`include "common.svh"\nendclass\nendmodule\n' for i in range(n)})
+    ws = index(tmp_path, files)
+    assert sum(map(len, ws._sites().values())) == 3 * n + 1
+    decoy = next(c for c in ws.classes if c.name == 'outer' and c.range.path.endswith('unrelated.svh'))
+    assert ws.nested_class(decoy, 'item', strict=True) is None
+
+
+def test_reexport_cycles_and_diamonds_terminate(tmp_path):
+    """Packages re-exporting each other (invalid, but typed mid-edit) end in the origin once;
+    an edit clears what the packages reach."""
+    from test_fixes import index
+
+    text = '''package origin; function void go(int right); endfunction endpackage
+package aa; import bb::*; import origin::*; export *::*; endpackage
+package bb; import aa::*; import origin::*; export *::*; endpackage
+package cc; import aa::*; import bb::*; export *::*; endpackage
+'''
+    ws = index(tmp_path, {'t.sv': text})
+    assert [ws.reach(name, 'go') for name in ('aa', 'bb', 'cc')] == [['origin']] * 3
+    assert ws.reach('cc', 'absent') == []
+    ws.update_document(str(tmp_path / 't.sv'), text.replace('export *::*;', '', 2))
+    assert ws.reach('cc', 'go') == []
+
+
 def test_types_scoped_by_a_specialization_resolve(tmp_path):
     from test_fixes import findings, index
     from uvmls import signatures

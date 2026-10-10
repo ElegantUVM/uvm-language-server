@@ -905,6 +905,16 @@ def labels_in(tmp_path, text, needles, bundled=False):
     return [hint and hint[0] for hint in hints_in(tmp_path, text, needles, bundled)]
 
 
+def label_in(ws, path, text, needle):
+    """The signature label at the end of `needle` in the indexed file `path` with content `text`."""
+    from uvmls import signatures
+    from uvmls.navigation import Navigator
+
+    prefix = text[:text.index(needle) + len(needle)]
+    found = signatures.signature(Navigator(ws), str(path), prefix.count('\n'), len(prefix.rsplit('\n', 1)[-1]))
+    return found and found[2]
+
+
 def test_type_arguments_resolve_where_the_specialization_is_written(tmp_path):
     text = '''package a;
 class holder #(type T = int);
@@ -1439,6 +1449,167 @@ module tb; outer o; endmodule
     line = text.splitlines().index(' function void run(); obj.go(1); endfunction')
     found = signatures.signature(Navigator(ws), str(tmp_path / 't.sv'), line, len(' function void run(); obj.go('))
     assert found and found[2] == 'function void go(int right)'
+
+
+GLOBAL_ITEM = 'class item; function void go(int global_arg); endfunction endclass\n'
+NESTED_ITEM = 'class item; function void go(int nested_arg); endfunction endclass\n'
+HOLDER = 'class holder #(type T=int); T value; endclass\n'
+
+
+@pytest.mark.parametrize('argument', ['item', '.T(item)'])
+def test_type_argument_written_before_a_nested_class(tmp_path, argument):
+    """`holder #(item) h` before outer's nested `item` means the global item: a type argument is
+    placed where it is written (slang: the call with `.global_arg` elaborates)."""
+    text = GLOBAL_ITEM + HOLDER + f'''class outer;
+ holder #({argument}) h;
+ {NESTED_ITEM} function void run(); h.value.go(1); h.value.go(.global_arg(1)); endfunction
+endclass
+module tb; outer o; endmodule
+'''
+    assert labels_in(tmp_path, text, ['h.value.go(']) == ['function void go(int global_arg)']
+
+
+@pytest.mark.parametrize('order', [('before_h', 'after_h'), ('after_h', 'before_h')])
+def test_type_arguments_either_side_of_a_nested_class_are_told_apart(tmp_path, order):
+    """The same argument text before and after the nested declaration keeps two answers, in
+    either request order."""
+    text = GLOBAL_ITEM + HOLDER + f'''class outer;
+ holder#(item) before_h;
+ {NESTED_ITEM} holder#(item) after_h;
+ function void run(); before_h.value.go(1); after_h.value.go(2); endfunction
+endclass
+module tb; outer o; endmodule
+'''
+    expected = {'before_h': 'function void go(int global_arg)', 'after_h': 'function void go(int nested_arg)'}
+    assert labels_in(tmp_path, text, [name + '.value.go(' for name in order * 2]) == [expected[n] for n in order * 2]
+
+
+@pytest.mark.parametrize('where', ['class', 'package', 'module'])
+def test_type_argument_outside_the_outer_class_keeps_its_scope(tmp_path, where):
+    """`holder#(item)` written in another class, a package or a module does not see holder's
+    nested item."""
+    holder = GLOBAL_ITEM + 'class holder #(type T=int);\n' + NESTED_ITEM + 'T value; endclass\n'
+    text = {
+        'class': holder + 'class user; holder#(item) h; function void run(); h.value.go(1); endfunction endclass\n'
+                          'module tb; user u; endmodule\n',
+        'package': 'package p;\n' + holder + 'holder#(item) h; function void run(); h.value.go(1); endfunction\nendpackage\n',
+        'module': holder + 'module tb; holder#(item) h; initial h.value.go(1); endmodule\n',
+    }[where]
+    assert labels_in(tmp_path, text, ['h.value.go(']) == ['function void go(int global_arg)']
+
+
+@pytest.mark.parametrize('root,header,forward_in_header', [
+    ('a.sv', 'z.svh', False), ('z.sv', 'a.svh', False), ('m.sv', 'a.svh', True), ('m.sv', 'z.svh', True)])
+def test_forward_declaration_order_is_the_compilation_order(tmp_path, root, header, forward_in_header):
+    """A `typedef class item;` before `item obj;` declares the nested item whether the definition
+    (or the forward declaration itself) comes from an included file, whatever the file names."""
+    from test_fixes import index
+
+    if forward_in_header:
+        text = GLOBAL_ITEM + f'class outer;\n `include "{header}"\n item obj;\n {NESTED_ITEM}'
+        files = {root: text, header: 'typedef class item;\n'}
+    else:
+        text = GLOBAL_ITEM + f'class outer;\n typedef class item;\n item obj;\n `include "{header}"\n'
+        files = {root: text, header: NESTED_ITEM}
+    text += ' function void run(); obj.go(1); obj.go(.nested_arg(1)); endfunction\nendclass\nmodule tb; outer o; endmodule\n'
+    files[root] = text
+    ws = index(tmp_path, files)
+    assert ws.user_diagnostics() == []
+    assert label_in(ws, tmp_path / root, text, 'obj.go(') == 'function void go(int nested_arg)'
+
+
+def test_sibling_includes_keep_their_order(tmp_path):
+    """`item obj;` in use.svh, included before decl.svh with the nested item, has the global type."""
+    from test_fixes import index
+
+    text = GLOBAL_ITEM + '''class outer;
+ `include "use.svh"
+ `include "decl.svh"
+ function void run(); obj.go(1); obj.go(.global_arg(1)); endfunction
+endclass
+module tb; outer o; endmodule
+'''
+    ws = index(tmp_path, {'t.sv': text, 'use.svh': 'item obj;\n', 'decl.svh': NESTED_ITEM})
+    assert ws.user_diagnostics() == []
+    assert label_in(ws, tmp_path / 't.sv', text, 'obj.go(') == 'function void go(int global_arg)'
+
+
+def test_nested_class_spanning_two_includes(tmp_path):
+    from test_fixes import index
+
+    text = GLOBAL_ITEM + '''class outer;
+ `include "start.svh"
+ `include "end.svh"
+ item obj;
+ function void run(); obj.go(1); endfunction
+endclass
+module tb; outer o; endmodule
+'''
+    ws = index(tmp_path, {'t.sv': text, 'start.svh': 'class item;\n',
+                          'end.svh': 'function void go(int nested_arg); endfunction\nendclass\n'})
+    assert label_in(ws, tmp_path / 't.sv', text, 'obj.go(') == 'function void go(int nested_arg)'
+
+
+def test_shared_nested_header_belongs_to_each_including_class(tmp_path):
+    """A header included in two same-named outer classes declares the nested item in both."""
+    from test_fixes import index
+
+    text = GLOBAL_ITEM
+    for mod, arg in (('a', 1), ('b', 2)):
+        text += f'''module {mod};
+ class outer;
+  `include "inner.svh"
+  item obj;
+  function void run(); obj.go({arg}); endfunction
+ endclass
+ outer o;
+endmodule
+'''
+    ws = index(tmp_path, {'t.sv': text, 'inner.svh': NESTED_ITEM})
+    assert [label_in(ws, tmp_path / 't.sv', text, needle) for needle in ('obj.go(1', 'obj.go(2')] == \
+        ['function void go(int nested_arg)'] * 2
+
+
+def test_shared_nested_header_is_a_class_in_each_package(tmp_path):
+    """The nested class a header declares in outer classes of packages aa and bb is compiled in
+    each: its members name each package's own declarations."""
+    from test_fixes import index
+
+    files = {'inner.svh': 'class inner; payload obj; endclass\n'}
+    for pkg in ('aa', 'bb'):
+        files[pkg + '.sv'] = f'''package {pkg};
+ class payload; function void go(int {pkg}_arg); endfunction endclass
+ class outer;
+  `include "inner.svh"
+ endclass
+ outer::inner i;
+ function void run(); i.obj.go(1); i.obj.go(.{pkg}_arg(1)); endfunction
+endpackage
+'''
+    ws = index(tmp_path, files)
+    assert ws.user_diagnostics() == []
+    assert [label_in(ws, tmp_path / (pkg + '.sv'), files[pkg + '.sv'], 'i.obj.go(') for pkg in ('aa', 'bb')] == \
+        ['function void go(int aa_arg)', 'function void go(int bb_arg)']
+
+
+def test_export_without_an_import_names_nothing(tmp_path):
+    """`export aa::go` re-exports an imported declaration (IEEE 1800 26.6): without an import of
+    aa it is an error (slang) and middle::go names nothing."""
+    text = '''package aa; function void go(int hidden); endfunction endpackage
+package middle; export aa::go; endpackage
+module tb; initial middle::go(1); endmodule
+'''
+    assert labels_in(tmp_path, text, ['middle::go(']) == [None]
+
+
+@pytest.mark.parametrize('body', ['import aa::*; export aa::go;', 'export aa::go; import aa::*;',
+                                  'import aa::go; export aa::go; export *::*;'])
+def test_explicit_export_beside_its_import(tmp_path, body):
+    text = f'''package aa; function void go(int right); endfunction endpackage
+package middle; {body} endpackage
+module tb; initial middle::go(1); endmodule
+'''
+    assert labels_in(tmp_path, text, ['middle::go(']) == ['function void go(int right)']
 
 
 @pytest.mark.parametrize('imports,label', [
