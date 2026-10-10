@@ -602,6 +602,10 @@ class Navigator:
                     facts.append(f"type {via}`{spec.cls.name}{args}` ({ws.role(spec.cls)})")
                 else:
                     facts.append(f"type {via}`{spec.name}{args}` ({ws.role_of_name(spec.name)})")
+            if o.default is not None and o.kind in ("property", "local", "signal"):
+                # The declaration's value, not the value at the cursor: assignments are not tracked.
+                value = o.default if len(o.default) <= 60 else o.default[:57] + "..."
+                facts.append(f"initialized to `{value}` in {os.path.basename(o.range.path)}:{o.range.line + 1}")
             if o.generated:
                 facts.append("declared by a macro")
             lines.append(" · ".join(facts))

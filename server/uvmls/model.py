@@ -72,7 +72,7 @@ class Variable:
     doc: str = ""
     direction: str = ""  # explicit or inherited formal direction
     dimensions: str = ""  # unpacked formal dimensions
-    default: str | None = None  # an argument or parameter's default value
+    default: str | None = None  # an argument or parameter's default, or a variable's initializer
 
 
 @dataclass

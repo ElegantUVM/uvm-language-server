@@ -1209,7 +1209,11 @@ class Extractor:
         if r is None:
             return None
         type_text = compact(dtype) if dtype is not None else ""
-        return Variable(tok.valueText, kind, type_text, self.type_ref(dtype), r, text, quals, gen)
+        v = Variable(tok.valueText, kind, type_text, self.type_ref(dtype), r, text, quals, gen)
+        init = getattr(declarator, "initializer", None)
+        if init is not None and kind in ("property", "local", "signal"):
+            v.default = pretty(init.expr)  # an argument's default is recorded with its formal
+        return v
 
     # -- methods -------------------------------------------------------------
 

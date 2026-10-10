@@ -161,6 +161,14 @@ def test_class_hover_shows_role_and_chain(ws):
     assert "**test**" in h and "4 subclasses" in h and "alu_base_test → uvm_test" in h
 
 
+def test_variable_hover_names_its_initializer(ws):
+    # The declaration's value, labelled as such: it is not the value at the cursor.
+    h = hover(ws, "env/alu_env.svh", "m_cfg.has_scoreboard) m_agent", 8)
+    assert "property of `alu_env_config`" in h
+    assert "initialized to `1` in alu_env_config.svh:5" in h
+    assert "initialized to" not in hover(ws, "env/alu_env.svh", "m_cfg.has_scoreboard) m_agent", 2)
+
+
 def test_uvm_macro_hover_without_library(ws):
     assert "uvm_component_utils(T)" in hover(ws, "agent/alu_monitor.svh", "`uvm_component_utils", 1)
 
@@ -202,3 +210,26 @@ def test_completion_offers_what_the_class_can_use(bundled_ws):
     labels = _labels(bundled_ws, "    this.")
     assert {"m_cfg", "drive_item", "get_full_name", "get_type_name", "m_children"} <= labels  # m_children: protected
     assert not labels & {"m_leaf_name", "m_inst_id", "m_main_stream", "m_set_full_name"}  # local to UVM classes
+
+
+def test_local_and_signal_initializers_in_hover(tmp_path):
+    from test_fixes import index
+    text = '''module top;
+  logic [3:0] count = 4'h3;
+  assign out = count;
+endmodule
+class c;
+  function int f();
+    int tries = 2 + 3;
+    int plain;
+    plain = tries;
+    return plain;
+  endfunction
+endclass
+'''
+    ws = index(tmp_path, {'t.sv': text})
+    path, nav, rows = str(tmp_path / 't.sv'), Navigator(ws), text.split('\n')
+    use, assign = rows.index('    plain = tries;'), rows.index('  assign out = count;')
+    assert "initialized to `2 + 3` in t.sv:7" in nav.hover(path, use, rows[use].index('tries'), text)
+    assert "initialized to `4'h3` in t.sv:2" in nav.hover(path, assign, rows[assign].index('count'), text)
+    assert "initialized to" not in nav.hover(path, use, rows[use].index('plain'), text)
