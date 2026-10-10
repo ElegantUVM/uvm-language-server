@@ -623,9 +623,9 @@ class Workspace:
         return at is not None and outer.decl_range.contains(at.line, at.col)
 
     def _precedes(self, cls: ClassInfo, at: Range) -> bool:
-        """Whether `cls` is declared before `at`; when the index cannot place the two, it counts
-        as declared."""
-        pos = self._seen_from(cls.range, at.path)
+        """Whether `cls` is declared before `at`: by its `typedef class` forward declaration when
+        it has one; when the index cannot place the two, it counts as declared."""
+        pos = self._seen_from(cls.forward or cls.range, at.path)
         return pos is None or (pos.line, pos.col) < (at.line, at.col)
 
     def _units_including(self, path: str, packages: bool) -> tuple[DesignUnit | None, ...]:
@@ -760,7 +760,8 @@ class Workspace:
             here = Scope.of(ctx, package, imports, site)
             args = [a if isinstance(a, Bound) else Bound(a, here) for a in args]
         # The position tells only among nested classes: most names share one result per context.
-        at = (at or site) if ctx is not None and not scope and self._nested_named(name) else None
+        # Without one (a type argument's text), a nested class counts as declared.
+        at = at if ctx is not None and not scope and self._nested_named(name) else None
         cache_key = (name, scope, tuple(map(_arg_key, args)), ctx.qualname if ctx else None,
                      package, tuple(imports), strict, near, members, at)
         if depth == 0 and cache_key in self._spec_cache:
@@ -1124,7 +1125,7 @@ class Workspace:
             parsed = parse_type_text(member.return_type)
             if parsed:
                 # As a property's type: a written specialization (holder #(T)) keeps the bindings.
-                ref = TypeRef(parsed[1], member.return_type, parsed[0], parsed[2])
+                ref = TypeRef(parsed[1], member.return_type, parsed[0], parsed[2], member.range)
                 return self.resolve_type_ref(ref, ctx, bindings, strict, depth, **where)
             return None
         if isinstance(member, Typedef) and member.target is not None:

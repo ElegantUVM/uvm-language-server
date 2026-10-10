@@ -1100,9 +1100,25 @@ class Extractor:
                     t = self.type_ref_from_name(iface)
                     if t:
                         cls.implements.append(t)
+        forwards, start = self.forward_classes(n.items), len(self.out.classes)
         for item in nodes(n.items):
             self.class_item(cls, item, package, imports)
+        for nested in self.out.classes[start:]:
+            fwd = forwards.get(nested.name) if nested.outer_class == cls.name else None
+            if fwd is not None and (fwd.path, fwd.line, fwd.col) < (nested.range.path, nested.range.line, nested.range.col):
+                nested.forward = fwd
         self.out.classes.append(cls)
+
+    def forward_classes(self, items) -> dict[str, Range]:
+        """`typedef class x;` members by name: x is declared from there on."""
+        out: dict[str, Range] = {}
+        for item in nodes(items):
+            decl = item.declaration if item.kind == K.ClassPropertyDeclaration else item
+            if decl.kind == K.ForwardTypedefDeclaration and decl.name.valueText not in out:
+                r, _ = self.tok_range(decl.name)
+                if r is not None:
+                    out[decl.name.valueText] = r
+        return out
 
     def qualifiers(self, toks) -> list[str]:
         out = []

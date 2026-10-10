@@ -237,6 +237,7 @@ class ClassInfo:
     seq_starts: list[SeqStart] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)
     outer_class: str | None = None
+    forward: Range | None = None  # an earlier `typedef class` in the outer class, where its name starts
     library: bool = False
     doc: str = ""
     extends_args: str | None = None  # `extends base(args)`
