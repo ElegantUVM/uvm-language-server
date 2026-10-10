@@ -1,6 +1,7 @@
 """The MCP server as an agent drives it: `python -m uvmls mcp` over stdio through tools/mcp_smoke.py,
 on a copy of the example (acceptance items 1-11 of docs/specs/f7-mcp.md)."""
 
+import asyncio
 import json
 import os
 import shutil
@@ -10,6 +11,7 @@ import time
 import pytest
 
 from conftest import EXAMPLE
+from uvmls import mcp
 from uvmls.cli import main as cli
 
 SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +44,19 @@ def start(root: str, protocol: str = "2025-06-18") -> Smoke:
 
 def clean(c: Smoke):
     assert "Traceback" not in c.stderr, c.stderr
+
+
+def serve(root, *flags, protocol: str = "2025-06-18") -> Smoke:
+    """A server on a small workspace of its own, on the built-in UVM model (fast to index)."""
+    env = dict(os.environ, PYTHONPATH=SERVER_DIR)
+    env.pop("UVM_HOME", None)
+    c = Smoke([sys.executable, "-m", "uvmls", "mcp", str(root), "--no-bundled-uvm", *flags], cwd=str(root), env=env)
+    c.initialize(protocol)
+    return c
+
+
+def names(c: Smoke) -> list[str]:
+    return sorted(i["name"] for i in c.data("classes")["items"])
 
 
 @pytest.fixture(scope="module")
@@ -396,7 +411,7 @@ def test_elaborate_runs_in_the_worker(server):
     cpu_before = server.data("stats")["cpuSeconds"]
     result = server.data("elaborate")
     cpu_after = server.data("stats")["cpuSeconds"]
-    assert result["error"] is None and result["tops"] == ["tb_top"] and result["counts"]["errors"] == 0
+    assert "error" not in result and result["tops"] == ["tb_top"] and result["counts"]["errors"] == 0
     assert result["diagnostics"] == [] and result["truncated"] is False and result["seconds"] > 0
     assert cpu_after - cpu_before < 0.1, "the compile ran in the MCP process"
     failed = server.data("elaborate", {"tops": ["no_such"]})
@@ -427,3 +442,161 @@ def test_protocol_errors_notifications_and_ping_during_elaboration(server):
     first, second = server.read(), server.read()
     assert first["id"] == 901 and second["id"] == 900 and second["result"]["structuredContent"]["tops"] == ["tb_top"]
     clean(server)
+
+
+# -- the review's findings ----------------------------------------------------------------------
+
+
+def test_symlinks_cannot_reach_outside_the_workspace(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.sv").write_text("// SECRET\nclass secret; endclass\n")
+    (outside / "secret.svh").write_text("// SECRET\nclass secret_header; endclass\n")
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "link.sv").symlink_to(outside / "secret.sv")  # a root of its own
+    (root / "linked.svh").symlink_to(outside / "secret.svh")  # a header root.sv includes
+    (root / "root.sv").write_text('`include "linked.svh"\nclass in_ws; endclass\n')
+    c = serve(root)
+    try:
+        for uri in ("uvm://file/link.sv", "uvm://file/linked.svh", f"uvm://file/{outside / 'secret.sv'}",
+                    "uvm://file/../outside/secret.sv"):
+            reply = c.request("resources/read", {"uri": uri})
+            assert reply["error"]["message"].startswith("outside the workspace"), uri
+            assert "SECRET" not in json.dumps(reply)
+        assert c.error_text("hover", {"file": "link.sv", "line": 2, "col": 8}).startswith("outside the workspace")
+        assert c.error_text("includes", {"file": "linked.svh"}).startswith("outside the workspace")
+        assert c.read_resource("uvm://file/root.sv")["contents"][0]["text"].startswith("`include")
+        clean(c)
+    finally:
+        c.close()
+    alias = tmp_path / "alias"  # a workspace root that is itself a link serves its files
+    alias.symlink_to(root, target_is_directory=True)
+    c = serve(alias)
+    try:
+        assert c.read_resource("uvm://file/root.sv")["contents"][0]["text"].startswith("`include")
+        assert "in_ws" in names(c)
+        clean(c)
+    finally:
+        c.close()
+
+
+@pytest.mark.skipif(not os.path.exists("/bin/true"), reason="needs /bin/true")
+def test_worker_failures_are_tool_errors(ws, bundled_ws, monkeypatch):
+    server = mcp.McpServer(bundled_ws)
+
+    def elaborate() -> str:
+        reply = asyncio.run(server._call({"name": "elaborate", "arguments": {}}))
+        assert reply["isError"] is True and "structuredContent" not in reply
+        return reply["content"][0]["text"]
+
+    monkeypatch.setattr(mcp, "ELAB_TIMEOUT", 0.05)
+    assert elaborate() == "elaboration failed: it took longer than 0 s and was stopped"
+    monkeypatch.setattr(mcp, "ELAB_TIMEOUT", 120.0)
+    monkeypatch.setattr(sys, "executable", "/nonexistent/python")
+    assert elaborate().startswith("elaboration failed: cannot start /nonexistent/python")
+    monkeypatch.setattr(sys, "executable", "/bin/true")  # exits without a result
+    assert elaborate() == "elaboration failed: the worker exited with status 0 without a result"
+    skipped = asyncio.run(mcp.McpServer(ws)._call({"name": "elaborate", "arguments": {}}))
+    assert skipped["isError"] and skipped["content"][0]["text"].startswith("elaboration skipped: the built-in UVM model")
+
+
+def test_envelopes_batches_null_and_surrogates(server):
+    seen = len(server.others)
+    for rid in (0, "", "x"):
+        server.send({"jsonrpc": "2.0", "id": rid, "method": "ping"})
+        assert server.read() == {"jsonrpc": "2.0", "id": rid, "result": {}}
+    for rid in (None, True, 1.2, [], {}):
+        server.send({"jsonrpc": "2.0", "id": rid, "method": "ping"})
+        reply = server.read()
+        assert reply["error"]["code"] == -32600 and reply["id"] is None and "id must be" in reply["error"]["message"]
+    for message, code in [({"jsonrpc": "1.0", "id": 102, "method": "ping", "params": 5}, -32600),
+                          ({"jsonrpc": "2.0", "id": 103, "method": "ping", "params": 5}, -32600),
+                          ({"jsonrpc": "2.0", "id": 104, "method": "tools/list", "params": [1]}, -32602),
+                          ({"jsonrpc": "2.0", "id": 105}, -32600),
+                          ({"jsonrpc": "2.0", "id": 106, "method": 7}, -32600)]:
+        server.send(message)
+        reply = server.read()
+        assert (reply["id"], reply["error"]["code"]) == (message["id"], code), message
+    server.send_raw("null")  # a message, not the end of the input
+    reply = server.read()
+    assert reply["error"]["code"] == -32600 and reply["id"] is None
+    assert server.result("prompts/list") == {"prompts": []}
+    server.send([{"jsonrpc": "2.0", "id": 200, "method": "ping"}, {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                 {"jsonrpc": "2.0", "id": 201, "method": "prompts/list"}])
+    assert server.read() == [{"jsonrpc": "2.0", "id": 200, "result": {}},
+                             {"jsonrpc": "2.0", "id": 201, "result": {"prompts": []}}]
+    server.send([])
+    assert server.read()["error"] == {"code": -32600, "message": "an empty batch"}
+    server.send([{"jsonrpc": "2.0", "method": "notifications/x"}])  # a batch of notifications: no reply at all
+    server.send([[{"jsonrpc": "2.0", "id": 1, "method": "ping"}], 5])  # nested arrays are not batches
+    [nested, scalar] = server.read()
+    assert nested["error"]["code"] == scalar["error"]["code"] == -32600
+    server.send_raw("[" * 1100 + "0" + "]" * 1100)
+    deep = server.read()
+    assert (deep if isinstance(deep, dict) else deep[0])["error"]["code"] in (-32700, -32600)
+    server.send_raw('{"jsonrpc":"2.0","id":"\\ud800","method":"ping"}')
+    assert server.read() == {"jsonrpc": "2.0", "id": "\ud800", "result": {}}
+    assert server.error_text("class", {"name": "\ud800"}) == "no class \ud800"
+    server.send({"jsonrpc": "2.0", "id": "\udc00", "method": "tools/call",
+                 "params": {"name": "classes", "arguments": {"query": "\ud83d"}}})
+    reply = server.read()
+    assert reply["id"] == "\udc00" and reply["result"]["structuredContent"]["total"] == 0
+    server.proc.stdin.write(b"\xff\n")
+    server.proc.stdin.flush()
+    assert server.read()["error"]["code"] == -32700
+    assert server.result("ping") == {} and len(server.others) == seen
+    clean(server)
+
+
+def test_nested_filelists_and_new_files_refresh(tmp_path):
+    root = tmp_path / "nested"
+    root.mkdir()
+    (root / "a.sv").write_text("class original_class; endclass\n")
+    (root / "b.sv").write_text("class after; endclass\n")
+    (root / "top.f").write_text("-f child.f\n")
+    (root / "child.f").write_text("a.sv\n")
+    c = serve(root, "-f", "top.f")
+    try:
+        assert names(c) == ["original_class"]
+        (root / "child.f").write_text("b.sv\n")  # a filelist the filelist includes
+        time.sleep(1.1)
+        assert names(c) == ["after"]
+        clean(c)
+    finally:
+        c.close()
+    root = tmp_path / "discovery"
+    (root / "empty").mkdir(parents=True)
+    (root / "a.sv").write_text("class original_class; endclass\n")
+    c = serve(root)
+    try:
+        assert names(c) == ["original_class"]
+        (root / "empty" / "new.sv").write_text("class added; endclass\n")  # a directory with no file yet
+        time.sleep(1.1)
+        assert names(c) == ["added", "original_class"]
+        (root / "deeper" / "more").mkdir(parents=True)  # a directory that did not exist
+        (root / "deeper" / "more" / "x.sv").write_text("class deeper_class; endclass\n")
+        time.sleep(1.1)
+        assert names(c) == ["added", "deeper_class", "original_class"]
+        clean(c)
+    finally:
+        c.close()
+    root = tmp_path / "header"
+    root.mkdir()
+    (root / "root.sv").write_text('`include "later.svh"\nclass original_class; endclass\n')
+    (root / "top.f").write_text("root.sv\n")
+    c = serve(root, "-f", "top.f")
+    try:
+        assert names(c) == ["original_class"]
+        (root / "later.svh").write_text("class added; endclass\n")  # a missing include appears
+        time.sleep(1.1)
+        assert names(c) == ["added", "original_class"]
+        (root / "later.svh").unlink()
+        time.sleep(1.1)
+        assert names(c) == ["original_class"]
+        (root / "later.svh").write_text("class recreated; endclass\n")  # and comes back
+        time.sleep(1.1)
+        assert names(c) == ["original_class", "recreated"]
+        clean(c)
+    finally:
+        c.close()
