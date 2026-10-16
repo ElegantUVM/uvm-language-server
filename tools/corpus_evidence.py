@@ -13,10 +13,15 @@ import sys
 
 
 def row(c: dict) -> str:
-    elab = "skipped" if c.get("elab_failed") or "elab_errors" not in c else f"{c['elab_errors']} / {c['elab_warnings']}"
-    topo = f"{c['topo_nodes']} nodes, depth {c['topo_depth']}, {c['topo_connections']} connections" if c["topo_nodes"] else "—"
-    return (f"| {c['name']} | {c['files']} | {c['classes']} | {c['index_s']:.2f} s | {c['stats_rss_mb']} MB | "
-            f"{c['lint_total']} | {elab}{'' if elab == 'skipped' else f' ({c.get('elab_s', 0):.2f} s)'} | {topo} | {c['graph_nodes']} / {c['graph_edges']} |")
+    if c.get("elab_failed") or "elab_errors" not in c:
+        elab = "skipped"
+    else:
+        elab = "{} / {} ({:.2f} s)".format(c["elab_errors"], c["elab_warnings"], c.get("elab_s", 0))
+    topo = "{} nodes, depth {}, {} connections".format(c["topo_nodes"], c["topo_depth"], c["topo_connections"]) \
+        if c["topo_nodes"] else "—"
+    return "| {} | {} | {} | {:.2f} s | {} MB | {} | {} | {} | {} / {} |".format(
+        c["name"], c["files"], c["classes"], c["index_s"], c["stats_rss_mb"], c["lint_total"], elab, topo,
+        c["graph_nodes"], c["graph_edges"])
 
 
 HEAD = ("| Case | Files | Classes | Index | RSS | Lint findings | Elab errors / warnings | Topology | Graph nodes / edges |\n"
