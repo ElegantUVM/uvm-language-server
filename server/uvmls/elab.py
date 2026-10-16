@@ -24,6 +24,7 @@ import pyslang as ps
 from pyslang import analysis, ast, driver
 from pyslang import syntax as S
 
+from . import project
 from .indexer import SHIM_DIR, UVM_MACROS_PRELUDE, _uses_unknown_uvm_macro, fix_data, physical_position, slang_text, to_slang
 from .project import BUNDLED_UVM, SourceSet, norm
 
@@ -140,7 +141,7 @@ class _Locator:
         bid = buffer.id
         if bid not in self._paths:
             p = str(self.sm.getFullPath(buffer) or "")
-            self._paths[bid] = None if p in ("", ".") or p.startswith("<") else self.as_given(norm(p))
+            self._paths[bid] = None if p in ("", ".") or p.startswith("<") else self.as_given(project.from_slang_path(p))
         return self._paths[bid]
 
     def is_library(self, path: str) -> bool:
@@ -212,7 +213,7 @@ class _Notes:
         found = [m for m in map(NOTE_RE.match, slang_text(self.client.getString).splitlines()) if m]
         if severity == ps.DiagnosticSeverity.Note and diag.location != ps.SourceLocation.NoLocation:
             found = found[1:]  # an $info is itself printed as a note, ahead of its own notes
-        return [{"file": self.loc.as_given(norm(m.group(1))), "line": int(m.group(2)) - 1,
+        return [{"file": self.loc.as_given(project.from_slang_path(m.group(1))), "line": int(m.group(2)) - 1,
                  "col": int(m.group(3)) - 1, "message": m.group(4)}
                 for m in found if os.path.isabs(m.group(1))]  # not a generated buffer such as the prelude
 
@@ -236,7 +237,7 @@ def _with_uvm_macros(d, loc: _Locator, include_dirs: list[str]):
         path = loc.path(tree.root.endOfFile.location.buffer)
         if path and not loc.is_library(path) and _uses_unknown_uvm_macro(tree):
             prelude = prelude or sm.assignText(UVM_MACROS_PRELUDE, '`include "uvm_macros.svh"\n')
-            tree = S.SyntaxTree.fromBuffers([prelude, sm.readSource(path)], sm, tree.options)
+            tree = S.SyntaxTree.fromBuffers([prelude, sm.readSource(project.slang_path(path))], sm, tree.options)
         trees.append(tree)
     return trees if prelude else None
 
@@ -272,16 +273,25 @@ def _compile(req: dict):
     overrides = req.get("overrides") or {}
     roots = list(dict.fromkeys(req["roots"]))
     missing = [r for r in roots if not os.path.isfile(r)]  # slang's loader needs the file on disk
+    extra_args = list(req.get("args") or [])
+    path_args = {i: arg for i, arg in enumerate(extra_args)
+                 if i and extra_args[i - 1] in ("-I", "--include-directory", "-f", "-F")}
+    for path in roots + list(req.get("includeDirs") or []) + list(overrides) + list(path_args.values()):
+        error = project.slang_path_error(path)
+        if error:
+            return error
+    for i, path in path_args.items():
+        extra_args[i] = project.slang_path(path)
     d = driver.Driver()
     d.addStandardArgs()
     args = ["slang", "--error-limit", "0"]  # the default stops after a few dozen; MAX_LISTED applies
     for inc in req.get("includeDirs") or []:
-        args += ["-I", inc]
+        args += ["-I", project.slang_path(inc)]
     for name, value in (req.get("defines") or {}).items():
         args += ["-D", f"{name}={value}" if value != "" else name]
     for top in req.get("tops") or []:
         args += ["--top", top]
-    args += list(req.get("args") or []) + [r for r in roots if r not in missing]
+    args += extra_args + [project.slang_path(r) for r in roots if r not in missing]
     # The driver prints command-line errors directly to native stderr, not its diagnostic client.
     with tempfile.TemporaryFile() as output:
         saved = os.dup(2)
@@ -304,7 +314,7 @@ def _compile(req: dict):
         real = os.path.realpath(path)  # the name slang looks files up by
         if real not in assigned:
             assigned.add(real)
-            sm.assignText(real, to_slang(text))
+            sm.assignText(project.slang_path(real), to_slang(text))
     d.parseAllSources()
     loc = _Locator(sm, req)
     trees = _with_uvm_macros(d, loc, req.get("includeDirs") or [])

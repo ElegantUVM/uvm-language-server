@@ -122,6 +122,7 @@ Last updated: 2026-10-16 (evening); see the Release rows F71–F77.
 | I28 | Tests | `test_elaboration_off_results_do_not_outlive_a_fix` flaky under `-n 8` | 🔴 Open | Not seen in recent runs; re-check. |
 | I29 | Docs | README "Measured performance" table needs re-measuring after the recent merges | 🟡 Partial | The real-project table is new (2026-10-16); the synthetic-project rows are still from before f4. |
 | I30 | Repo | Old fully merged branches (`feature3`, `f4-parity`, `f4-rebase`, `f4-fix`, `fix-resolution`) | ✅ Done | Deleted 2026-10-16 (D04). |
+| I31 | Windows paths | slang cannot open non-ASCII paths on volumes without 8.3 short names | ⚪ Accepted | The pyslang boundary uses ASCII short names and restores long paths in results. If unavailable, move the project or enable short names (`fsutil 8dot3name`); native verification pending (F57). |
 | D01 | Release | Licence and distribution | ✅ Done | Decided 2026-10-16 after a six-pass research study: free and open source, Apache-2.0, open-core-ready, no charging in the first 12 months. F69 is now F71/F76. |
 | D02 | Roadmap | What to build next | ✅ Done | Launch first (F71–F76), then F40 and F41 for v0.2 in February 2027. |
 | D03 | Debug | Provide 5–10 hung-simulation logs and answer the 4 open questions | 🔴 Open | Unblocks F43–F47. |

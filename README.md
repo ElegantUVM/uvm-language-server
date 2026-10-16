@@ -192,6 +192,9 @@ an interpreter that already has them. On Windows, setup tries the `py` launcher 
 `-3.14` … `-3.11` switches before trying `python`. With Remote-SSH, the extension runs on the remote host,
 so a Linux x86_64 remote uses the Linux package even when the local computer runs Windows or macOS.
 
+On Windows, slang uses ASCII 8.3 short names for non-ASCII project paths. If the volume has no short names,
+slang cannot open non-ASCII paths; move the project or enable them (`fsutil 8dot3name`).
+
 **Offline and behind a proxy.** The four platform packages install dependencies from their bundled wheels,
 with no network access. The generic package installs from a package index; give pip a mirror or proxy with `uvm.pipArgs` (for example
 `["--index-url", "https://mirror.example/simple", "--trusted-host", "mirror.example"]`), or build a wheelhouse on a

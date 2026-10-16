@@ -9,6 +9,7 @@ that file's root to be re-parsed.
 from __future__ import annotations
 
 import bisect
+import logging
 import os
 import re
 from dataclasses import dataclass, replace
@@ -17,7 +18,7 @@ import pyslang as ps
 from pyslang import parsing as P
 from pyslang import syntax as S
 
-from . import naturaldocs
+from . import naturaldocs, project
 from .project import norm
 from .model import (
     CallSite, ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex, FoldRegion,
@@ -596,6 +597,14 @@ class Indexer:
         self._shim = _shim_text() if use_shim else ""
         self._real_macros = not use_shim and any(
             os.path.isfile(os.path.join(d, "uvm_macros.svh")) for d in self.include_dirs)
+        self._warned_slang_paths: set[str] = set()
+
+    def _slang_path(self, path: str) -> str:
+        error = project.slang_path_error(path)
+        if error and path not in self._warned_slang_paths:
+            self._warned_slang_paths.add(path)
+            logging.getLogger("uvmls").error(error)
+        return project.slang_path(path)
 
     def parse(self, root: str, overrides: dict[str, str] | None = None, library: bool = False,
               complete: bool = False, trees: dict | None = None) -> FileIndex:
@@ -631,12 +640,12 @@ class Indexer:
         sm = ps.SourceManager()
         for path, text in overrides.items():
             if path != root:
-                sm.assignText(path, to_slang(text))
+                sm.assignText(self._slang_path(path), to_slang(text))
         po = P.PreprocessorOptions()
         dirs = list(self.include_dirs)
         if self.use_shim:
             dirs.append(SHIM_DIR)
-        po.additionalIncludePaths = dirs
+        po.additionalIncludePaths = [self._slang_path(d) for d in dirs]
         predefines = [f"{k}={v}" if v != "" else k for k, v in self.defines.items()]
         if self.library_guard and not library:
             predefines.append(self.library_guard)
@@ -647,9 +656,9 @@ class Indexer:
             buffers.append(sm.assignText(SHIM_BUFFER_NAME, self._shim))
         try:
             if root in overrides:
-                buffers.append(sm.assignText(root, to_slang(overrides[root])))
+                buffers.append(sm.assignText(self._slang_path(root), to_slang(overrides[root])))
             else:
-                buffers.append(sm.readSource(root))
+                buffers.append(sm.readSource(self._slang_path(root)))
         except Exception as e:  # unreadable file
             idx = FileIndex(root=root, library=library)
             idx.diagnostics.append(Diag(Range(root, 0, 0, 0, 0), f"cannot read file: {e}", "error", "io"))
@@ -697,7 +706,7 @@ class Extractor:
                     norm(p) == norm(SHIM_FILE):
                 self._paths[bid] = None
             else:
-                self._paths[bid] = norm(p)
+                self._paths[bid] = project.from_slang_path(p)
         return self._paths[bid]
 
     def file_loc(self, loc):

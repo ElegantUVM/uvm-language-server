@@ -110,6 +110,70 @@ def norm(p: str) -> str:
     return drive.upper() + tail if len(drive) == 2 and drive[1] == ":" else p
 
 
+_SLANG_PATHS: dict[str, str] = {}
+_NATIVE_PATHS: dict[str, str] = {}
+_PATH_CACHE_LIMIT = 1024
+
+
+def _windows_path(path: str, function: str) -> str:
+    import ctypes
+    from ctypes import wintypes
+
+    convert = getattr(ctypes.WinDLL("kernel32", use_last_error=True), function)
+    convert.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    convert.restype = wintypes.DWORD
+    size = convert(path, None, 0)
+    while size:
+        buffer = ctypes.create_unicode_buffer(size)
+        used = convert(path, buffer, size)
+        if not used:
+            break
+        if used < size:
+            return buffer.value
+        size = used + 1
+    return path
+
+
+def _cache_slang_path(native: str, short: str):
+    if len(_SLANG_PATHS) >= _PATH_CACHE_LIMIT or len(_NATIVE_PATHS) >= _PATH_CACHE_LIMIT:
+        _SLANG_PATHS.clear()
+        _NATIVE_PATHS.clear()
+    _SLANG_PATHS[native] = short
+    _NATIVE_PATHS[norm(short)] = norm(native)
+
+
+def slang_path(path: str) -> str:
+    """An ASCII path for slang's narrow Windows filesystem API, when 8.3 names exist."""
+    if sys.platform != "win32" or path.isascii():
+        return path
+    if path in _SLANG_PATHS:
+        return _SLANG_PATHS[path]
+    short = _windows_path(path, "GetShortPathNameW")
+    if short != path and short.isascii():
+        _cache_slang_path(path, short)
+        return short
+    return path
+
+
+def from_slang_path(path: str) -> str:
+    if sys.platform == "win32" and "~" in path:
+        key = norm(path)
+        if key in _NATIVE_PATHS:
+            return _NATIVE_PATHS[key]
+        native = norm(_windows_path(path, "GetLongPathNameW"))
+        if native != key:
+            _cache_slang_path(native, path)
+        return native
+    return norm(path)
+
+
+def slang_path_error(path: str) -> str | None:
+    if sys.platform == "win32" and not slang_path(path).isascii() and os.path.exists(path):
+        return (f"slang cannot open non-ASCII path '{path}' on Windows and the volume has no short names; "
+                "move the project or enable them (fsutil 8dot3name)")
+    return None
+
+
 def relative_or_absolute(path: str, start: str | None = None) -> str:
     """Relative to start (the working directory by default), or absolute across drives."""
     try:

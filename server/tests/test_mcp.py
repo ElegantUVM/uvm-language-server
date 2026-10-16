@@ -975,9 +975,36 @@ def test_the_real_path_cache_holds_the_live_files_only(tmp_path):
     for i in range(20):
         (root / "top.sv").write_text(f'`include "h{i}.inc"\nclass top; endclass\n', encoding="utf-8", newline="")
         server.refresh(force=True)
-        server.path_of("top.sv")
-        assert set(server._real_of) == server.ws.files() == {str(root / "top.sv"), str(root / f"h{i}.inc")}
+        indexed = server.ws.indices[str(root / "top.sv")].files
+        assert set(server._real_of) == server.ws.files() == indexed
+        assert str(root / "top.sv") in indexed and len(indexed) == 2
     assert server.ws.sources is sources and len(server.ws.texts) == 2
+
+
+@pytest.mark.parametrize("rebuild", [False, True])
+def test_force_refresh_aligns_a_rebuilt_index_with_unchanged_stamps(tmp_path, monkeypatch, rebuild):
+    root = tmp_path / "ws"
+    root.mkdir()
+    top = root / "top.sv"
+    top.write_bytes(b'`include "h6.inc"\nclass top; endclass\n')
+    (root / "tb.f").write_bytes(b"top.sv\n")
+    for i in (6, 7):
+        (root / f"h{i}.inc").write_bytes(f"class h{i}; endclass\n".encode("ascii"))
+    server = in_process(root, "tb.f")
+    before = top.stat()
+    top.write_bytes(b'`include "h7.inc"\nclass top; endclass\n')
+    os.utime(top, ns=(before.st_atime_ns, before.st_mtime_ns))
+    if rebuild:
+        server.ws.reindex_all()
+    else:
+        server.ws.update_documents([str(top)])
+    indexed = server.ws.files()
+    assert indexed == {str(top), str(root / "h7.inc")}
+    assert set(server._real_of) == {str(top), str(root / "h6.inc")}
+    monkeypatch.setattr(mcp, "_stamp", lambda path: server.stamps.get(path))
+    server.refresh(force=True)
+    assert set(server._real_of) == indexed
+    assert server._real_of == {path: os.path.realpath(path) for path in indexed}
 
 
 def test_discovery_watches_an_include_dir_outside_the_roots(tmp_path, monkeypatch):

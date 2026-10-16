@@ -659,6 +659,8 @@ class McpServer:
         if not force and now - self._checked < REFRESH_SECONDS:
             return
         self._checked = now
+        if force:
+            self._align()  # the index may have changed even when disk stamps have not
         changed = {p: s for p in self.stamps if (s := _stamp(p)) != self.stamps[p]}
         if not changed:
             return

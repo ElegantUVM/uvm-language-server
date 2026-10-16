@@ -611,3 +611,150 @@ actual range is `{'start': {'line': 32, 'character': 25}, 'end': {'line': 32, 'c
 its expected range is `{'start': {'line': 33, 'character': 23}, 'end': {'line': 33, 'character': 34}}`.
 The next native run must confirm the local fixes and provide the newly captured diagnostic
 context for items 1, 3 and 6. Final checkpoint taken after this note.
+
+## 2026-10-16 21:05 UTC: fourth native CI run (reviewer) — instructions for the next turn
+
+Commit `31e520a`, run 38963472449. **Only `server (windows-latest, 3.12)` fails: 16 failed, 1515 passed, 86
+skipped.** Log: `.local-backups/f57-platforms/ci/windows-server-py312-run38963472449.log`. Thanks to the captured
+slang output, 15 of the 16 have one root cause:
+
+```text
+elaboration failed: slang did not accept the elaboration options:
+warning: include directory 'C:\Users\...\test_stdout_is_only_sarif_and_3\alu tb é\tb\tb_top.sv': The system cannot find the path specified.
+```
+
+**slang cannot open a path with a non-ASCII character on Windows.** pyslang passes the UTF-8 string to
+`std::filesystem::path(std::string)`, which Windows decodes in the ANSI code page, so `é` becomes two other
+characters and the file is "not found". Every failing fixture has such a path: `alu tb é` (`test_sarif`, 3),
+`café/` (`test_config_navigation::test_config_multi_macro_navigation_after_unsaved_edit[*]`, 4: the override for
+the unsaved edit is keyed by a path slang never matches, so the definition stays at the pre-edit line 32),
+`café.svh` (`test_document_highlight::test_keyword_encoding_crlf_and_duplicate_includes[*]`, 8: the file is never
+read by slang, so nothing is indexed and the highlight is `null`). Linux cannot reproduce it.
+
+1. **Decision: 8.3 short names at the pyslang boundary on win32.** Add to `project.py`:
+   - `slang_path(path) -> str`: on win32, when the path contains a non-ASCII character, return
+     `GetShortPathNameW(path)` (ctypes, `kernel32`, buffer loop) if it differs and is pure ASCII; otherwise the
+     path unchanged. Short names exist only for paths that exist on disk, which is what slang needs anyway.
+   - `from_slang_path(path) -> str`: `GetLongPathNameW` on win32 when the path contains `~`, then `norm`.
+     Cache both directions in a small dict (paths are repeated many times per index).
+   - Use `slang_path` at every point a path reaches pyslang: `elab.py` driver arguments (roots, `-I` include
+     dirs, `-f`/filelists, `--top` is not a path), `sm.assignText(real, ...)` overrides, `sm.readSource(...)`;
+     `indexer.py` `sm.assignText(path/root, ...)`, `sm.readSource(root)`, include directories given to the
+     source manager. Use `from_slang_path` on every path that comes back: `getFullPath(buffer)` in `elab.py:142`
+     and `indexer.py:694`, diagnostics' paths, `CouldNotOpenIncludeFile` locations. Index keys, URIs, display
+     paths and everything else stay the long native path.
+   - When short names are unavailable (a volume with 8.3 names disabled) and the path is non-ASCII, do not
+     fail silently: elaboration returns a clear `_failed("slang cannot open non-ASCII path '<p>' on Windows and
+     the volume has no short names; move the project or enable them (fsutil 8dot3name)")`, the indexer logs the
+     same once per path. Add that sentence to the README's Windows install note and a `docs/STATUS.md` I-row.
+   - Tests on every OS: monkeypatch `project.slang_path`/`from_slang_path` to a fake mapping and check the
+     round trip through the indexer and `elaborate()` (positions, override application, include resolution,
+     diagnostics' paths); on win32 a real test with `café` that skips with a reason when short names are off.
+2. **`test_mcp.py::test_the_real_path_cache_holds_the_live_files_only`:** `top.sv` is rewritten 20 times in a tight
+   loop; `h6.inc` and `h7.inc` have the same length, so the file stamp `(st_mtime_ns, st_size)` is identical when
+   two writes land in the same NTFS timestamp tick (Windows updates write times lazily). The index did move to
+   `h7` but `_real_of` still holds `h6`, so the cache's invalidation runs off the stamp while the index does not.
+   Make `refresh(force=True)` refresh `_real_of` from the index it just rebuilt rather than from the stamp
+   comparison, and have the test assert against what the index holds. No sleeps.
+3. Verification as before, a dated section in this note, checkpoint. Note that the corpus baseline passed on
+   `31e520a` (changes: none) and that all other CI jobs are green.
+
+## 2026-10-16 21:06 UTC: fourth native CI follow-up (items 1–3)
+
+Completed the reviewer's items in order on `f57-platforms`, based on `31e520a`.
+The existing reviewer handoff in this note was preserved. Changes are uncommitted;
+no commit, push, merge, publication, history change, network access or lock-file
+change was performed. Checkpoints were taken after the path implementation,
+after the MCP change, during verification, and after this note.
+
+1. **Windows paths at the pyslang boundary:** `project.slang_path` uses
+   `GetShortPathNameW` for non-ASCII Windows paths, accepting only a different,
+   ASCII result; `from_slang_path` expands `~` paths with `GetLongPathNameW` and
+   normalizes them. Both directions share bounded dictionaries (1,024 entries).
+   The ctypes calls use wide strings and retry with a larger buffer when needed;
+   unsuccessful conversions preserve the supplied path and are not cached.
+   Indexer roots, overrides and include directories, and elaboration roots,
+   include directories, overrides, macro reparses and separate `-I`,
+   `--include-directory`, `-f`/`-F` arguments now use the boundary conversion.
+   Returned buffer paths and diagnostic-note paths are converted back before
+   entering index locations or elaboration results. Module/top names are unchanged.
+   An existing non-ASCII path with no usable ASCII short name gives the requested
+   explicit elaboration failure; the indexer logs the same message once per path
+   per indexer instance. README's Windows install note and STATUS row I31 document
+   this limitation.
+
+   New `test_slang_paths.py` exercises the wide-API buffer loop/failures, cache
+   bounds and both directions, unavailable short names and once-only logging,
+   non-Windows/ASCII passthrough, and fake path mappings through real slang parsing
+   and elaboration. The mapped tree tests cover disk reads, root/header overrides,
+   CRLF positions, include resolution, missing-include diagnostic locations,
+   elaboration diagnostics and related-note paths, and `-I`/`-f`/`-F` arguments.
+   Two real Windows cases use a `café` directory and ASCII/Unicode header names;
+   they skip with an explicit reason if ASCII 8.3 names are unavailable.
+
+   **Native resolution remains unverified.** A Unicode filename spelled inside
+   an `include directive is looked up inside slang; converting Python API paths
+   does not rewrite that token. The new Windows `café.svh` case explicitly covers
+   this concern. No source-text rewriting was introduced. The existing eight
+   Unicode-header highlight failures must not be claimed fixed from Linux results.
+   GetShortPathNameW may also return an unchanged/non-ASCII name: that follows the
+   documented failure path, rather than assuming every enabled volume supplies an
+   ASCII alias. Native CI must establish which test paths have usable aliases.
+2. **MCP real-path cache:** `refresh(force=True)` now aligns `_real_of` and its
+   reverse map with the current index before the unchanged-stamp early return.
+   The tight rewrite-loop test compares the cache with the files actually held
+   by its current root index, without assuming every same-size rewrite has a
+   distinguishable Windows timestamp. It checks immediately after refresh, without
+   a `path_of()` call that could repair the cache lazily. A deterministic regression
+   replaces `h6.inc` with `h7.inc`, preserves the source's size/mtime, rebuilds the
+   index (both incremental and full variants), freezes every watched stamp, and
+   checks that forced refresh drops `h6.inc` and retains `h7.inc`. No sleeps added.
+3. **Local verification (Linux, offline):**
+   - `cd client && node --test tests/*.test.cjs`: **5 test-file entries passed**.
+   - `cd client && npm run typecheck`: passed.
+   - Direct `.venv/bin/python`, `test_slang_paths.py`, `test_project.py`,
+     `test_indexer.py`, `test_elab.py`, `test_sarif.py`: **175 passed, 2 skipped**.
+     After simplifying extra-argument conversion and adding its two include-flag
+     cases, final `test_slang_paths.py`: **15 passed, 2 skipped** (the native cases).
+   - Direct `.venv/bin/python`, focused MCP cache cases: **3 passed, 34 deselected**.
+   - With the existing `/tmp/f57-validation/python` selector workaround,
+     `test_mcp.py`, `test_document_highlight.py`, `test_config_navigation.py`,
+     `test_lsp.py`: **206 passed**. These establish Linux behavior only.
+   - `git diff --check`: passed. All **five** wheel/Verible lock files match
+     `HEAD` byte-for-byte. No pre-existing skip condition was changed.
+
+Per the reviewer, the corpus baseline on `31e520a` passed with **changes: none**,
+and all other jobs in run **38963472449** were green. The corpus was not rerun
+here. The full server suite, native Windows/macOS runs, native package/first-run
+acceptance and the actual Win32 path APIs remain for the next native CI run;
+F57/F27 remain partial.
+
+**Unresolved native assertions:** the API mappings and MCP regressions pass
+locally, but Linux cannot establish that the fourth-run Windows failures are gone.
+The four navigation failures have the exact logged assertion:
+
+```text
+assert [{'uri': 'fil...acter': 25}}}] == [{'uri': 'fil...acter': 34}}}]
+```
+
+The eight highlight failures (each range occurs with and without a BOM) have
+these exact assertions, grepped from run 38963472449:
+
+```text
+assert None == [{'range': {'start': {'line': 0, 'character': 9}, 'end': {'line': 0, 'character': 14}}, 'kind': 1}, {'range': {'start': {'line': 9, 'character': 0}, 'end': {'line': 9, 'character': 8}}, 'kind': 1}]
+assert None == [{'range': {'start': {'line': 0, 'character': 11}, 'end': {'line': 0, 'character': 16}}, 'kind': 1}, {'range': {'start': {'line': 9, 'character': 0}, 'end': {'line': 9, 'character': 8}}, 'kind': 1}]
+assert None == [{'range': {'start': {'line': 1, 'character': 9}, 'end': {'line': 1, 'character': 14}}, 'kind': 1}, {'range': {'start': {'line': 12, 'character': 0}, 'end': {'line': 12, 'character': 8}}, 'kind': 1}]
+assert None == [{'range': {'start': {'line': 1, 'character': 11}, 'end': {'line': 1, 'character': 16}}, 'kind': 1}, {'range': {'start': {'line': 12, 'character': 0}, 'end': {'line': 12, 'character': 8}}, 'kind': 1}]
+```
+
+Both stdout-SARIF elaboration cases have `assert 2 == 1`. The repeated elaboration
+case's exact logged assertion is:
+
+```text
+assert ("slang did not accept the elaboration options:\nwarning: include directory 'C:\\Users\\runneradmin\\AppData\\Local\\Te...admin\\pytest-0\\test_repeated_elaboration_arou0\\alu tb �\\tb\\tb_top.sv': The system cannot find the path specified." is None)
+```
+
+The original MCP assertion is
+`assert set(server._real_of) == server.ws.files() == {str(root / "top.sv"), str(root / f"h{i}.inc")}`;
+the failure showed `h6.inc` versus `h7.inc`. Its replacement and deterministic
+unchanged-stamp regressions pass here; native scheduling still needs confirmation.
