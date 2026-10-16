@@ -98,6 +98,7 @@ Use the code shown in Problems or `uvmls lint`; separate several codes with comm
 | `python-version` | `3.12` | Python version for the server (3.11 or newer). |
 | `elab` | `false` | Also elaborate and merge its diagnostics into the same SARIF run. |
 | `fail-on` | `warning` | `warning` fails on warnings or errors, matching `lint`'s exit code. `error` fails only on errors; `never` does not fail on findings. Notes never fail. |
+| `upload` | `true` | `false` skips the code-scanning upload (a private repository without Advanced Security rejects it); the report is still written and `fail-on` still applies. |
 
 The action uploads before applying `fail-on`, so findings are available even when the check fails. Installation, analysis and upload failures still fail the action. Unreadable filelists, including nested lists, fail before analysis regardless of `fail-on`. Outputs are `sarif-file` (the report's absolute path) and `problems` (the number of listed results, including notes). With `elab: "true"`, it runs the two CLI commands separately and uses [tools/merge_sarif.py](tools/merge_sarif.py) to merge their rules and results into one run, preserving fingerprints. Findings reported by both commands remain separate results. The failure policy uses elaboration's full counts, including diagnostics beyond its listing limit.
 

@@ -18,3 +18,4 @@ jobs:
         with:
           filelist: examples/alu_tb/alu_tb.f
           elab: "true"
+          upload: ${{ !github.event.repository.private }}
