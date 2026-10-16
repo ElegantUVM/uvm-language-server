@@ -10,7 +10,7 @@ from lsprotocol import types as T
 from test_fixes import index
 from uvmls.documents import Workspace as LspWorkspace
 from uvmls.navigation import Navigator
-from uvmls.server import UvmLanguageServer, inlay_hint
+from uvmls.server import UvmLanguageServer, inlay_hint, path_to_uri
 
 
 def test_cold_member_hints_yield_to_the_event_loop(tmp_path):
@@ -24,8 +24,8 @@ class driver extends uvm_driver #(item);
     async def run():
         ls = UvmLanguageServer()
         ls.ws, ls.nav = ws, Navigator(ws)
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
-        params = T.InlayHintParams(T.TextDocumentIdentifier((tmp_path / "t.sv").as_uri()),
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
+        params = T.InlayHintParams(T.TextDocumentIdentifier(path_to_uri(str(tmp_path / "t.sv"))),
                                   T.Range(T.Position(4, 0), T.Position(6, 0)))
         ticks = []
         start = time.perf_counter()
@@ -55,8 +55,8 @@ class driver extends uvm_driver #(item);
     async def run():
         ls = UvmLanguageServer()
         ls.ws, ls.nav = ws, Navigator(ws)
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
-        params = T.InlayHintParams(T.TextDocumentIdentifier((tmp_path / "t.sv").as_uri()),
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
+        params = T.InlayHintParams(T.TextDocumentIdentifier(path_to_uri(str(tmp_path / "t.sv"))),
                                   T.Range(T.Position(3000, 0), T.Position(3002, 0)))
         with patch.object(ws, "enclosing", wraps=ws.enclosing) as enclosing:
             assert len(await inlay_hint(ls, params)) == 2
@@ -81,8 +81,8 @@ endclass
     async def run():
         ls = UvmLanguageServer()
         ls.ws, ls.nav = ws, Navigator(ws)
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
-        ls.workspace.put_text_document(T.TextDocumentItem(path.as_uri(), "systemverilog", 1, text))
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
+        ls.workspace.put_text_document(T.TextDocumentItem(path_to_uri(str(path)), "systemverilog", 1, text))
         ls.after_index = lambda: None
         entered, release = threading.Event(), threading.Event()
         original = ls.nav.bound_member_hints
@@ -92,14 +92,14 @@ endclass
             assert release.wait(2)
             return original(*args)
 
-        params = T.InlayHintParams(T.TextDocumentIdentifier(path.as_uri()),
+        params = T.InlayHintParams(T.TextDocumentIdentifier(path_to_uri(str(path))),
                                   T.Range(T.Position(0, 0), T.Position(100, 0)))
         with patch.object(ls.nav, "bound_member_hints", side_effect=delayed):
             task = asyncio.create_task(inlay_hint(ls, params))
             try:
                 while not entered.is_set():
                     await asyncio.sleep(.001)
-                ls.workspace.update_text_document(T.VersionedTextDocumentIdentifier(2, path.as_uri()),
+                ls.workspace.update_text_document(T.VersionedTextDocumentIdentifier(2, path_to_uri(str(path))),
                                                   T.TextDocumentContentChangeWholeDocument("\n\n" + text))
                 ls.schedule(str(path))
             finally:

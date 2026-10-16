@@ -27,7 +27,7 @@ MERGE = REPO / "tools" / "merge_sarif.py"
 
 def load_manifest(path):
     """Read the small YAML subset these manifests use, with no YAML dependency."""
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
 
     def scalar(value):
         if value.startswith('"'):
@@ -168,9 +168,9 @@ def test_action_scans_the_callers_checkout_and_writes_outputs(tmp_path, elab):
     scan = next(s for s in steps if s.get("id") == "scan")
     result = shell_step(scan, root, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    values = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
     assert Path(values["sarif-file"]) == root / "uvmls.sarif"
-    run = check_log(json.loads((root / "uvmls.sarif").read_text()))
+    run = check_log(json.loads((root / "uvmls.sarif").read_text(encoding="utf-8")))
     assert int(values["problems"]) == len(run["results"]) >= 2
     assert values["lint-status"] == "1" and values["elab-status"] == ("1" if elab == "true" else "0")
     tags = {tag for r in run["tool"]["driver"]["rules"] for tag in r["properties"]["tags"]}
@@ -184,15 +184,15 @@ def test_action_scans_the_callers_checkout_and_writes_outputs(tmp_path, elab):
 @pytest.mark.parametrize("policy", ["warning", "error", "never"])
 @pytest.mark.parametrize("mode", ["missing", "unreadable", "nested-missing", "nested-unreadable", "empty"])
 def test_action_rejects_unreadable_filelists(tmp_path, elab, policy, mode):
-    (tmp_path / "top.sv").write_text("module top; endmodule\n")
+    (tmp_path / "top.sv").write_text("module top; endmodule\n", encoding="utf-8", newline="")
     filelist = tmp_path / "tb.f"
     if mode.startswith("nested"):
         (tmp_path / "lists").mkdir()
-        filelist.write_text('top.sv\n-f "lists/inner list.f"\n')
-        (tmp_path / "lists" / "inner list.f").write_text("-F ../absent.f\n")
+        filelist.write_text('top.sv\n-f "lists/inner list.f"\n', encoding="utf-8", newline="")
+        (tmp_path / "lists" / "inner list.f").write_text("-F ../absent.f\n", encoding="utf-8", newline="")
     unreadable = tmp_path / "absent.f" if mode.startswith("nested") else filelist
     if mode.endswith("unreadable"):
-        unreadable.write_text("top.sv\n")
+        unreadable.write_text("top.sv\n", encoding="utf-8", newline="")
         unreadable.chmod(0)
         if os.access(unreadable, os.R_OK):
             unreadable.chmod(0o600)
@@ -209,7 +209,7 @@ def test_action_rejects_unreadable_filelists(tmp_path, elab, policy, mode):
         if mode.endswith("unreadable"):
             unreadable.chmod(0o600)
     if result.returncode == 0:
-        values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        values = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
         gate = shell_step(steps[-1], tmp_path, {**env, "UVMLS_FAIL_ON": policy,
                          "UVMLS_LINT_STATUS": values["lint-status"], "UVMLS_ELAB_STATUS": values["elab-status"]})
         assert gate.returncode != 0, f"action passed with {mode} filelist: {values}"
@@ -224,7 +224,7 @@ def test_action_rejects_unreadable_filelists(tmp_path, elab, policy, mode):
     ("never", "note", 0), ("never", "warning", 0), ("never", "error", 0),
 ])
 def test_fail_on_policy(tmp_path, policy, level, status):
-    (tmp_path / "uvmls.sarif").write_text(json.dumps({"runs": [{"results": [{"level": level}]}]}))
+    (tmp_path / "uvmls.sarif").write_text(json.dumps({"runs": [{"results": [{"level": level}]}]}), encoding="utf-8", newline="")
     step = action()["runs"]["steps"][-1]
     result = shell_step(step, tmp_path, {"UVMLS_FAIL_ON": policy, "UVMLS_LINT_STATUS": "1",
                                        "UVMLS_ELAB_STATUS": "0"})
@@ -234,7 +234,7 @@ def test_fail_on_policy(tmp_path, policy, level, status):
 @pytest.mark.parametrize("policy,lint,elab", [("invalid", "0", "0"), ("never", "2", "0"),
                                              ("never", "0", "2"), ("never", "127", "0")])
 def test_invalid_policy_and_failed_analysis_cannot_pass(tmp_path, policy, lint, elab):
-    (tmp_path / "uvmls.sarif").write_text(json.dumps({"runs": [{"results": []}]}))
+    (tmp_path / "uvmls.sarif").write_text(json.dumps({"runs": [{"results": []}]}), encoding="utf-8", newline="")
     result = shell_step(action()["runs"]["steps"][-1], tmp_path,
                         {"UVMLS_FAIL_ON": policy, "UVMLS_LINT_STATUS": lint, "UVMLS_ELAB_STATUS": elab})
     assert result.returncode != 0
@@ -244,8 +244,8 @@ def test_invalid_policy_and_failed_analysis_cannot_pass(tmp_path, policy, lint, 
     ("warning", 0, 1, 1), ("error", 1, 0, 1), ("error", 0, 1, 0), ("never", 1, 1, 0),
 ])
 def test_elaboration_counts_include_diagnostics_beyond_the_listing_cap(tmp_path, policy, errors, warnings, status):
-    (tmp_path / "uvmls.sarif").write_text(json.dumps({"runs": [{"results": [{"level": "note"}]}]}))
-    (tmp_path / "uvmls-elab.json").write_text(json.dumps({"counts": {"errors": errors, "warnings": warnings}}))
+    (tmp_path / "uvmls.sarif").write_text(json.dumps({"runs": [{"results": [{"level": "note"}]}]}), encoding="utf-8", newline="")
+    (tmp_path / "uvmls-elab.json").write_text(json.dumps({"counts": {"errors": errors, "warnings": warnings}}), encoding="utf-8", newline="")
     result = shell_step(action()["runs"]["steps"][-1], tmp_path,
                         {"UVMLS_FAIL_ON": policy, "UVMLS_LINT_STATUS": "0", "UVMLS_ELAB_STATUS": str(int(bool(errors))),
                          "UVMLS_ELAB": "true"})

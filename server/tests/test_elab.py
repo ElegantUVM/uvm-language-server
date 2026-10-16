@@ -23,7 +23,7 @@ REGISTRY = os.path.join(BUNDLED_UVM, "base", "uvm_registry.svh")
 
 
 def read(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 
@@ -140,7 +140,7 @@ def test_an_info_task_is_not_its_own_related_information(tmp_path):
         "  if (W < 8) begin : g\n    $info(\"W is %0d\", W);\n  end\n"
         "  `CHECK(W)\n"
         "endmodule\n"
-        "module top; sub #(3) a(); sub #(4) b(); endmodule\n")
+        "module top; sub #(3) a(); sub #(4) b(); endmodule\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     r = elaborate(request_for(w))
@@ -169,7 +169,7 @@ def test_driver_and_assertion_checks_from_the_analysis_pass(tmp_path):
     # slang runs these after elaboration, in its analysis pass; simulators reject them too.
     (tmp_path / "top.sv").write_text("module top(input logic b);\n  logic a, c;\n  assign a = b;\n"
                                      "  initial a = 0;\n  assign c = b;\n  assign c = ~b;\n"
-                                     "  assert property (b |=> c);\nendmodule\n")
+                                     "  assert property (b |=> c);\nendmodule\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     r = elaborate(request_for(w))
@@ -181,8 +181,8 @@ def test_driver_and_assertion_checks_from_the_analysis_pass(tmp_path):
 def test_no_error_limit_hides_later_errors(tmp_path):
     # slang's default limit stopped after about 64 errors: the one in tb_top was never reported.
     for i in range(70):
-        (tmp_path / f"old_{i:03}.sv").write_text(f"module old_{i:03}; logic a; assign a = undeclared_{i};\nendmodule\n")
-    (tmp_path / "tb_top.sv").write_text("module tb_top; logic a; assign a = planted_err; endmodule\n")
+        (tmp_path / f"old_{i:03}.sv").write_text(f"module old_{i:03}; logic a; assign a = undeclared_{i};\nendmodule\n", encoding="utf-8", newline="")
+    (tmp_path / "tb_top.sv").write_text("module tb_top; logic a; assign a = planted_err; endmodule\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     r = elaborate(request_for(w))
@@ -192,7 +192,7 @@ def test_no_error_limit_hides_later_errors(tmp_path):
     lib = tmp_path / "lib"
     lib.mkdir()
     for i in range(70):
-        (lib / f"p_{i:03}.sv").write_text(f"package p_{i:03}; int x = missing_{i}; endpackage\n")
+        (lib / f"p_{i:03}.sv").write_text(f"package p_{i:03}; int x = missing_{i}; endpackage\n", encoding="utf-8", newline="")
     req = {"roots": [str(p) for p in sorted(lib.iterdir())] + [str(tmp_path / "tb_top.sv")],
            "library": [str(lib)]}
     r = elaborate(req)
@@ -202,8 +202,8 @@ def test_no_error_limit_hides_later_errors(tmp_path):
 
 def test_listed_diagnostics_are_capped_and_counted(tmp_path):
     body = "".join(f"    x = nope_{i};\n" for i in range(MAX_LISTED + 500))
-    (tmp_path / "big.sv").write_text(f"module big; int x;\n  initial begin\n{body}  end\nendmodule\n")
-    (tmp_path / "top.sv").write_text("module top; big b(); initial y = 1; endmodule\n")
+    (tmp_path / "big.sv").write_text(f"module big; int x;\n  initial begin\n{body}  end\nendmodule\n", encoding="utf-8", newline="")
+    (tmp_path / "top.sv").write_text("module top; big b(); initial y = 1; endmodule\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     r = elaborate(request_for(w))
@@ -259,7 +259,7 @@ def test_uvm_macros_are_predefined_when_a_file_does_not_include_them(tmp_path):
     (tmp_path / "t.sv").write_text("import uvm_pkg::*;\nclass c extends uvm_object;\n  `uvm_object_utils(c)\n"
                                    "  function new(string name = \"c\"); super.new(name); endfunction\n"
                                    "  function void f(); `uvm_info(\"F\", \"hi\", UVM_LOW) x = 1; endfunction\n"
-                                   "endclass\n")
+                                   "endclass\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     r = elaborate(request_for(w))
@@ -268,8 +268,8 @@ def test_uvm_macros_are_predefined_when_a_file_does_not_include_them(tmp_path):
 
 
 def test_missing_file_is_reported_and_the_rest_still_elaborates(tmp_path):
-    (tmp_path / "top.sv").write_text("module top; initial y = 1; endmodule\n")
-    (tmp_path / "tb.f").write_text("top.sv\nmissing.sv\n")
+    (tmp_path / "top.sv").write_text("module top; initial y = 1; endmodule\n", encoding="utf-8", newline="")
+    (tmp_path / "tb.f").write_text("top.sv\nmissing.sv\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb.f")]))
     r = elaborate(request_for(w))
@@ -282,7 +282,7 @@ def test_a_listed_uvm_pkg_that_does_not_exist_is_one_error(tmp_path, monkeypatch
     # Not the project's own UVM: the bundled one is compiled, and the missing file is reported.
     monkeypatch.delenv("UVM_HOME", raising=False)
     shutil.copytree(EXAMPLE, tmp_path / "tb")
-    (tmp_path / "tb" / "env.f").write_text("+incdir+$UVM_HOME/src\n$UVM_HOME/src/uvm_pkg.sv\n-f alu_tb.f\n")
+    (tmp_path / "tb" / "env.f").write_text("+incdir+$UVM_HOME/src\n$UVM_HOME/src/uvm_pkg.sv\n-f alu_tb.f\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig.from_settings([str(tmp_path / "tb")], {"filelists": ["env.f"]}))
     assert uvm_label(w.sources) == "bundled Accellera UVM 1.2" and w.stats()["libraryClasses"] > 300
@@ -295,7 +295,7 @@ def test_uvm_home_replaces_a_uvm_the_project_compiles(tmp_path, monkeypatch):
     # Two copies of uvm_pkg would be a duplicate definition, and a mix of both in the index.
     monkeypatch.delenv("UVM_HOME", raising=False)
     shutil.copytree(BUNDLED_UVM, tmp_path / "own" / "src")
-    (tmp_path / "tb.f").write_text(f"+incdir+own/src\nown/src/uvm_pkg.sv\n-f {FILELIST}\n")
+    (tmp_path / "tb.f").write_text(f"+incdir+own/src\nown/src/uvm_pkg.sv\n-f {FILELIST}\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb.f")],
                               uvm_home=os.path.dirname(BUNDLED_UVM)))
@@ -316,11 +316,11 @@ def test_uvm_home_replaces_a_uvm_the_project_compiles(tmp_path, monkeypatch):
 def test_filelist_timescale_reaches_slang(tmp_path):
     # Some design elements with a `timescale and some without is an error, unless the
     # simulator is given a default, as filelists often do.
-    (tmp_path / "dut.sv").write_text("`timescale 1ns/1ps\nmodule dut; endmodule\n")
-    (tmp_path / "top.sv").write_text("module top; dut u(); endmodule\n")
+    (tmp_path / "dut.sv").write_text("`timescale 1ns/1ps\nmodule dut; endmodule\n", encoding="utf-8", newline="")
+    (tmp_path / "top.sv").write_text("module top; dut u(); endmodule\n", encoding="utf-8", newline="")
     codes = {}
     for name, extra in (("plain.f", ""), ("vcs.f", "-timescale=1ns/1ps\n")):
-        (tmp_path / name).write_text(f"dut.sv\ntop.sv\n{extra}")
+        (tmp_path / name).write_text(f"dut.sv\ntop.sv\n{extra}", encoding="utf-8", newline="")
         w = Workspace()
         w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / name)]))
         codes[name] = [d["code"] for d in elaborate(request_for(w))["diagnostics"]]
@@ -353,10 +353,10 @@ def test_discovery_leaves_out_headers_nothing_includes(tmp_path, monkeypatch, ca
     root = tmp_path / "alu_tb"
     shutil.copytree(EXAMPLE, root)
     (root / "agent" / "alu_driver_old.svh").write_text(
-        read(DRIVER).replace("alu_error_driver", "alu_error_driver_old").replace("alu_driver", "alu_driver_old"))
+        read(DRIVER).replace("alu_error_driver", "alu_error_driver_old").replace("alu_driver", "alu_driver_old"), encoding="utf-8", newline="")
     pkg = root / "agent" / "alu_pkg.sv"
     pkg.write_text(read(pkg).replace('`include "alu_driver.svh"',
-                                     '`define DRIVER_SVH "alu_driver.svh"\n  `include `DRIVER_SVH'))
+                                     '`define DRIVER_SVH "alu_driver.svh"\n  `include `DRIVER_SVH'), encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(root)]))
     assert w.sources.mode == "discovery" and "alu_driver_old" in w.classes_by_name  # still indexed
@@ -374,15 +374,15 @@ def test_discovery_leaves_out_headers_nothing_includes(tmp_path, monkeypatch, ca
 
 
 def test_a_package_and_a_module_may_share_a_name(tmp_path):
-    (tmp_path / "uart_pkg.sv").write_text("package uart; typedef logic [7:0] byte_t; endpackage\n")
+    (tmp_path / "uart_pkg.sv").write_text("package uart; typedef logic [7:0] byte_t; endpackage\n", encoding="utf-8", newline="")
     (tmp_path / "uart.sv").write_text("module uart(input logic clk); uart::byte_t data; endmodule\n"
-                                      "module top; logic clk; uart u(.clk(clk)); endmodule\n")
+                                      "module top; logic clk; uart u(.clk(clk)); endmodule\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     assert skip_reason(w) is None
     assert errors(elaborate(request_for(w))) == []
     # An interface shares the module's name space: that is a real clash.
-    (tmp_path / "uart_if.sv").write_text("interface uart; endinterface\n")
+    (tmp_path / "uart_if.sv").write_text("interface uart; endinterface\n", encoding="utf-8", newline="")
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     assert "uart would be defined more than once" in skip_reason(w)
 
@@ -390,10 +390,10 @@ def test_a_package_and_a_module_may_share_a_name(tmp_path):
 def test_skip_reason_for_a_file_included_by_two_tops(tmp_path):
     # One clk_gen in the index, but discovery compiles it once for each top that includes it.
     (tmp_path / "common").mkdir()
-    (tmp_path / "common" / "clk_gen.sv").write_text("module clk_gen; endmodule\n")
+    (tmp_path / "common" / "clk_gen.sv").write_text("module clk_gen; endmodule\n", encoding="utf-8", newline="")
     for name in ("tb_a", "tb_b"):
         (tmp_path / name).mkdir()
-        (tmp_path / name / f"{name}.sv").write_text(f'`include "clk_gen.sv"\nmodule {name}; clk_gen u(); endmodule\n')
+        (tmp_path / name / f"{name}.sv").write_text(f'`include "clk_gen.sv"\nmodule {name}; clk_gen u(); endmodule\n', encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     assert len(w.units_by_name["clk_gen"]) == 1
@@ -403,7 +403,7 @@ def test_skip_reason_for_a_file_included_by_two_tops(tmp_path):
     # A top that includes the UVM package itself reaches it from its own root and the library's.
     (tmp_path / "uvm_tb").mkdir()
     (tmp_path / "uvm_tb" / "tb.sv").write_text('`include "uvm_macros.svh"\n`include "uvm_pkg.sv"\n'
-                                              "module tb_top; import uvm_pkg::*; initial run_test(); endmodule\n")
+                                              "module tb_top; import uvm_pkg::*; initial run_test(); endmodule\n", encoding="utf-8", newline="")
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path / "uvm_tb")]))
     assert skip_reason(w) is None and errors(elaborate(request_for(w))) == []
 
@@ -431,7 +431,7 @@ def broken_example(tmp_path):
     root = tmp_path / "alu_tb"
     shutil.copytree(EXAMPLE, root)
     drv = root / "agent" / "alu_driver.svh"
-    drv.write_text(edited(DRIVER, "vif = m_cfg.vif;", "vif = m_cfg.vfi;"))
+    drv.write_text(edited(DRIVER, "vif = m_cfg.vif;", "vif = m_cfg.vfi;"), encoding="utf-8", newline="")
     return root
 
 
@@ -457,7 +457,7 @@ def test_cli_exit_codes(capsys, monkeypatch, broken_example):
     code, out = elab(str(broken_example), "-f", str(broken_example / "alu_tb.f"), "--json")
     assert code == 1 and json.loads(out.out)["counts"]["errors"] == 1
     drv = broken_example / "agent" / "alu_driver.svh"
-    drv.write_text(without_parent(read(DRIVER)))
+    drv.write_text(without_parent(read(DRIVER)), encoding="utf-8", newline="")
     code, out = elab(str(broken_example), "-f", str(broken_example / "alu_tb.f"))
     assert code == 1 and "uvm_registry.svh:" in out.out and "1 error(s)" in out.err
     code, out = elab(EXAMPLE, "-f", FILELIST, "--no-bundled-uvm")
@@ -468,10 +468,54 @@ def test_cli_exit_codes(capsys, monkeypatch, broken_example):
 def test_did_you_mean_carries_both_names(tmp_path):
     # What the quick fix replaces, and with what: from slang's arguments, or its "did you mean" note.
     (tmp_path / "t.sv").write_text("class c;\n  int buildit;\n  function void f();\n    buildt = 1;\n"
-                                   "    this.buildt = 2;\n    this.zzz = 3;\n  endfunction\nendclass\n")
+                                   "    this.buildt = 2;\n    this.zzz = 3;\n  endfunction\nendclass\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     found = [(d["line"], d["code"], d.get("data")) for d in elaborate(request_for(w))["diagnostics"]]
     assert found == [(3, "TypoIdentifier", {"from": "buildt", "to": "buildit"}),
                      (4, "UnknownMember", {"from": "buildt", "to": "buildit"}),
                      (5, "UnknownMember", None)]  # nothing close enough to suggest
+
+
+@pytest.mark.parametrize("kind", ["lsp", "mcp"])
+def test_worker_spawn_with_pipes_and_pythonpath(tmp_path, monkeypatch, kind):
+    import asyncio
+    from uvmls.mcp import McpServer
+    from uvmls.server import UvmLanguageServer
+
+    path = tmp_path / "worker source.sv"
+    path.write_text("module worker_top; endmodule\n", encoding="utf-8", newline="")
+    w = Workspace()
+    w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
+    request = request_for(w)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(["missing-one", "missing-two"]))
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1252")
+
+    async def run():
+        if kind == "lsp":
+            ls = UvmLanguageServer()
+            return await ls.run_worker(ls._elab_run, request)
+        return await McpServer(w)._run_worker(request)
+
+    result = asyncio.run(run())
+    assert result["error"] is None, result
+    assert result["tops"] == ["worker_top"], result
+    assert result["diagnostics"] == [], result
+
+
+@pytest.mark.parametrize("flags", [[], ["--json"], ["--sarif", "-"], ["--sarif", "-", "--json"]])
+def test_cli_failed_elaboration_explains_exit_two(tmp_path, monkeypatch, capsys, flags):
+    import uvmls.cli as module
+    from uvmls.elab import _failed
+
+    (tmp_path / "top.sv").write_text("module top; endmodule\n", encoding="utf-8", newline="")
+    result = {**_failed("worker could not load café.sv"), "seconds": 0.0}
+    monkeypatch.setattr(module, "elaborate", lambda request: result)
+    with pytest.raises(SystemExit) as exc:
+        cli(["elab", str(tmp_path), *flags])
+    assert exc.value.code == 2
+    out = capsys.readouterr()
+    assert "elaboration failed: worker could not load café.sv" in out.err
+    if "--sarif" in flags:
+        assert json.loads(out.out)["runs"][0]["results"] == []

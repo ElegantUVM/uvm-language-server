@@ -259,9 +259,9 @@ def test_cold_request_yields_and_discards_intervening_edits(tmp_path):
     async def run():
         ls = UvmLanguageServer()
         ls.ws, ls.nav = ws, Navigator(ws)
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
         ls.protocol.client_capabilities = T.ClientCapabilities()
-        ls.workspace.put_text_document(T.TextDocumentItem(path.as_uri(), 'systemverilog', 1, text))
+        ls.workspace.put_text_document(T.TextDocumentItem(path_to_uri(str(path)), 'systemverilog', 1, text))
         entered, release = threading.Event(), threading.Event()
         original = signatures.signature
 
@@ -271,7 +271,7 @@ def test_cold_request_yields_and_discards_intervening_edits(tmp_path):
             return original(*args)
 
         line = next(i for i, ln in enumerate(text.splitlines()) if '    public_api(' in ln)
-        params = T.SignatureHelpParams(T.TextDocumentIdentifier(path.as_uri()), T.Position(line, 15))
+        params = T.SignatureHelpParams(T.TextDocumentIdentifier(path_to_uri(str(path))), T.Position(line, 15))
         with patch.object(signatures, 'signature', side_effect=delayed):
             task = asyncio.create_task(signature_help(ls, params))
             try:
@@ -279,7 +279,7 @@ def test_cold_request_yields_and_discards_intervening_edits(tmp_path):
                     if task.done():
                         await task
                     await asyncio.sleep(.001)
-                ls.workspace.update_text_document(T.VersionedTextDocumentIdentifier(2, path.as_uri()),
+                ls.workspace.update_text_document(T.VersionedTextDocumentIdentifier(2, path_to_uri(str(path))),
                                                   T.TextDocumentContentChangeWholeDocument('\n' + text))
             finally:
                 release.set()
@@ -435,7 +435,7 @@ endclass
 def test_selected_library_supplies_registry_api(tmp_path):
     src = tmp_path / 'uvm' / 'src'
     src.mkdir(parents=True)
-    (src / 'uvm_macros.svh').write_text('')
+    (src / 'uvm_macros.svh').write_text('', encoding="utf-8", newline="")
     (src / 'uvm_pkg.sv').write_text('''package uvm_pkg;
 class uvm_component; endclass
 class uvm_object; endclass
@@ -445,7 +445,7 @@ class registry #(type T = uvm_object);
  static function T create(string name = "selected,😀", int mode = 4); endfunction
 endclass
 endpackage
-''', encoding='utf-8')
+''', encoding='utf-8', newline="")
     root = tmp_path / 'tb'
     root.mkdir()
     path = root / 't.sv'
@@ -456,7 +456,7 @@ endclass
 class caller;
  function void test(); item::type_id::create("x", 2); endfunction
 endclass
-''')
+''', encoding="utf-8", newline="")
     c = start(str(root), capabilities=CAPS, settings={'uvmHome': str(src.parent), 'elaboration': 'off'})
     try:
         d = Doc(c, str(path))

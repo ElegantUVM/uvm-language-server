@@ -2,6 +2,8 @@
 
 import pytest
 
+from uvmls.server import path_to_uri
+
 from test_fixes import (
     COMPONENT, CONFIG, DRV, NEWS, PARAMS, apply, findings, index, offered, round_trip, slang_findings,
 )
@@ -139,7 +141,7 @@ def test_parent_fix_rechecks_argument_count_in_same_length_text(tmp_path):
     w = index(tmp_path, {"t.sv": text})
     [d] = findings(w, "create-no-parent")
     assert offered(w, d)
-    (tmp_path / "t.sv").write_text(text.replace('create("m_drv")', 'create(       )'))
+    (tmp_path / "t.sv").write_text(text.replace('create("m_drv")', 'create(       )'), encoding="utf-8", newline="")
     assert offered(w, d) == []
 
 
@@ -148,7 +150,7 @@ def test_factory_rewrite_rechecks_constructor_scope_in_same_length_text(tmp_path
     w = index(tmp_path, {"t.sv": text})
     [d] = findings(w, "create-new")
     assert offered(w, d)
-    (tmp_path / "t.sv").write_text(text.replace('      new("m", this)', 'item::new("m", this)'))
+    (tmp_path / "t.sv").write_text(text.replace('      new("m", this)', 'item::new("m", this)'), encoding="utf-8", newline="")
     assert offered(w, d) == []
 
 
@@ -159,8 +161,8 @@ def test_two_identical_findings_keep_their_identity_after_an_insertion(tmp_path,
     from test_code_actions import Doc, applied, edits_for, start
 
     path = tmp_path / "t.sv"
-    path.write_text(COMPONENT)
-    (tmp_path / "alu_tb.f").write_text("t.sv\n")
+    path.write_text(COMPONENT, encoding="utf-8", newline="")
+    (tmp_path / "alu_tb.f").write_text("t.sv\n", encoding="utf-8", newline="")
     c = start(str(tmp_path), settings={"filelists": [str(tmp_path / "alu_tb.f")],
                                        "useBundledUvm": False, "elaboration": "off"})
     try:
@@ -197,8 +199,8 @@ def test_deleted_identical_call_does_not_transfer_its_diagnostic(tmp_path, data,
     from test_code_actions import Doc, applied, edits_for, start
 
     path = tmp_path / "t.sv"
-    path.write_text(COMPONENT)
-    (tmp_path / "alu_tb.f").write_text("t.sv\n")
+    path.write_text(COMPONENT, encoding="utf-8", newline="")
+    (tmp_path / "alu_tb.f").write_text("t.sv\n", encoding="utf-8", newline="")
     c = start(str(tmp_path), settings={"filelists": [str(tmp_path / "alu_tb.f")],
                                        "useBundledUvm": False, "elaboration": "off"})
     try:
@@ -240,11 +242,11 @@ def test_outside_workspace_fix_respects_lsp_disabled_support(tmp_path, disabled)
 
     root = tmp_path / "ws"
     root.mkdir()
-    (tmp_path / "item.svh").write_text("class item extends uvm_object; endclass\n")
+    (tmp_path / "item.svh").write_text("class item extends uvm_object; endclass\n", encoding="utf-8", newline="")
     text = 'import uvm_pkg::*;\n`include "../item.svh"\n' + COMPONENT
     path = root / "t.sv"
-    path.write_text(text)
-    (root / "alu_tb.f").write_text("t.sv\n")
+    path.write_text(text, encoding="utf-8", newline="")
+    (root / "alu_tb.f").write_text("t.sv\n", encoding="utf-8", newline="")
     caps = copy.deepcopy(CAPABILITIES)
     caps["textDocument"]["codeAction"]["disabledSupport"] = disabled
     c = start(str(root), capabilities=caps, settings={"filelists": [str(root / "alu_tb.f")],
@@ -271,8 +273,8 @@ def test_slang_diagnostic_without_data_still_gets_its_fix(tmp_path):
 
     text = "module m;\n  logic a;\n  always @(a) a = 0;\nendmodule\n"
     path = tmp_path / "t.sv"
-    path.write_text(text)
-    (tmp_path / "alu_tb.f").write_text("t.sv\n")
+    path.write_text(text, encoding="utf-8", newline="")
+    (tmp_path / "alu_tb.f").write_text("t.sv\n", encoding="utf-8", newline="")
     c = start(str(tmp_path), settings={"filelists": [str(tmp_path / "alu_tb.f")],
                                        "useBundledUvm": False, "elaboration": "off"})
     try:
@@ -302,7 +304,7 @@ endclass
     ls = UvmLanguageServer()
     ls.ws = w
     ls.workspace_roots = [str(tmp_path)]
-    ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+    ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
     ls.protocol.client_capabilities = T.ClientCapabilities()
     ls.published = lint(w)
     path = tmp_path / "t.sv"
@@ -312,7 +314,7 @@ endclass
         def fail(ctx, d):
             raise ValueError("broken constructor fixer")
         monkeypatch.setitem(fixes.FIXERS, ("uvm", "factory-ctor"), fail)
-    actions = code_actions(ls, path.as_uri(), sorted(ds, key=lambda d: d.range.start.line), text)
+    actions = code_actions(ls, path_to_uri(str(path)), sorted(ds, key=lambda d: d.range.start.line), text)
     assert actions[0].diagnostics[0].code == "factory-ctor"  # error, although later in the file
     assert any(a.title == "Pass 'this' as the parent" for a in actions)
     assert any(a.title == "Ignore 'factory-ctor' on this line" for a in actions)

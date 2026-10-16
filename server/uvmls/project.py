@@ -117,6 +117,11 @@ def relative_or_absolute(path: str, start: str | None = None) -> str:
         return norm(path)
 
 
+def display_path(path: str, root: str | None = None) -> str:
+    """A user-facing path, relative to root when given, with forward slashes."""
+    return (relative_or_absolute(path, root) if root else norm(path)).replace(os.sep, "/")
+
+
 def is_sv_file(path: str) -> bool:
     return path.endswith(SV_EXTENSIONS)
 
@@ -231,7 +236,7 @@ def discover_files(roots: list[str], exclude: list[str], match=is_sv_file, *,
         if directory_stamps is not None:
             directory_stamps[root] = directory_stamp(root)
         for dirpath, dirnames, filenames in os.walk(root):
-            rel = relative_or_absolute(dirpath, root).replace(os.sep, "/")
+            rel = display_path(dirpath, root)
             prefix = "" if rel == "." else rel + "/"
             dirnames[:] = sorted(d for d in dirnames if not excluded(prefix + d, os.path.join(dirpath, d)))
             if directory_stamps is not None:
@@ -289,6 +294,7 @@ def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | 
         result.warnings.append(f"cannot read filelist {path}: {e.strerror}")
         return result
 
+    text = re.sub(r"\\\r?\n", "", text)
     lines = []
     for line in text.splitlines():
         line = re.sub(r"(^|\s)//.*$", "", line)
@@ -296,7 +302,11 @@ def parse_filelist(path: str, result: FilelistResult | None = None, seen: set | 
         lines.append(line)
     text = re.sub(r"/\*.*?\*/", " ", "\n".join(lines), flags=re.DOTALL)
     try:
-        tokens = shlex.split(text, posix=True)
+        lexer = shlex.shlex(text, posix=True)
+        lexer.escape = ""
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
     except ValueError:
         tokens = text.split()
 

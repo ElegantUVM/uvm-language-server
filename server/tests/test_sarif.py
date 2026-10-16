@@ -12,6 +12,7 @@ import pytest
 from uvmls import __version__
 from uvmls.cli import main as cli
 from uvmls.model import Diag, Range
+from uvmls.server import path_to_uri, uri_to_path
 
 from conftest import EXAMPLE
 
@@ -78,12 +79,12 @@ def test_lint_example_regions_and_stable_bytes(tb, tmp_path, capsys):
     assert code == plain_code == 1 and text == plain
     first = output.read_bytes()
     run = check_log(json.loads(first))
-    assert run["originalUriBaseIds"]["SRCROOT"]["uri"] == tb.as_uri() + "/"
+    assert path_to_uri(uri_to_path(run["originalUriBaseIds"]["SRCROOT"]["uri"])) == path_to_uri(str(tb))
     assert len(run["results"]) == len(text.out.splitlines())
     [finding] = [r for r in run["results"] if r["ruleId"] == "create-no-parent"]
     physical = finding["locations"][0]["physicalLocation"]
     assert physical["artifactLocation"] == {"uri": "agent/alu_agent.svh", "uriBaseId": "SRCROOT"}
-    lines = (tb / "agent" / "alu_agent.svh").read_text().splitlines()
+    lines = (tb / "agent" / "alu_agent.svh").read_text(encoding="utf-8").splitlines()
     line = next(i for i, text in enumerate(lines) if 'create("m_driver")' in text)
     col = lines[line].index("alu_driver::")
     assert physical["region"] == {"startLine": line + 1, "startColumn": col + 1,
@@ -98,7 +99,7 @@ def test_stdout_is_only_sarif_and_file_can_accompany_json(tb, tmp_path, capsys, 
     args = [command, str(tb), "-f", str(tb / "alu_tb.f"), *(["--json"] if as_json else [])]
     plain_code, plain = invoke(capsys, args)
     code, out = invoke(capsys, [*args, "--sarif", "-"])
-    assert code == plain_code == 1
+    assert code == plain_code == 1, (plain.err, out.err)
     run = check_log(json.loads(out.out))
     if command == "elab":
         assert all(r["properties"]["tags"] == ["slang-elab"] for r in run["tool"]["driver"]["rules"])
@@ -109,7 +110,7 @@ def test_stdout_is_only_sarif_and_file_can_accompany_json(tb, tmp_path, capsys, 
         assert json.loads(out.out)["diagnostics"] == json.loads(plain.out)["diagnostics"]
     else:
         assert out.out == plain.out
-    assert json.loads(output.read_text())["runs"][0]["results"] == run["results"]
+    assert json.loads(output.read_text(encoding="utf-8"))["runs"][0]["results"] == run["results"]
 
 
 def test_info_crlf_and_non_ascii_path(tmp_path, capsys):
@@ -127,7 +128,7 @@ def test_info_crlf_and_non_ascii_path(tmp_path, capsys):
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
 def test_lint_columns_use_utf16(tb, capsys, newline):
     path = tb / "agent" / "alu_agent.svh"
-    text = path.read_text().replace('alu_driver::type_id::create', '/* é😀 */ alu_driver::type_id::create')
+    text = path.read_text(encoding="utf-8").replace('alu_driver::type_id::create', '/* é😀 */ alu_driver::type_id::create')
     path.write_bytes(text.replace("\n", newline).encode("utf-8"))
     code, out = invoke(capsys, ["lint", str(tb), "-f", str(tb / "alu_tb.f"), "--sarif", "-"])
     assert code == 1
@@ -146,7 +147,7 @@ def test_lint_columns_use_utf16(tb, capsys, newline):
 def test_elab_columns_use_utf16(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("UVM_HOME", raising=False)
     text = 'module top; /* é😀 */ initial $display(no_such); endmodule\n'
-    (tmp_path / "top.sv").write_text(text, encoding="utf-8")
+    (tmp_path / "top.sv").write_text(text, encoding="utf-8", newline="")
     code, out = invoke(capsys, ["elab", str(tmp_path), "--sarif", "-"])
     assert code == 1
     [run] = json.loads(out.out)["runs"]
@@ -191,7 +192,7 @@ def test_rules_ranges_external_paths_and_fingerprints(tmp_path):
     path.write_bytes(b'\r\n  call( x );\r\n')
     external = tmp_path / "include é" / "t.svh"
     external.parent.mkdir()
-    external.write_text("external\n")
+    external.write_text("external\n", encoding="utf-8", newline="")
     diags = [Diag(Range(str(path), 1, 2, 1, 12), "first", "warning", "config-db-no-set", "uvm"),
              Diag(Range(str(path), 0, 0, 0, 0), "second", "info", "config-db-no-set", "uvm"),
              Diag(Range(str(external), 0, 0, 0, 8), "third", "error", "TypoIdentifier"),
@@ -204,12 +205,14 @@ def test_rules_ranges_external_paths_and_fingerprints(tmp_path):
     assert rules["TypoIdentifier"]["properties"]["tags"] == ["slang"]
     results = {r["message"]["text"]: r for r in run["results"]}
     assert results["second"]["locations"][0]["physicalLocation"]["region"] == {"startLine": 1, "startColumn": 1}
-    assert results["third"]["locations"][0]["physicalLocation"]["artifactLocation"] == {"uri": external.as_uri()}
+    artifact = results["third"]["locations"][0]["physicalLocation"]["artifactLocation"]
+    assert set(artifact) == {"uri"}
+    assert path_to_uri(uri_to_path(artifact["uri"])) == path_to_uri(str(external))
     fingerprint = results["first"]["partialFingerprints"]
     expected = hashlib.sha256(json.dumps(["t.sv", "config-db-no-set", "call( x );"],
                                        ensure_ascii=False).encode("utf-8")).hexdigest()
     assert fingerprint == {"primaryLocationLineHash": expected}
-    path.write_text("// unrelated edit\n\n\tcall(   x );\n")
+    path.write_text("// unrelated edit\n\n\tcall(   x );\n", encoding="utf-8", newline="")
     moved = Diag(Range(str(path), 2, 1, 2, 13), "first", "warning", "config-db-no-set", "uvm")
     assert build_log(root, [moved])["runs"][0]["results"][0]["partialFingerprints"] == fingerprint
 
@@ -227,7 +230,7 @@ def test_uvm_descriptions_match_the_readme(tmp_path):
 
 def test_clean_elab_and_skipped_elab_keep_exit_codes(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("UVM_HOME", raising=False)
-    (tmp_path / "top.sv").write_text("module top; endmodule\n")
+    (tmp_path / "top.sv").write_text("module top; endmodule\n", encoding="utf-8", newline="")
     args = ["elab", str(tmp_path), "--sarif", "-"]
     code, out = invoke(capsys, args)
     assert code == 0 and check_log(json.loads(out.out))["results"] == []
@@ -245,14 +248,14 @@ def test_filesystem_root_keeps_the_file_uri_authority(tmp_path):
 
     root = Path(tmp_path.anchor)
     run = build_log(root, [])["runs"][0]
-    assert run["originalUriBaseIds"]["SRCROOT"]["uri"] == root.as_uri()
+    assert path_to_uri(uri_to_path(run["originalUriBaseIds"]["SRCROOT"]["uri"])) == path_to_uri(str(root))
 
 
 def test_global_elab_failure_points_at_the_filelist(tmp_path):
     from uvmls.sarif import build_log
 
     filelist = tmp_path / "tb.f"
-    filelist.write_text("top.sv\n")
+    filelist.write_text("top.sv\n", encoding="utf-8", newline="")
     diags = [Diag(Range("", 0, 0, 0, 0), "no top module", "error", "NoTopModules", "slang-elab")]
     assert "locations" not in build_log(tmp_path, diags)["runs"][0]["results"][0]
     [result] = check_log(build_log(tmp_path, diags, fallback=str(filelist)))["results"]
@@ -268,7 +271,7 @@ def test_elab_sarif_lists_past_the_display_limits(tmp_path, capsys, monkeypatch)
     monkeypatch.delenv("UVM_HOME", raising=False)
     monkeypatch.setattr(elab, "MAX_PER_FILE", 2)
     body = "".join(f"  initial $display(missing_{i});\n" for i in range(5))
-    (tmp_path / "top.sv").write_text(f"module top;\n{body}endmodule\n", encoding="utf-8")
+    (tmp_path / "top.sv").write_text(f"module top;\n{body}endmodule\n", encoding="utf-8", newline="")
     code, out = invoke(capsys, ["elab", str(tmp_path), "--sarif", "-"])
     assert code == 1
     [run] = json.loads(out.out)["runs"]
@@ -281,13 +284,13 @@ def test_elab_console_keeps_its_limits_beside_a_full_sarif(tmp_path, capsys, mon
     monkeypatch.delenv("UVM_HOME", raising=False)
     monkeypatch.setattr(elab, "MAX_PER_FILE", 2)
     body = "".join(f"  initial $display(missing_{i});\n" for i in range(5))
-    (tmp_path / "top.sv").write_text(f"module top;\n{body}endmodule\n", encoding="utf-8")
+    (tmp_path / "top.sv").write_text(f"module top;\n{body}endmodule\n", encoding="utf-8", newline="")
     code, out = invoke(capsys, ["elab", str(tmp_path), "--sarif", str(tmp_path / "out.sarif"), "--json"])
     assert code == 1
     result = json.loads(out.out)
     assert len([d for d in result["diagnostics"] if "missing_" in d["message"]]) <= 2
     assert result["counts"]["omitted"] >= 3
-    run = json.loads((tmp_path / "out.sarif").read_text())["runs"][0]
+    run = json.loads((tmp_path / "out.sarif").read_text(encoding="utf-8"))["runs"][0]
     assert sum("missing_" in r["message"]["text"] for r in run["results"]) == 5
 
 
@@ -295,7 +298,7 @@ def test_global_failures_get_distinct_fingerprints(tmp_path):
     from uvmls.sarif import build_log
 
     filelist = tmp_path / "tb.f"
-    filelist.write_text("top.sv\n")
+    filelist.write_text("top.sv\n", encoding="utf-8", newline="")
     diags = [Diag(Range("", 0, 0, 0, 0), msg, "error", "NoTopModules", "slang-elab") for msg in ("a", "b")]
     results = build_log(tmp_path, diags, fallback=str(filelist))["runs"][0]["results"]
     assert results[0]["partialFingerprints"] != results[1]["partialFingerprints"]
@@ -308,7 +311,7 @@ def test_cross_drive_location_uses_absolute_file_uri(tmp_path, monkeypatch):
     root = tmp_path / 'workspace'
     root.mkdir()
     external = tmp_path / 'external é.sv'
-    external.write_text('module top; endmodule\n', encoding='utf-8')
+    external.write_text('module top; endmodule\n', encoding='utf-8', newline="")
 
     def cross_drive(path, start=None):
         raise ValueError("path is on mount 'C:', start on mount 'D:'")
@@ -316,7 +319,9 @@ def test_cross_drive_location_uses_absolute_file_uri(tmp_path, monkeypatch):
     monkeypatch.setattr(project.os.path, 'relpath', cross_drive)
     diag = Diag(Range(str(external), 0, 0, 0, 6), 'external', 'warning', 'test')
     result = check_log(build_log(root, [diag]))['results'][0]
-    assert result['locations'][0]['physicalLocation']['artifactLocation'] == {'uri': external.as_uri()}
+    artifact = result['locations'][0]['physicalLocation']['artifactLocation']
+    assert set(artifact) == {'uri'}
+    assert path_to_uri(uri_to_path(artifact['uri'])) == path_to_uri(str(external))
     expected = hashlib.sha256(json.dumps([external.as_posix(), 'test', 'module top; endmodule'],
                                         ensure_ascii=False).encode('utf-8')).hexdigest()
     assert result['partialFingerprints'] == {'primaryLocationLineHash': expected}

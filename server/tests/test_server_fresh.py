@@ -10,14 +10,14 @@ from pygls.workspace import Workspace as LspWorkspace
 
 from test_fixes import WAIVE, M, findings, fixes_ignore, index
 from uvmls import elab
-from uvmls.server import UvmLanguageServer, code_action, code_lens, definition, hover, inlay_hint
+from uvmls.server import UvmLanguageServer, code_action, code_lens, definition, hover, inlay_hint, path_to_uri
 
 
 @pytest.mark.parametrize("handler", [code_action, code_lens, hover, definition, inlay_hint])
 def test_full_index_wait_never_blocks_the_loop(tmp_path, handler):
     async def run():
         ls = UvmLanguageServer()
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
         ls.protocol.client_capabilities = T.ClientCapabilities()
         ls.settings = {'elaboration': 'off'}
         entered, leaving = threading.Event(), threading.Event()
@@ -39,7 +39,7 @@ def test_full_index_wait_never_blocks_the_loop(tmp_path, handler):
         while not entered.is_set():
             await asyncio.sleep(.001)
         rng = T.Range(T.Position(0, 0), T.Position(0, 1))
-        params = T.CodeActionParams(T.TextDocumentIdentifier((tmp_path / 't.sv').as_uri()), rng,
+        params = T.CodeActionParams(T.TextDocumentIdentifier(path_to_uri(str(tmp_path / 't.sv'))), rng,
                                     T.CodeActionContext([T.Diagnostic(rng, 'x', source='uvm', code='x')]))
         if handler is code_lens:
             params = T.CodeLensParams(params.text_document)
@@ -81,14 +81,14 @@ def test_ignore_rechecks_the_indexed_line(tmp_path):
     [d, *_] = findings(ws, 'create-no-parent')
     assert fixes_ignore(ws, d)
     # No watcher event yet: the index and diagnostic still describe the old disk text.
-    (tmp_path / 't.sv').write_text('// inserted\n\n' + text)
+    (tmp_path / 't.sv').write_text('// inserted\n\n' + text, encoding="utf-8", newline="")
     assert fixes_ignore(ws, d) == []
 
 
 def test_full_index_overlapping_flush_keeps_the_action_deadline(tmp_path):
     async def run():
         ls = UvmLanguageServer()
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
         ls.protocol.client_capabilities = T.ClientCapabilities()
         ls.settings = {'elaboration': 'off'}
         updating, release_update, configuring = threading.Event(), threading.Event(), threading.Event()
@@ -118,7 +118,7 @@ def test_full_index_overlapping_flush_keeps_the_action_deadline(tmp_path):
         full = asyncio.create_task(ls.full_index())
         await asyncio.sleep(.01)
         rng = T.Range(T.Position(0, 0), T.Position(0, 1))
-        params = T.CodeActionParams(T.TextDocumentIdentifier((tmp_path / 't.sv').as_uri()), rng,
+        params = T.CodeActionParams(T.TextDocumentIdentifier(path_to_uri(str(tmp_path / 't.sv'))), rng,
                                     T.CodeActionContext([T.Diagnostic(rng, 'x', source='uvm', code='x')]))
         start = time.monotonic()
         release_update.set()
@@ -138,7 +138,7 @@ def test_full_index_overlapping_flush_keeps_the_action_deadline(tmp_path):
 def test_elaboration_during_index_keeps_the_action_deadline(tmp_path, monkeypatch, superseded, started):
     async def run():
         ls = UvmLanguageServer()
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
         ls.protocol.client_capabilities = T.ClientCapabilities()
         ls.settings = {'elaboration': 'off'}
         ls.protocol.notify = lambda *args: None
@@ -178,7 +178,7 @@ def test_elaboration_during_index_keeps_the_action_deadline(tmp_path, monkeypatc
         if not started:
             compilation = asyncio.create_task(ls._elaborate(ls._elab_run))
         rng = T.Range(T.Position(0, 0), T.Position(0, 1))
-        params = T.CodeActionParams(T.TextDocumentIdentifier(path.as_uri()), rng,
+        params = T.CodeActionParams(T.TextDocumentIdentifier(path_to_uri(str(path))), rng,
                                     T.CodeActionContext([T.Diagnostic(rng, 'x', source='uvm', code='x')]))
         asyncio.get_running_loop().call_later(.01, finish.set)
         start = time.monotonic()

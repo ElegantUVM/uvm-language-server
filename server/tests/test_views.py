@@ -1,4 +1,5 @@
 from uvmls.lints import lint
+from uvmls.project import display_path
 from uvmls.views import class_graph, config_db_report, topology
 
 
@@ -62,7 +63,7 @@ def test_config_db_report(ws):
 
 
 def test_lint_flags_only_the_planted_problem(any_ws):
-    found = [(d.code, d.range.path.split("/")[-1]) for ds in lint(any_ws).values() for d in ds]
+    found = [(d.code, display_path(d.range.path).rsplit("/", 1)[-1]) for ds in lint(any_ws).values() for d in ds]
     assert found == [("config-db-no-set", "alu_monitor.svh")]
     assert not [d for d in any_ws.user_diagnostics() if d.severity in ("error", "warning")]
 
@@ -87,7 +88,7 @@ class env extends uvm_env;
     uvm_config_db#(bit)::set(this, "*", "depth", 1);
   endfunction
 endclass
-''')
+''', encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     found = sorted((d.code, d.range.line, d.data) for ds in lint(w).values() for d in ds)
@@ -129,7 +130,7 @@ def test_config_db_precision(tmp_path):
     get with no set is a note, even when a set of a close name looks like a typo."""
     from uvmls.project import ProjectConfig
     from uvmls.workspace import Workspace
-    (tmp_path / "t.sv").write_text(CONFIG_DB)
+    (tmp_path / "t.sv").write_text(CONFIG_DB, encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     rows = {r["field"]: r for r in config_db_report(w)["fields"]}
@@ -153,11 +154,11 @@ def test_config_db_type_mismatch_needs_one_type_set(tmp_path):
     text = CONFIG_DB.replace('uvm_config_db #(int)::set(null, "*", "depth", 4);',
                              'uvm_config_db #(int)::set(null, "*", "depth", 4);\n'
                              '    uvm_config_db #(bit)::set(null, "*.other", "vif", 0);')
-    (tmp_path / "t.sv").write_text(text.replace("#(virtual dut_if)::get", "#(virtual other_if)::get"))
+    (tmp_path / "t.sv").write_text(text.replace("#(virtual dut_if)::get", "#(virtual other_if)::get"), encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     assert not [d for ds in lint(w).values() for d in ds if d.code == "config-db-type-mismatch"]
-    (tmp_path / "t.sv").write_text(CONFIG_DB.replace("#(virtual dut_if)::get", "#(virtual other_if)::get"))
+    (tmp_path / "t.sv").write_text(CONFIG_DB.replace("#(virtual dut_if)::get", "#(virtual other_if)::get"), encoding="utf-8", newline="")
     w.reindex_all()
     [d] = [d for ds in lint(w).values() for d in ds if d.code == "config-db-type-mismatch"]
     assert d.message == "'vif' is set as dut_vif but read as virtual other_if; uvm_config_db matches on the " \

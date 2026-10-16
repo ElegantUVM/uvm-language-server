@@ -291,11 +291,11 @@ def test_capabilities_and_crlf(tb, limit, line_only):
 
 def test_duplicate_roots_and_include_endpoints(tmp_path):
     header = tmp_path / "shared.svh"
-    header.write_text('class c;\n`include "member.svh"\nendclass\n')
-    (tmp_path / "member.svh").write_text("int value;\n")
-    (tmp_path / "close.svh").write_text("int x;\nendclass\n")
-    (tmp_path / "first.sv").write_text('`include "shared.svh"\nclass cross_file;\n`include "close.svh"\n')
-    (tmp_path / "second.sv").write_text('`include "shared.svh"\n')
+    header.write_text('class c;\n`include "member.svh"\nendclass\n', encoding="utf-8", newline="")
+    (tmp_path / "member.svh").write_text("int value;\n", encoding="utf-8", newline="")
+    (tmp_path / "close.svh").write_text("int x;\nendclass\n", encoding="utf-8", newline="")
+    (tmp_path / "first.sv").write_text('`include "shared.svh"\nclass cross_file;\n`include "close.svh"\n', encoding="utf-8", newline="")
+    (tmp_path / "second.sv").write_text('`include "shared.svh"\n', encoding="utf-8", newline="")
     c = start(str(tmp_path), capabilities=CAPS, settings={"useBundledUvm": False, "elaboration": "off"})
     try:
         d = Doc(c, str(header))
@@ -467,7 +467,7 @@ def constructs_folds(t):
 
 def test_folds_of_every_construct(tmp_path):
     path = tmp_path / "constructs.sv"
-    path.write_text(CONSTRUCTS)
+    path.write_text(CONSTRUCTS, encoding="utf-8", newline="")
     c = start(str(tmp_path), capabilities=CAPS, settings={"useBundledUvm": False, "elaboration": "off"})
     try:
         d = Doc(c, str(path))
@@ -527,7 +527,7 @@ endmodule
 
 def test_bodies_without_begin(tmp_path):
     path = tmp_path / "bodies.sv"
-    path.write_text(BODIES)
+    path.write_text(BODIES, encoding="utf-8", newline="")
     c = start(str(tmp_path), capabilities=CAPS, settings={"useBundledUvm": False, "elaboration": "off"})
     t = BODIES
     try:
@@ -600,9 +600,9 @@ def test_uvm_begin_and_end_macros(doc):
 
 def test_comments_after_an_included_file(tmp_path):
     # slang moves the trivia after a header's last token to the token after its `include.
-    (tmp_path / "head.svh").write_text("class h;\n  int x;\nendclass\n// footer one\n// footer two\n")
+    (tmp_path / "head.svh").write_text("class h;\n  int x;\nendclass\n// footer one\n// footer two\n", encoding="utf-8", newline="")
     path = tmp_path / "top.sv"
-    path.write_text('module top;\n`include "head.svh"\n  // own one\n  // own two\n  int y;\nendmodule\n')
+    path.write_text('module top;\n`include "head.svh"\n  // own one\n  // own two\n  int y;\nendmodule\n', encoding="utf-8", newline="")
     c = start(str(tmp_path), capabilities=CAPS, settings={"useBundledUvm": False, "elaboration": "off"})
     try:
         d = Doc(c, str(path))
@@ -662,21 +662,22 @@ def test_refresh_after_index(tb, folding, refresh):
         c.close()
 
 
-def test_crossing_intervals_and_shared_start():
+def test_crossing_intervals_and_shared_start(tmp_path):
     from uvmls.model import FoldRegion
     from uvmls.navigation import Navigator
     from uvmls.workspace import Workspace
 
+    path = str(tmp_path / "a.sv")
     w = Workspace()
     folds = [(0, 10, None), (0, 7, None), (2, 5, None), (4, 8, None), (11, 15, None), (0, 10, None),
              (6, 9, "branch"), (3, 4, "branch"), (11, 15, "branch"), (12, 14, "region"), (13, 15, "branch")]
-    w.folds_by_file["a.sv"] = [FoldRegion("a.sv", *f) for f in folds]
+    w.folds_by_file[path] = [FoldRegion(path, *f) for f in folds]
     # A branch or #region that crosses syntax (or one before it) is dropped, never the syntax.
-    assert Navigator(w).folding_ranges("a.sv") == [(0, 10, None), (0, 7, None), (2, 5, None), (3, 4, "branch"),
+    assert Navigator(w).folding_ranges(path) == [(0, 10, None), (0, 7, None), (2, 5, None), (3, 4, "branch"),
                                                    (11, 15, None), (12, 14, "region")]
 
 
-def test_crossing_check_matches_pairwise_check():
+def test_crossing_check_matches_pairwise_check(tmp_path):
     import random
     import time
 
@@ -700,33 +701,35 @@ def test_crossing_check_matches_pairwise_check():
                 out.append((start, end))
         return [(a, b, kinds[a, b]) for a, b in sorted(out, key=lambda p: (p[0], -p[1]))]
 
+    path = str(tmp_path / "a.sv")
     rng, w = random.Random(7), Workspace()
     for _ in range(3000):
         lines = rng.randint(2, 25)
         starts = [rng.randrange(lines) for _ in range(rng.randint(0, 14))]
-        folds = [FoldRegion("a.sv", a, rng.randint(a + 1, lines), rng.choice([None, None, "comment", "branch", "region"]))
+        folds = [FoldRegion(path, a, rng.randint(a + 1, lines), rng.choice([None, None, "comment", "branch", "region"]))
                  for a in starts]
-        w.folds_by_file["a.sv"] = folds
-        assert Navigator(w).folding_ranges("a.sv") == pairwise(folds)
+        w.folds_by_file[path] = folds
+        assert Navigator(w).folding_ranges(path) == pairwise(folds)
     # Each of 4000 `ifdef branches around a class with two methods: a sweep, not a check against every fold.
-    w.folds_by_file["a.sv"] = [FoldRegion("a.sv", *f) for i in range(0, 40000, 10)
+    w.folds_by_file[path] = [FoldRegion(path, *f) for i in range(0, 40000, 10)
                                for f in ((i, i + 8, "branch"), (i + 1, i + 7), (i + 2, i + 3), (i + 5, i + 6))]
     start = time.perf_counter()
-    assert len(Navigator(w).folding_ranges("a.sv")) == 16000
+    assert len(Navigator(w).folding_ranges(path)) == 16000
     assert time.perf_counter() - start < 1
 
 
-def test_no_crossing_sweeps_without_crossing_folds(monkeypatch):
+def test_no_crossing_sweeps_without_crossing_folds(tmp_path, monkeypatch):
     from uvmls import navigation
     from uvmls.model import FoldRegion
     from uvmls.workspace import Workspace
 
+    path = str(tmp_path / "a.sv")
     w = Workspace()
-    w.folds_by_file["a.sv"] = [FoldRegion("a.sv", *f) for f in ((0, 10, None), (2, 5, "comment"), (4, 8, None))]
+    w.folds_by_file[path] = [FoldRegion(path, *f) for f in ((0, 10, None), (2, 5, "comment"), (4, 8, None))]
     sweeps, nested = [], navigation._nested
     monkeypatch.setattr(navigation, "_start_inside", lambda *a: sweeps.append(a) or set())
     monkeypatch.setattr(navigation, "_nested", lambda spans: sweeps.append(spans) or nested(spans))
-    assert navigation.Navigator(w).folding_ranges("a.sv") == [(0, 10, None), (2, 5, "comment")]
+    assert navigation.Navigator(w).folding_ranges(path) == [(0, 10, None), (2, 5, "comment")]
     assert len(sweeps) == 1  # the syntax's own nesting, nothing for crossings
 
 
@@ -740,14 +743,14 @@ def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
 
     async def run():
         path = tmp_path / "a.sv"
-        path.write_text("class a;\n int value;\nendclass\n")
+        path.write_text("class a;\n int value;\nendclass\n", encoding="utf-8", newline="")
         ls = module.UvmLanguageServer()
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
         ls.protocol.client_capabilities = T.ClientCapabilities()
         ls.workspace_roots = [str(tmp_path)]
         ls.settings = {"useBundledUvm": False}
         ls.ws.configure(ls.config())
-        params = T.FoldingRangeParams(T.TextDocumentIdentifier(path.as_uri()))
+        params = T.FoldingRangeParams(T.TextDocumentIdentifier(path_to_uri(str(path))))
         fresh = ls.fresh
 
         async def expired():
@@ -770,7 +773,7 @@ def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
             task = asyncio.create_task(module.folding_range(ls, params))
             await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
             assert entered.is_set()
-            path.write_text("\n\nclass a;\n int value;\nendclass\n")
+            path.write_text("\n\nclass a;\n int value;\nendclass\n", encoding="utf-8", newline="")
             ls.pending.add(str(path))
             release.set()
             # Computed again for the edited file: never the lines it had.

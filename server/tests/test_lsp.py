@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 
 import pytest
 
@@ -23,10 +24,12 @@ class Client:
         env = dict(os.environ, PYTHONPATH=SERVER_DIR)
         env.pop("UVM_HOME", None)  # default settings: the bundled UVM
         self.proc = subprocess.Popen([sys.executable, "-m", "uvmls", "--stdio"], cwd=SERVER_DIR,
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.next_id = 0
         self.notifications = []
         self.messages = queue.Queue()
+        self.stderr_tail = deque(maxlen=16)
+        threading.Thread(target=self._pump_stderr, daemon=True).start()
         threading.Thread(target=self._pump, daemon=True).start()
 
     def send(self, msg):
@@ -51,6 +54,10 @@ class Client:
                 self.messages.put(json.loads(self.proc.stdout.read(int(headers["content-length"]))))
         except (EOFError, ValueError, OSError) as e:
             self.messages.put(e)
+
+    def _pump_stderr(self):
+        while chunk := self.proc.stderr.read1(1024):
+            self.stderr_tail.append(chunk)
 
     def read(self, timeout=30):
         try:
@@ -98,7 +105,10 @@ class Client:
                 return msg
             elif "method" in msg:
                 self.notifications.append(msg)
-        raise TimeoutError(method)
+        stderr = b"".join(self.stderr_tail)[-4000:].decode("utf-8", errors="replace")
+        recent = [m for m in self.notifications if m.get("method") in ("window/logMessage", "uvm/elaborationStatus")]
+        raise TimeoutError(f"{method}\nserver stderr tail:\n{stderr}\nrecent server notifications:\n"
+                           f"{json.dumps(recent[-5:], ensure_ascii=False)[-4000:]}")
 
     def close(self):
         try:
@@ -183,7 +193,7 @@ def test_class_at_answers_with_a_graph_node(client):
     """Show Class in Graph on a UVM type the graph leaves out focuses the class around the cursor."""
     ids = {n["id"] for n in client.request("uvm/classGraph", {})["nodes"]}
     drv = uri("agent/alu_driver.svh")
-    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh"), encoding="utf-8") as f:
         lines = f.read().split("\n")
 
     def at(needle, offset=0):
@@ -198,7 +208,7 @@ def test_class_at_answers_with_a_graph_node(client):
 
 def test_live_edit_updates_index_and_diagnostics(client):
     path = os.path.join(EXAMPLE, "env/alu_env.svh")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
     client.forget("textDocument/publishDiagnostics")
     client.notify("textDocument/didOpen", {"textDocument": {
@@ -253,7 +263,7 @@ def elab_diags(msg):
 
 def test_elaboration_on_save(client):
     path = os.path.join(EXAMPLE, "agent/alu_driver.svh")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
     u = uri("agent/alu_driver.svh")
     line = text[:text.index("m_cfg.vif")].count("\n")
@@ -293,7 +303,7 @@ def test_parse_errors_are_published_once(client, prefix):
     # adds a hint to an include it cannot find, so its message differs from slang-elab's.
     # Both put them on the file's own lines, whatever a `line directive says.
     path = os.path.join(EXAMPLE, "agent/alu_driver.svh")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
     u = uri("agent/alu_driver.svh")
     line = text[:text.index("m_cfg.vif;")].count("\n") + prefix.count("\n")
@@ -327,7 +337,7 @@ def test_elaboration_diagnostics_follow_edits_until_the_next_run(client):
     # Between saves the last run's errors move with the lines above them, and go away once the
     # lines they are on change: never back at stale lines, never next to the index's own copy.
     path = os.path.join(EXAMPLE, "agent/alu_driver.svh")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
     u = uri("agent/alu_driver.svh")
     versions = iter(range(2, 100))
@@ -368,7 +378,7 @@ def test_elaboration_diagnostics_follow_edits_until_the_next_run(client):
 
 def test_a_long_elaboration_report_is_capped(client):
     path = os.path.join(EXAMPLE, "tb/tb_top.sv")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
     u = uri("tb/tb_top.sv")
     many = text.replace("endmodule", "".join(f"  initial nope_{i} = 1;\n" for i in range(150)) + "endmodule")
@@ -391,7 +401,7 @@ def test_a_long_elaboration_report_is_capped(client):
 
 def test_elaboration_off_on_demand_and_on_change(client):
     u = uri("agent/alu_driver.svh")
-    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh"), encoding="utf-8") as f:
         text = f.read()
 
     def configure(mode):
@@ -453,7 +463,7 @@ def test_a_newer_run_supersedes_an_older_one(client):
 
 def test_an_edit_does_not_resend_unchanged_diagnostics(client):
     u = uri("agent/alu_driver.svh")
-    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh"), encoding="utf-8") as f:
         text = f.read()
     client.forget("textDocument/publishDiagnostics", "uvm/indexChanged")
     client.notify("textDocument/didOpen", {"textDocument": {
@@ -472,8 +482,8 @@ def test_an_edit_does_not_resend_unchanged_diagnostics(client):
 def test_elaboration_counts_what_problems_shows(tmp_path):
     # The index reports a missing include as a warning (with a hint); elaboration, as slang does,
     # as an error. Problems shows it once, as an error, and the status counts match.
-    (tmp_path / "top.sv").write_text('`include "missing.svh"\nmodule top;\nendmodule\n')
-    (tmp_path / "tb.f").write_text("top.sv\n")
+    (tmp_path / "top.sv").write_text('`include "missing.svh"\nmodule top;\nendmodule\n', encoding="utf-8", newline="")
+    (tmp_path / "tb.f").write_text("top.sv\n", encoding="utf-8", newline="")
     c = start(tmp_path, filelists=[str(tmp_path / "tb.f")], elaboration="onSave")
     try:
         status = c.wait_for("uvm/elaborationStatus", finished)["params"]
@@ -486,27 +496,36 @@ def test_elaboration_counts_what_problems_shows(tmp_path):
         c.close()
 
 
-def test_reverted_buffer_is_elaborated_again(client):
-    a, b = uri("agent/alu_driver.svh"), uri("agent/alu_monitor.svh")
-    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_reverted_buffer_is_elaborated_again(tmp_path, newline):
+    root = tmp_path / "alu_tb"
+    shutil.copytree(EXAMPLE, root)
+    driver, monitor = root / "agent/alu_driver.svh", root / "agent/alu_monitor.svh"
+    for path in (driver, monitor):
+        path.write_bytes(path.read_text(encoding="utf-8").replace("\n", newline).encode("utf-8"))
+    a, b = path_to_uri(str(driver)), path_to_uri(str(monitor))
+    with open(driver, encoding="utf-8", newline="") as f:
         ta = f.read()
-    with open(os.path.join(EXAMPLE, "agent/alu_monitor.svh")) as f:
+    with open(monitor, encoding="utf-8", newline="") as f:
         tb = f.read()
-    for u, t in ((a, ta), (b, tb)):
-        client.notify("textDocument/didOpen", {"textDocument": {
-            "uri": u, "languageId": "systemverilog", "version": 1, "text": t}})
-    client.notify("textDocument/didChange", {"textDocument": {"uri": a, "version": 2},
-                                             "contentChanges": [{"text": ta.replace("m_cfg.vif", "m_cfg.vfi")}]})
-    client.forget("uvm/elaborationStatus")
-    client.notify("textDocument/didSave", {"textDocument": {"uri": b}})  # compiles a's unsaved text
-    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 1
-    client.forget("uvm/elaborationStatus")
-    client.notify("textDocument/didChange", {"textDocument": {"uri": a, "version": 3},
-                                             "contentChanges": [{"text": ta}]})  # File: Revert, no save
-    status = client.wait_for("uvm/elaborationStatus", finished, timeout=10)["params"]
-    for u in (a, b):
-        client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
-    assert status["errors"] == 0
+    client = start(root, filelists=[str(root / "alu_tb.f")])
+    try:
+        assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
+        for u, t in ((a, ta), (b, tb)):
+            client.notify("textDocument/didOpen", {"textDocument": {
+                "uri": u, "languageId": "systemverilog", "version": 1, "text": t}})
+        client.notify("textDocument/didChange", {"textDocument": {"uri": a, "version": 2},
+                                                 "contentChanges": [{"text": ta.replace("m_cfg.vif", "m_cfg.vfi")}]})
+        client.forget("uvm/elaborationStatus")
+        client.notify("textDocument/didSave", {"textDocument": {"uri": b}})  # compiles a's unsaved text
+        assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 1
+        client.forget("uvm/elaborationStatus")
+        client.notify("textDocument/didChange", {"textDocument": {"uri": a, "version": 3},
+                                                 "contentChanges": [{"text": ta}]})  # File: Revert, no save
+        status = client.wait_for("uvm/elaborationStatus", finished, timeout=10)["params"]
+        assert status["errors"] == 0
+    finally:
+        client.close()
 
 
 def test_open_file_changed_by_another_program_is_elaborated(tmp_path):
@@ -517,11 +536,11 @@ def test_open_file_changed_by_another_program_is_elaborated(tmp_path):
         assert c.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
         path = ex / "agent" / "alu_driver.svh"
         u = path_to_uri(str(path))
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         c.notify("textDocument/didOpen", {"textDocument": {
             "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})
         broken = text.replace("m_cfg.vif", "m_cfg.vfi")
-        path.write_text(broken)  # git checkout, a generator, ...
+        path.write_text(broken, encoding="utf-8", newline="")  # git checkout, a generator, ...
         c.forget("uvm/elaborationStatus")
         # VS Code reloads the unmodified editor and its watcher reports the change; no didSave.
         c.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
@@ -534,7 +553,7 @@ def test_open_file_changed_by_another_program_is_elaborated(tmp_path):
 
 def test_elaboration_off_results_do_not_outlive_a_fix(client):
     u = uri("agent/alu_driver.svh")
-    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh"), encoding="utf-8") as f:
         text = f.read()
     client.forget("uvm/elaborationStatus", "textDocument/publishDiagnostics")
     client.notify("workspace/didChangeConfiguration",
@@ -565,7 +584,7 @@ def set_elaboration(client, mode):
 
 def test_an_edit_in_on_change_mode_supersedes_a_run_in_progress(client):
     u = uri("agent/alu_driver.svh")
-    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh"), encoding="utf-8") as f:
         text = f.read()
     v2 = text.replace("m_cfg.vif", "m_cfg.vfi")
     line = v2[:v2.index("m_cfg.vfi")].count("\n")
@@ -596,7 +615,7 @@ def test_an_edit_in_on_change_mode_supersedes_a_run_in_progress(client):
 
 def test_auto_save_after_an_on_change_run_does_not_elaborate_again(client):
     u = uri("agent/alu_driver.svh")
-    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh"), encoding="utf-8") as f:
         text = f.read()
     set_elaboration(client, "onChange")
     client.notify("textDocument/didOpen", {"textDocument": {
@@ -622,7 +641,7 @@ def test_auto_save_after_an_on_change_run_does_not_elaborate_again(client):
 
 def test_elaborate_now_answers_with_the_run_that_superseded_it(client):
     u = uri("agent/alu_driver.svh")
-    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh")) as f:
+    with open(os.path.join(EXAMPLE, "agent/alu_driver.svh"), encoding="utf-8") as f:
         text = f.read()
     set_elaboration(client, "onChange")
     client.notify("textDocument/didOpen", {"textDocument": {
@@ -672,14 +691,14 @@ def test_cancelling_elaborate_does_not_stop_a_run_others_wait_on(client):
 
 def _alive(pid):
     try:
-        with open(f"/proc/{pid}/stat") as f:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
             return f.read().rsplit(")", 1)[1].split()[0] != "Z"
     except (FileNotFoundError, ProcessLookupError):  # gone before the open, or before the read
         return False
 
 
 def _cpu_seconds(pid):
-    with open(f"/proc/{pid}/stat") as f:
+    with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
         fields = f.read().rsplit(")", 1)[1].split()
     return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
 
@@ -691,15 +710,15 @@ def test_the_worker_ends_with_the_server(tmp_path):
             "    for (int i = 0; i < 300000; i++) a = a * 1103515245 + 12345;", "    return a;",
             "  endfunction", "endpackage", "module top;", "  import p::*;"]
     (tmp_path / "top.sv").write_text("\n".join(spin + [f"  localparam int P{i} = spin({i});" for i in range(100)]
-                                               + ["endmodule", ""]))
-    (tmp_path / "top.f").write_text("top.sv\n")
+                                               + ["endmodule", ""]), encoding="utf-8", newline="")
+    (tmp_path / "top.f").write_text("top.sv\n", encoding="utf-8", newline="")
     c = start(tmp_path, filelists=[str(tmp_path / "top.f")], elaboration="onSave")
     worker = None
     try:
         c.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "running")
         deadline = time.time() + 5
         while worker is None and time.time() < deadline:
-            with open(f"/proc/{c.proc.pid}/task/{c.proc.pid}/children") as f:
+            with open(f"/proc/{c.proc.pid}/task/{c.proc.pid}/children", encoding="utf-8") as f:
                 for pid in map(int, f.read().split()):
                     with open(f"/proc/{pid}/cmdline", "rb") as g:
                         if b"elab-worker" in g.read():
@@ -718,3 +737,23 @@ def test_the_worker_ends_with_the_server(tmp_path):
             c.proc.kill()
         if worker and _alive(worker):
             os.kill(worker, 9)
+
+
+def test_wait_for_timeout_includes_stderr_and_worker_status():
+    import io
+    from types import SimpleNamespace
+
+    client = Client.__new__(Client)
+    client.proc = SimpleNamespace(stderr=io.BytesIO("worker failed: café😀\n".encode("utf-8")))
+    client.stderr_tail = deque(maxlen=16)
+    client._pump_stderr()
+    client.notifications = [{"method": "uvm/elaborationStatus", "params": {"state": "failed", "message": "worker exited 2"}}]
+    def timeout(**kwargs):
+        raise TimeoutError()
+
+    client.read = timeout
+    with pytest.raises(TimeoutError) as exc:
+        client.wait_for("textDocument/publishDiagnostics", timeout=0.01)
+    assert "textDocument/publishDiagnostics" in str(exc.value)
+    assert "worker failed: café😀" in str(exc.value)
+    assert "worker exited 2" in str(exc.value)

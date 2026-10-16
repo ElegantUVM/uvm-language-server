@@ -114,7 +114,7 @@ def test_hover_shows_the_uvm_documentation(bundled_ws):
 def test_uvm_macros_are_predefined_when_a_file_does_not_include_them(tmp_path):
     # Simulators usually have them in scope already, as the macro shim always did.
     (tmp_path / "t.sv").write_text("import uvm_pkg::*;\nclass c extends uvm_object;\n"
-                                   "  `uvm_object_utils(c)\nendclass\n")
+                                   "  `uvm_object_utils(c)\nendclass\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     assert w.find_class("c").registration == "object"
@@ -130,7 +130,7 @@ def test_parse_warnings_follow_slangs_default_set(tmp_path):
         "  function void do_pack(uvm_packer packer);\n"
         "    `uvm_pack_string(s)\n    `uvm_pack_sarray(a)\n  endfunction\n"
         "  function void do_unpack(uvm_packer packer);\n    `uvm_unpack_sarray(a)\n  endfunction\n"
-        "endclass\n")
+        "endclass\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     assert w.user_diagnostics() == []
@@ -148,7 +148,7 @@ def test_diagnostics_inside_library_files_are_not_reported():
 
 
 def test_open_uvm_source_is_not_reparsed_or_taken_for_user_code():
-    with open(UVM_DRIVER) as f:
+    with open(UVM_DRIVER, encoding="utf-8", newline="") as f:
         text = f.read()
     w = workspace()
     version = w.version
@@ -166,7 +166,7 @@ def test_open_uvm_source_under_another_name_is_not_taken_for_user_code(tmp_path)
     # The bundled file reached through a symlink: the editor's name and slang's resolved name differ.
     (tmp_path / "uvm").symlink_to(os.path.dirname(BUNDLED_UVM), target_is_directory=True)
     alias = str(tmp_path / "uvm" / "src" / "comps" / "uvm_driver.svh")
-    with open(UVM_DRIVER) as f:
+    with open(UVM_DRIVER, encoding="utf-8", newline="") as f:
         text = f.read()
     for name in (alias, os.path.realpath(UVM_DRIVER)):
         w = workspace()
@@ -183,7 +183,7 @@ def test_type_parameter_bases_are_followed(tmp_path, monkeypatch):
            "  class item extends uvm_sequence_item;\n  endclass\n"
            "  class rs extends uvm_reg_sequence;\n    task body();\n      req = null;\n    endtask\n  endclass\n"
            "  class rs2 extends uvm_reg_sequence #(uvm_sequence #(item));\n  endclass\nendpackage\n")
-    (tmp_path / "t.sv").write_text(src)
+    (tmp_path / "t.sv").write_text(src, encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
 
@@ -200,7 +200,7 @@ def test_type_parameter_bases_are_followed(tmp_path, monkeypatch):
     line = src.split("\n").index("      req = null;")
     assert "property of `uvm_sequence`" in Navigator(w).hover(str(tmp_path / "t.sv"), line, 7, src)
     # The built-in model follows the default too, and nothing calls the base unknown.
-    (tmp_path / "t.sv").write_text("class m #(type B = uvm_sequence_item) extends B;\nendclass\n")
+    (tmp_path / "t.sv").write_text("class m #(type B = uvm_sequence_item) extends B;\nendclass\n", encoding="utf-8", newline="")
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
     assert w.role(w.find_class("m")) == "item" and not lint(w)
 
@@ -215,13 +215,13 @@ def test_user_roots_do_not_repeat_the_library_macros(bundled_ws):
 def test_a_configured_uvm_is_not_rescanned_either(tmp_path):
     src = tmp_path / "uvm" / "src"
     (src / "macros").mkdir(parents=True)
-    (src / "uvm_pkg.sv").write_text('`include "uvm_macros.svh"\npackage uvm_pkg;\nendpackage\n')
-    (src / "uvm_macros.svh").write_text('`include "macros/m.svh"\n')
-    (src / "macros" / "m.svh").write_text("`define uvm_info(ID, MSG, VERB) $display(MSG);\n")
+    (src / "uvm_pkg.sv").write_text('`include "uvm_macros.svh"\npackage uvm_pkg;\nendpackage\n', encoding="utf-8", newline="")
+    (src / "uvm_macros.svh").write_text('`include "macros/m.svh"\n', encoding="utf-8", newline="")
+    (src / "macros" / "m.svh").write_text("`define uvm_info(ID, MSG, VERB) $display(MSG);\n", encoding="utf-8", newline="")
     tb = tmp_path / "tb"
     tb.mkdir()
     for i in range(3):
-        (tb / f"p{i}.sv").write_text(f'`include "uvm_macros.svh"\npackage p{i};\nendpackage\n')
+        (tb / f"p{i}.sv").write_text(f'`include "uvm_macros.svh"\npackage p{i};\nendpackage\n', encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tb)], uvm_home=str(tmp_path / "uvm")))
     assert w.sources.uvm_source == "configured"
@@ -245,13 +245,13 @@ def test_a_file_that_includes_uvm_pkg_does_not_parse_the_library_again(tmp_path)
     tb = tmp_path / "tb.sv"
     tb.write_text('`include "uvm_macros.svh"\n`include "uvm_pkg.sv"\nmodule tb;\n  import uvm_pkg::*;\n'
                   "  class t extends uvm_test;\n    task run_phase(uvm_phase phase);\n    endtask\n"
-                  "  endclass\nendmodule\n")
+                  "  endclass\nendmodule\n", encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     idx = w.indices[str(tb)]
     assert len(idx.files) < 20 and os.path.join(BUNDLED_UVM, "uvm_pkg.sv") in idx.files  # still a link
     assert not [r for rs in idx.identifiers.values() for r in rs if r.path in w.library_files]
-    text = tb.read_text()
+    text = tb.read_text(encoding="utf-8")
     line = text.split("\n").index("    task run_phase(uvm_phase phase);")
     refs = Navigator(w).references(str(tb), line, 20, text)
     assert refs and {r.path for r in refs} == {str(tb)}
@@ -263,7 +263,7 @@ def test_a_file_that_includes_uvm_pkg_does_not_parse_the_library_again(tmp_path)
 def test_topology_is_the_same_when_a_package_includes_uvm_pkg(tmp_path):
     shutil.copytree(EXAMPLE, tmp_path / "alu")
     pkg = tmp_path / "alu" / "agent" / "alu_pkg.sv"
-    pkg.write_text('`include "uvm_macros.svh"\n`include "uvm_pkg.sv"\n' + pkg.read_text())
+    pkg.write_text('`include "uvm_macros.svh"\n`include "uvm_pkg.sv"\n' + pkg.read_text(encoding="utf-8"), encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path / "alu")], filelists=[str(tmp_path / "alu" / "alu_tb.f")]))
 
@@ -297,7 +297,7 @@ def test_macro_definitions_know_their_ifdef_branches(tmp_path, eol):
         "`ifdef NOWHERE\n`define MODE 0\n`elsif ALSO_NOWHERE\n`define MODE 1\n`else\n"
         "`define MODE 2 \\\n  `ifdef X \\\n  1\n`endif\n")
     (tmp_path / "defs.svh").write_bytes(text.replace('\n', eol).encode())
-    (tmp_path / "top.sv").write_text('`include "defs.svh"\nmodule top; endmodule\n')
+    (tmp_path / "top.sv").write_text('`include "defs.svh"\nmodule top; endmodule\n', encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
     mode = [m for idx in w.indices.values() for m in idx.macros if m.name == "MODE"]
@@ -316,7 +316,7 @@ def test_header_macro_definition_preserves_line_endings(tmp_path, eol, unsaved):
     text = '// header' + eol + '`define VALUE 42' + eol
     header.write_bytes((text.replace('42', '41') if unsaved else text).encode())
     source_text = '`include "defs.svh"\nmodule top;\n  localparam int V = `VALUE;\nendmodule\n'
-    source.write_text(source_text)
+    source.write_text(source_text, encoding="utf-8", newline="")
     ws = Workspace()
     ws.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
     if unsaved:

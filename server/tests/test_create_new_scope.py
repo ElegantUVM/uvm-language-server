@@ -21,7 +21,7 @@ def test_create_new_default_specialization(tmp_path, local, ports):
     assert d.message.endswith("use pdrv#()::type_id::create")
     fix = fix_once(w, "create-new")
     assert fix.preferred and fix.title == "Create 'd' with pdrv#()::type_id::create"
-    assert 'd = pdrv#()::type_id::create("d", this)' in (tmp_path / "t.sv").read_text()
+    assert 'd = pdrv#()::type_id::create("d", this)' in (tmp_path / "t.sv").read_text(encoding="utf-8")
     assert not findings(w, "create-new") and user_errors(w) == []
 
 
@@ -67,7 +67,7 @@ def test_create_new_default_specialization_through_typedef(tmp_path):
     w = index(tmp_path, {"t.sv": '`include "uvm_macros.svh"\n' + text}, bundled=True)
     assert user_errors(w) == []
     fix_once(w, "create-new")
-    assert 'mt = mon_t::type_id::create("mt", this)' in (tmp_path / "t.sv").read_text()
+    assert 'mt = mon_t::type_id::create("mt", this)' in (tmp_path / "t.sv").read_text(encoding="utf-8")
     assert not findings(w, "create-new") and user_errors(w) == []
 
 
@@ -100,7 +100,7 @@ module top; env#() e; endmodule
     assert d.message.endswith("use D::type_id::create")
     fix = fix_once(w, "create-new")
     assert fix.preferred and fix.title == "Create 'd' with D::type_id::create"
-    assert (tmp_path / "t.sv").read_text() == text.replace('d = new(', 'd = D::type_id::create(')
+    assert (tmp_path / "t.sv").read_text(encoding="utf-8") == text.replace('d = new(', 'd = D::type_id::create(')
     assert not findings(w, "create-new") and user_errors(w) == []
 
 

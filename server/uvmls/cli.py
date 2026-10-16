@@ -23,7 +23,7 @@ from . import __version__
 from .elab import displayed, elaborate, request_for, skip_reason, uvm_label
 from .lints import lint
 from .model import Diag, Range
-from .project import ProjectConfig, build_source_set, relative_or_absolute
+from .project import ProjectConfig, build_source_set, display_path
 from .sarif import write_log
 from .views import class_graph, config_db_report, topology
 from .workspace import Workspace
@@ -84,7 +84,7 @@ def _elab(ws: Workspace, args) -> int:
         print(json.dumps(result, indent=1))
     elif not args.json:
         for d in result["diagnostics"]:
-            where = f"{relative_or_absolute(d['file'])}:{d['line'] + 1}:{d['col'] + 1}: " if d["file"] else ""
+            where = f"{display_path(d['file'], os.getcwd())}:{d['line'] + 1}:{d['col'] + 1}: " if d["file"] else ""
             print(f"{where}{d['severity']}: {d['message']} [{d['code']}]", file=out)
         c = result["counts"]
         notes = [f"top: {', '.join(result['tops']) or 'none'}", uvm_label(ws.sources)]
@@ -174,13 +174,13 @@ def main(argv=None):
                               for d in uniq], indent=2))
         elif not args.json:
             for d in uniq:
-                rel = relative_or_absolute(d.range.path)
+                rel = display_path(d.range.path, os.getcwd())
                 print(f"{rel}:{d.range.line + 1}:{d.range.col + 1}: {d.severity}: {d.message} [{d.code}]", file=out)
             print(f"{len(uniq)} problem(s)", file=sys.stderr)
         sys.exit(1 if any(d.severity in ("error", "warning") for d in uniq) else 0)
 
     if args.output:
-        with open(args.output, "w") as f:
+        with open(args.output, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
     elif args.json or args.command in ("graph", "stats"):
         print(json.dumps(data, indent=1))

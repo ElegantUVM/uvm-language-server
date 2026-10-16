@@ -116,9 +116,9 @@ class b; int value; endclass
         source = '`line 100 "virtual.sv" 0\n' + source.replace(
             "class b;", '`line 1 "nested.sv" 1\nclass b;')
     header = tmp_path / "shared.svh"
-    header.write_text(source)
-    (tmp_path / "first.sv").write_text('`include "shared.svh"\n')
-    (tmp_path / "second.sv").write_text('`include "shared.svh"\nclass other; int value; endclass\n')
+    header.write_text(source, encoding="utf-8", newline="")
+    (tmp_path / "first.sv").write_text('`include "shared.svh"\n', encoding="utf-8", newline="")
+    (tmp_path / "second.sv").write_text('`include "shared.svh"\nclass other; int value; endclass\n', encoding="utf-8", newline="")
     c = start(str(tmp_path), capabilities=CAPS,
               settings={"useBundledUvm": False, "elaboration": "off"})
     try:
@@ -159,11 +159,11 @@ def test_escaped_identifiers(tmp_path, encoding, offset):
     path = tmp_path / "shared.svh"
     path.write_bytes(text.encode())
     for name in ("first", "second"):
-        (tmp_path / (name + ".sv")).write_text('`include "shared.svh"\n')
+        (tmp_path / (name + ".sv")).write_text('`include "shared.svh"\n', encoding="utf-8", newline="")
     c = start(str(tmp_path), capabilities={**CAPS, "general": {"positionEncodings": [encoding]}},
               settings={"useBundledUvm": False, "elaboration": "off"})
     try:
-        d = Doc(c, str(path))
+        d = Doc(c, str(path), newline="")
         codec = "utf-16-le" if encoding == "utf-16" else "utf-8"
         needles = [("\\foo.bar ;", 0, "\\foo.bar"), ("\\foo.bar =", 0, "\\foo.bar"),
                    ("\\foo.bar )", 0, "\\foo.bar")]
@@ -179,7 +179,7 @@ def test_lone_surrogate_in_buffer(client, tmp_path):
     # Sent as the escape \ud83d. slang reads it as U+FFFD, which has the same widths, so the
     # columns after it still line up.
     path = tmp_path / "surrogate.sv"
-    path.write_text("module s; endmodule\n")
+    path.write_text("module s; endmodule\n", encoding="utf-8", newline="")
     doc = Doc(client, str(path), 'module s;\n  string t = "\ud83d"; int x = 1; int y = x;\nendmodule\n')
     try:
         line = doc.text.split("\n")[1]
@@ -209,13 +209,13 @@ def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
 
     async def run():
         path = tmp_path / "a.sv"
-        path.write_text("class a; int value; endclass\n")
+        path.write_text("class a; int value; endclass\n", encoding="utf-8", newline="")
         ls = module.UvmLanguageServer()
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
         ls.workspace_roots = [str(tmp_path)]
         ls.settings = {"useBundledUvm": False}
         ls.ws.configure(ls.config())
-        document = T.TextDocumentIdentifier(path.as_uri())
+        document = T.TextDocumentIdentifier(path_to_uri(str(path)))
         params = T.DocumentHighlightParams(document, T.Position(0, 14))
         fresh = ls.fresh
 
@@ -239,7 +239,7 @@ def test_deadline_and_intervening_edit(tmp_path, monkeypatch):
             task = asyncio.create_task(module.document_highlight(ls, params))
             await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
             assert entered.is_set()
-            path.write_text("\nclass a; int value; endclass\n")
+            path.write_text("\nclass a; int value; endclass\n", encoding="utf-8", newline="")
             ls.pending.add(str(path))
             release.set()
             # Computed again for the edited file, where the word has moved down a line.
@@ -261,14 +261,14 @@ def test_request_caches_are_bounded(tmp_path):
 
     async def run():
         path = tmp_path / "a.sv"
-        path.write_text("class a;\n" + "".join(f"  int v{i};\n" for i in range(100)) + "endclass\n")
+        path.write_text("class a;\n" + "".join(f"  int v{i};\n" for i in range(100)) + "endclass\n", encoding="utf-8", newline="")
         ls = module.UvmLanguageServer()
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
         ls.protocol.client_capabilities = T.ClientCapabilities()
         ls.workspace_roots = [str(tmp_path)]
         ls.settings = {"useBundledUvm": False}
         ls.ws.configure(ls.config())
-        document = T.TextDocumentIdentifier(path.as_uri())
+        document = T.TextDocumentIdentifier(path_to_uri(str(path)))
         # Moving the cursor without editing asks at every position it visits.
         for line in range(1, 101):
             position = T.Position(line, 7)
@@ -408,11 +408,11 @@ def test_keyword_encoding_crlf_and_duplicate_includes(tmp_path, encoding, line_d
     path = tmp_path / "café.svh"
     path.write_bytes(text.encode())
     for name in ("first", "second"):
-        (tmp_path / (name + ".sv")).write_text('`include "café.svh"\n')
+        (tmp_path / (name + ".sv")).write_text('`include "café.svh"\n', encoding="utf-8", newline="")
     c = start(str(tmp_path), capabilities={**CAPS, "general": {"positionEncodings": [encoding]}},
               settings={"useBundledUvm": False, "elaboration": "off"})
     try:
-        d = Doc(c, str(path))
+        d = Doc(c, str(path), newline="")
         codec = "utf-16-le" if encoding == "utf-16" else "utf-8"
 
         def check_pairs():
@@ -435,16 +435,16 @@ def test_keyword_encoding_crlf_and_duplicate_includes(tmp_path, encoding, line_d
 def test_library_keywords_use_current_source(tmp_path):
     src = tmp_path / "uvm" / "src"
     src.mkdir(parents=True)
-    (src / "uvm_macros.svh").write_text("")
+    (src / "uvm_macros.svh").write_text("", encoding="utf-8", newline="")
     path = src / "uvm_pkg.sv"
     text = "package uvm_pkg;\n/* 😀 */ class uvm_object;\n int value;\nendclass\nendpackage\n"
     path.write_text(text, encoding="utf-8", newline="")
     root = tmp_path / "tb"
     root.mkdir()
-    (root / "t.sv").write_text("import uvm_pkg::*;\n")
+    (root / "t.sv").write_text("import uvm_pkg::*;\n", encoding="utf-8", newline="")
     c = start(str(root), capabilities=CAPS, settings={"uvmHome": str(src.parent), "elaboration": "off"})
     try:
-        d = Doc(c, str(path))
+        d = Doc(c, str(path), newline="")
         assert highlight_at(d, "class uvm_object") == pair_highlights(text, "class uvm_object", "endclass")
         assert highlight_at(d, "value") is None  # library identifiers are not indexed
         d.change("\n" + text)

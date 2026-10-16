@@ -51,9 +51,9 @@ def client(tb):
 class Doc:
     """An open document: its text and version as the editor has them."""
 
-    def __init__(self, client: Client, path: str, text: str | None = None):
+    def __init__(self, client: Client, path: str, text: str | None = None, *, newline=None):
         self.client, self.path, self.uri = client, path, path_to_uri(str(path))
-        with open(path, encoding="utf-8", newline="") as f:
+        with open(path, encoding="utf-8", newline=newline) as f:
             self.text = f.read() if text is None else text
         self.version = 1
         client.forget("textDocument/publishDiagnostics")  # only what this document's text gets
@@ -251,7 +251,7 @@ def test_a_fix_in_another_file(client, tb):
     """The finding is on the create() call in alu_env.svh; the fix registers alu_scoreboard in its
     own file, open in the editor (versioned) or not (no version)."""
     sb_path, env_path = os.path.join(tb, "env", "alu_scoreboard.svh"), os.path.join(tb, "env", "alu_env.svh")
-    with open(sb_path) as f:
+    with open(sb_path, encoding="utf-8") as f:
         original = f.read()
     planted = original.replace("  `uvm_component_utils(alu_scoreboard)\n", "")
     sb = Doc(client, sb_path, planted)
@@ -265,7 +265,7 @@ def test_a_fix_in_another_file(client, tb):
     env.close()
     published(client, env_path, lambda ds: not ds)
     # Not open: the file on disk, and no version to check.
-    with open(sb_path, "w") as f:
+    with open(sb_path, "w", encoding="utf-8", newline="") as f:
         f.write(planted)
     try:
         client.notify("workspace/didChangeWatchedFiles", {"changes": [{"uri": sb.uri, "type": 2}]})
@@ -275,7 +275,7 @@ def test_a_fix_in_another_file(client, tb):
         assert applied(planted, edits_for(a, sb.uri, None)) == original
         env.close()
     finally:
-        with open(sb_path, "w") as f:
+        with open(sb_path, "w", encoding="utf-8", newline="") as f:
             f.write(original)
         client.notify("workspace/didChangeWatchedFiles", {"changes": [{"uri": sb.uri, "type": 2}]})
     published(client, env_path, lambda ds: not ds)
@@ -285,10 +285,10 @@ def test_registration_hidden_in_an_include_has_no_actions(tmp_path):
     from test_fixes import COMPONENT
     text = 'import uvm_pkg::*;\n`include "uvm_macros.svh"\n' + COMPONENT
     path = tmp_path / "t.sv"
-    path.write_text(text)
-    (tmp_path / "alu_tb.f").write_text("t.sv\n")
-    (tmp_path / "registration.svh").write_text('`include "utils.svh"\n')
-    (tmp_path / "utils.svh").write_text("`project_component_utils(drv)\n")
+    path.write_text(text, encoding="utf-8", newline="")
+    (tmp_path / "alu_tb.f").write_text("t.sv\n", encoding="utf-8", newline="")
+    (tmp_path / "registration.svh").write_text('`include "utils.svh"\n', encoding="utf-8", newline="")
+    (tmp_path / "utils.svh").write_text("`project_component_utils(drv)\n", encoding="utf-8", newline="")
     c = start(str(tmp_path))
     try:
         doc = Doc(c, str(path))
@@ -380,7 +380,7 @@ def test_missing_include(tb):
     # The editor owns settings changes; unsynced filelists cannot be edited safely.
     inc = os.path.join(tb, "inc")
     os.makedirs(os.path.join(inc, "sub"))
-    with open(os.path.join(inc, "sub", "hdr.svh"), "w") as f:
+    with open(os.path.join(inc, "sub", "hdr.svh"), "w", encoding="utf-8", newline="") as f:
         f.write("// nothing\n")
     c = start(tb, clientCommands=["uvm.addIncludeDir"])
     try:
@@ -496,25 +496,25 @@ def test_full_reindex_moves_an_unopened_finding(tmp_path):
     root = tmp_path / 'tb'
     shutil.copytree(EXAMPLE, root)
     path = root / 'agent' / 'alu_agent.svh'
-    planted = path.read_text().replace('create("m_driver", this)', 'create("m_driver")')
-    path.write_text(planted)
+    planted = path.read_text(encoding="utf-8").replace('create("m_driver", this)', 'create("m_driver")')
+    path.write_text(planted, encoding="utf-8", newline="")
     c = start(str(root))
     try:
         [d] = published(c, str(path), lambda ds: ds)
         text = '// inserted\n// another\n' + planted
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8", newline="")
         extra = root / 'new.sv'
-        extra.write_text('// new file\n')
+        extra.write_text('// new file\n', encoding="utf-8", newline="")
         c.notify('workspace/didChangeWatchedFiles', {'changes': [
-            {'uri': path.as_uri(), 'type': 2}, {'uri': extra.as_uri(), 'type': 1}]})
+            {'uri': path_to_uri(str(path)), 'type': 2}, {'uri': path_to_uri(str(extra)), 'type': 1}]})
         # The finding is republished two lines down once the full re-index is done. Asking for a
         # fix before that may get no actions: the request does not wait past its deadline.
         published(c, str(path), lambda ds: [x['range']['start']['line'] for x in ds] == [d['range']['start']['line'] + 2])
         acts = c.request('textDocument/codeAction', {
-            'textDocument': {'uri': path.as_uri()}, 'range': d['range'], 'context': {'diagnostics': [d]}})
+            'textDocument': {'uri': path_to_uri(str(path))}, 'range': d['range'], 'context': {'diagnostics': [d]}})
         fix, ignore = acts
-        assert applied(text, edits_for(fix, path.as_uri())) == text.replace('create("m_driver")', 'create("m_driver", this)')
-        assert applied(text, edits_for(ignore, path.as_uri())) == text.replace(
+        assert applied(text, edits_for(fix, path_to_uri(str(path)))) == text.replace('create("m_driver")', 'create("m_driver", this)')
+        assert applied(text, edits_for(ignore, path_to_uri(str(path)))) == text.replace(
             'create("m_driver");', 'create("m_driver");  // uvm-lint: ignore create-no-parent')
     finally:
         c.close()
@@ -523,7 +523,7 @@ def test_full_reindex_moves_an_unopened_finding(tmp_path):
 @pytest.mark.parametrize('separator', ['\f', '\v', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029'])
 def test_incremental_edits_use_lsp_lines(client, tb, separator):
     path = agent(tb)
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         original = f.read()
     call = '    m_monitor = alu_monitor::type_id::create("m_monitor", this);\n'
     original = '// page' + separator + '\n' + original.replace(call, call + call)
@@ -630,16 +630,16 @@ def test_large_project_code_action_budgets(tmp_path):
     async def run():
         filelist = generate(tmp_path, classes=2400)
         driver = tmp_path / 'classes/node_0000.sv'
-        driver.write_text(driver.read_text().replace('extends uvm_component', 'extends uvm_driver #(node_0001)').replace(
-            'function void setup();', 'function void setup();\n    req = rsp;'))
+        driver.write_text(driver.read_text(encoding="utf-8").replace('extends uvm_component', 'extends uvm_driver #(node_0001)').replace(
+            'function void setup();', 'function void setup();\n    req = rsp;'), encoding="utf-8", newline="")
         bench = tmp_path / 'bench.sv'
-        bench.write_text(bench.read_text().replace('extends uvm_env', 'extends uvm_test').replace(
+        bench.write_text(bench.read_text(encoding="utf-8").replace('extends uvm_env', 'extends uvm_test').replace(
             'super.build_phase(phase);', 'super.build_phase(phase);\n'
-            '    set_type_override_by_type(node_0000::get_type(), node_0001::get_type());'))
+            '    set_type_override_by_type(node_0000::get_type(), node_0001::get_type());'), encoding="utf-8", newline="")
         ls = UvmLanguageServer()
         ls.workspace_roots = [str(tmp_path)]
         ls.settings = {'filelists': [str(filelist)], 'useBundledUvm': False, 'elaboration': 'off'}
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
         ls.protocol.client_capabilities = T.ClientCapabilities(
             text_document=T.TextDocumentClientCapabilities(code_lens=T.CodeLensClientCapabilities(),
                                                             inlay_hint=T.InlayHintClientCapabilities()))
@@ -669,7 +669,7 @@ def test_large_project_code_action_budgets(tmp_path):
             for _ in range(20):
                 if name == 'cold include':
                     ls.ws._include_candidates = None
-                params = T.CodeActionParams(T.TextDocumentIdentifier(path.as_uri()),
+                params = T.CodeActionParams(T.TextDocumentIdentifier(path_to_uri(str(path))),
                                              incoming[0].range if incoming else T.Range(T.Position(0, 0), T.Position(0, 0)),
                                              T.CodeActionContext(incoming, only=only))
                 start = time.perf_counter()
@@ -684,7 +684,7 @@ def test_large_project_code_action_budgets(tmp_path):
             p95 = sorted(samples)[18]
             print(f'{name}: p95 {p95:.2f} ms (target {target} ms)')
             assert p95 < target
-        params = T.CodeLensParams(T.TextDocumentIdentifier(path.as_uri()))
+        params = T.CodeLensParams(T.TextDocumentIdentifier(path_to_uri(str(path))))
         await code_lens(ls, params)
         samples = []
         for _ in range(20):
@@ -696,7 +696,7 @@ def test_large_project_code_action_budgets(tmp_path):
         print(f'config lenses: p95 {p95:.2f} ms (target 50 ms)')
         assert p95 < 50
         for name, source, count in [('factory hints', path, 1), ('bound member hints', driver, 2)]:
-            params = T.InlayHintParams(T.TextDocumentIdentifier(source.as_uri()),
+            params = T.InlayHintParams(T.TextDocumentIdentifier(path_to_uri(str(source))),
                                       T.Range(T.Position(0, 0), T.Position(10000, 0)))
             await inlay_hint(ls, params)
             samples = []
@@ -708,13 +708,13 @@ def test_large_project_code_action_budgets(tmp_path):
             p95 = sorted(samples)[18]
             print(f'{name}: p95 {p95:.2f} ms (target 50 ms)')
             assert p95 < 50
-        source = driver.read_text()
+        source = driver.read_text(encoding="utf-8")
         # The generated child also has its own constructor; use a typed direct call in shim mode.
         source = source.replace("super.new(", "node_0000::new(")
         ls.ws.update_document(str(driver), source)
         offset = source.index("node_0000::new(") + len("node_0000::new(")
         prefix = source[:offset]
-        params = T.SignatureHelpParams(T.TextDocumentIdentifier(driver.as_uri()),
+        params = T.SignatureHelpParams(T.TextDocumentIdentifier(path_to_uri(str(driver))),
                                        T.Position(prefix.count("\n"), len(prefix.rsplit("\n", 1)[-1])))
         await signature_help(ls, params)
         samples = []
@@ -726,7 +726,7 @@ def test_large_project_code_action_budgets(tmp_path):
         p95 = sorted(samples)[18]
         print(f'signature help: p95 {p95:.2f} ms (target 50 ms)')
         assert p95 < 50
-        params = T.DocumentHighlightParams(T.TextDocumentIdentifier(driver.as_uri()), T.Position(3, 7))
+        params = T.DocumentHighlightParams(T.TextDocumentIdentifier(path_to_uri(str(driver))), T.Position(3, 7))
         await document_highlight(ls, params)
         samples = []
         for _ in range(20):
@@ -737,7 +737,7 @@ def test_large_project_code_action_budgets(tmp_path):
         p95 = sorted(samples)[18]
         print(f'document highlights: p95 {p95:.2f} ms (target 50 ms)')
         assert p95 < 50
-        params = T.FoldingRangeParams(T.TextDocumentIdentifier(driver.as_uri()))
+        params = T.FoldingRangeParams(T.TextDocumentIdentifier(path_to_uri(str(driver))))
         await folding_range(ls, params)
         samples = []
         for _ in range(20):
@@ -749,3 +749,20 @@ def test_large_project_code_action_budgets(tmp_path):
         print(f'folding ranges: p95 {p95:.2f} ms (target 50 ms)')
         assert p95 < 50
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("newline,expected", [(None, "// café😀\n"), ("", "// café😀\r\n")])
+def test_document_fixture_encoding_and_newlines(tmp_path, newline, expected):
+    class Recorder:
+        def forget(self, method):
+            pass
+
+        def notify(self, method, params):
+            self.params = params
+
+    path = tmp_path / "unicode.sv"
+    path.write_bytes("// café😀\r\n".encode("utf-8"))
+    client = Recorder()
+    doc = Doc(client, str(path), newline=newline)
+    assert doc.text == expected
+    assert client.params["textDocument"]["text"] == expected

@@ -78,12 +78,12 @@ def server(tb):
 
 
 def read(root: str, rel: str) -> str:
-    with open(os.path.join(root, rel), newline="") as f:
+    with open(os.path.join(root, rel), newline="", encoding="utf-8") as f:
         return f.read()
 
 
 def write(root: str, rel: str, text: str):
-    with open(os.path.join(root, rel), "w", newline="") as f:
+    with open(os.path.join(root, rel), "w", newline="", encoding="utf-8") as f:
         f.write(text)
 
 
@@ -184,8 +184,8 @@ def test_class_members_registration_and_creator(server):
 def test_class_declared_in_two_packages_names_the_candidates(tmp_path):
     root = tmp_path / "alu_tb"
     shutil.copytree(EXAMPLE, root)
-    (root / "tests" / "dup_pkg.sv").write_text(DUP_PACKAGE)
-    (root / "alu_tb.f").write_text(read(str(root), "alu_tb.f") + "tests/dup_pkg.sv\n")
+    (root / "tests" / "dup_pkg.sv").write_text(DUP_PACKAGE, encoding="utf-8", newline="")
+    (root / "alu_tb.f").write_text(read(str(root), "alu_tb.f") + "tests/dup_pkg.sv\n", encoding="utf-8", newline="")
     c = start(str(root))
     try:
         message = c.error_text("class", {"name": "alu_agent"})
@@ -453,13 +453,13 @@ def test_protocol_errors_notifications_and_ping_during_elaboration(server):
 def test_symlinks_cannot_reach_outside_the_workspace(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
-    (outside / "secret.sv").write_text("// SECRET\nclass secret; endclass\n")
-    (outside / "secret.svh").write_text("// SECRET\nclass secret_header; endclass\n")
+    (outside / "secret.sv").write_text("// SECRET\nclass secret; endclass\n", encoding="utf-8", newline="")
+    (outside / "secret.svh").write_text("// SECRET\nclass secret_header; endclass\n", encoding="utf-8", newline="")
     root = tmp_path / "ws"
     root.mkdir()
     (root / "link.sv").symlink_to(outside / "secret.sv")  # a root of its own
     (root / "linked.svh").symlink_to(outside / "secret.svh")  # a header root.sv includes
-    (root / "root.sv").write_text('`include "linked.svh"\nclass in_ws; endclass\n')
+    (root / "root.sv").write_text('`include "linked.svh"\nclass in_ws; endclass\n', encoding="utf-8", newline="")
     c = serve(root)
     try:
         for uri in ("uvm://file/link.sv", "uvm://file/linked.svh", f"uvm://file/{outside / 'secret.sv'}",
@@ -555,14 +555,14 @@ def test_envelopes_batches_null_and_surrogates(server):
 def test_nested_filelists_and_new_files_refresh(tmp_path):
     root = tmp_path / "nested"
     root.mkdir()
-    (root / "a.sv").write_text("class original_class; endclass\n")
-    (root / "b.sv").write_text("class after; endclass\n")
-    (root / "top.f").write_text("-f child.f\n")
-    (root / "child.f").write_text("a.sv\n")
+    (root / "a.sv").write_text("class original_class; endclass\n", encoding="utf-8", newline="")
+    (root / "b.sv").write_text("class after; endclass\n", encoding="utf-8", newline="")
+    (root / "top.f").write_text("-f child.f\n", encoding="utf-8", newline="")
+    (root / "child.f").write_text("a.sv\n", encoding="utf-8", newline="")
     c = serve(root, "-f", "top.f")
     try:
         assert names(c) == ["original_class"]
-        (root / "child.f").write_text("b.sv\n")  # a filelist the filelist includes
+        (root / "child.f").write_text("b.sv\n", encoding="utf-8", newline="")  # a filelist the filelist includes
         time.sleep(1.1)
         assert names(c) == ["after"]
         clean(c)
@@ -570,15 +570,15 @@ def test_nested_filelists_and_new_files_refresh(tmp_path):
         c.close()
     root = tmp_path / "discovery"
     (root / "empty").mkdir(parents=True)
-    (root / "a.sv").write_text("class original_class; endclass\n")
+    (root / "a.sv").write_text("class original_class; endclass\n", encoding="utf-8", newline="")
     c = serve(root)
     try:
         assert names(c) == ["original_class"]
-        (root / "empty" / "new.sv").write_text("class added; endclass\n")  # a directory with no file yet
+        (root / "empty" / "new.sv").write_text("class added; endclass\n", encoding="utf-8", newline="")  # a directory with no file yet
         time.sleep(1.1)
         assert names(c) == ["added", "original_class"]
         (root / "deeper" / "more").mkdir(parents=True)  # a directory that did not exist
-        (root / "deeper" / "more" / "x.sv").write_text("class deeper_class; endclass\n")
+        (root / "deeper" / "more" / "x.sv").write_text("class deeper_class; endclass\n", encoding="utf-8", newline="")
         time.sleep(1.1)
         assert names(c) == ["added", "deeper_class", "original_class"]
         clean(c)
@@ -586,18 +586,18 @@ def test_nested_filelists_and_new_files_refresh(tmp_path):
         c.close()
     root = tmp_path / "header"
     root.mkdir()
-    (root / "root.sv").write_text('`include "later.svh"\nclass original_class; endclass\n')
-    (root / "top.f").write_text("root.sv\n")
+    (root / "root.sv").write_text('`include "later.svh"\nclass original_class; endclass\n', encoding="utf-8", newline="")
+    (root / "top.f").write_text("root.sv\n", encoding="utf-8", newline="")
     c = serve(root, "-f", "top.f")
     try:
         assert names(c) == ["original_class"]
-        (root / "later.svh").write_text("class added; endclass\n")  # a missing include appears
+        (root / "later.svh").write_text("class added; endclass\n", encoding="utf-8", newline="")  # a missing include appears
         time.sleep(1.1)
         assert names(c) == ["added", "original_class"]
         (root / "later.svh").unlink()
         time.sleep(1.1)
         assert names(c) == ["original_class"]
-        (root / "later.svh").write_text("class recreated; endclass\n")  # and comes back
+        (root / "later.svh").write_text("class recreated; endclass\n", encoding="utf-8", newline="")  # and comes back
         time.sleep(1.1)
         assert names(c) == ["original_class", "recreated"]
         clean(c)
@@ -612,11 +612,11 @@ def test_a_linked_workspace_folder_round_trips_its_own_locations(tmp_path):
     (real / "tb").mkdir(parents=True)
     (real / "headers" / "sub").mkdir(parents=True)
     (real / "tb" / "top.sv").write_text('`include "hdr.svh"\n`include "sub/deep.svh"\n'
-                                        'class in_ws extends hdr_class; endclass\n')
-    (real / "headers" / "hdr.svh").write_text("class hdr_class; endclass\n")
-    (real / "headers" / "sub" / "deep.svh").write_text("class deep_class; endclass\n")
+                                        'class in_ws extends hdr_class; endclass\n', encoding="utf-8", newline="")
+    (real / "headers" / "hdr.svh").write_text("class hdr_class; endclass\n", encoding="utf-8", newline="")
+    (real / "headers" / "sub" / "deep.svh").write_text("class deep_class; endclass\n", encoding="utf-8", newline="")
     (real / "inc").symlink_to(real / "headers", target_is_directory=True)
-    (real / "tb.f").write_text("+incdir+inc\ntb/top.sv\n")
+    (real / "tb.f").write_text("+incdir+inc\ntb/top.sv\n", encoding="utf-8", newline="")
     alias = tmp_path / "alias"
     alias.symlink_to(real, target_is_directory=True)
     c = serve(alias, "-f", "tb.f")
@@ -670,33 +670,33 @@ def class_names(server: mcp.McpServer) -> list[str]:
 def test_an_atomic_save_or_a_swap_file_does_not_reindex_everything(tmp_path, monkeypatch):
     root = tmp_path / "ws"
     (root / "src").mkdir(parents=True)
-    (root / "src" / "a.sv").write_text("class a_class; endclass\n")
-    (root / "src" / "b.sv").write_text("class b_class; endclass\n")
-    (root / "tb.f").write_text("src/a.sv\nsrc/b.sv\n")
+    (root / "src" / "a.sv").write_text("class a_class; endclass\n", encoding="utf-8", newline="")
+    (root / "src" / "b.sv").write_text("class b_class; endclass\n", encoding="utf-8", newline="")
+    (root / "tb.f").write_text("src/a.sv\nsrc/b.sv\n", encoding="utf-8", newline="")
     server = in_process(root, "tb.f")
     count = counting(server, monkeypatch)
     version = server.ws.version
     a = root / "src" / "a.sv"
     tmp = root / "src" / "a.sv.tmp~"
-    tmp.write_text("class a_class; endclass\nclass a_second; endclass\n")
+    tmp.write_text("class a_class; endclass\nclass a_second; endclass\n", encoding="utf-8", newline="")
     os.replace(tmp, a)  # an atomic save: a new inode, and the directory's stamp changes
     server.refresh(force=True)
     assert count == [0] and server.ws.version == version + 1
     assert class_names(server) == ["a_class", "a_second", "b_class"]
     swap = root / "src" / ".a.sv.swp"
-    swap.write_text("vim")
+    swap.write_text("vim", encoding="utf-8", newline="")
     server.refresh(force=True)
     swap.unlink()
-    (root / "src" / "run.log").write_text("log")  # a stray file that is not a source
+    (root / "src" / "run.log").write_text("log", encoding="utf-8", newline="")  # a stray file that is not a source
     server.refresh(force=True)
     assert count == [0] and server.ws.version == version + 1
-    (root / "src" / "c.sv").write_text("class c_class; endclass\n")  # unlisted, but it could be included
+    (root / "src" / "c.sv").write_text("class c_class; endclass\n", encoding="utf-8", newline="")  # unlisted, but it could be included
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["a_class", "a_second", "b_class"]
     (root / "src" / "b.sv").unlink()
     server.refresh(force=True)
     assert count == [2] and class_names(server) == ["a_class", "a_second"]
-    (root / "tb.f").write_text("src/a.sv\nsrc/c.sv\n")
+    (root / "tb.f").write_text("src/a.sv\nsrc/c.sv\n", encoding="utf-8", newline="")
     server.refresh(force=True)
     assert count == [3] and class_names(server) == ["a_class", "a_second", "c_class"]
 
@@ -704,22 +704,22 @@ def test_an_atomic_save_or_a_swap_file_does_not_reindex_everything(tmp_path, mon
 def test_a_header_in_a_new_subdirectory_of_an_include_dir_is_noticed(tmp_path, monkeypatch):
     root = tmp_path / "ws"
     (root / "inc").mkdir(parents=True)
-    (root / "top.sv").write_text('`include "sub/x.svh"\n`include "deep/er/y.svh"\nclass top_class; endclass\n')
-    (root / "tb.f").write_text("+incdir+inc\ntop.sv\n")
+    (root / "top.sv").write_text('`include "sub/x.svh"\n`include "deep/er/y.svh"\nclass top_class; endclass\n', encoding="utf-8", newline="")
+    (root / "tb.f").write_text("+incdir+inc\ntop.sv\n", encoding="utf-8", newline="")
     server = in_process(root, "tb.f")
     count = counting(server, monkeypatch)
     assert class_names(server) == ["top_class"]
     (root / "inc" / "sub").mkdir()  # created after the start, empty: watched from now on, no reindex
     server.refresh(force=True)
     assert count == [0] and str(root / "inc" / "sub") in server.stamps
-    (root / "inc" / "sub" / "x.svh").write_text("class x_class; endclass\n")
+    (root / "inc" / "sub" / "x.svh").write_text("class x_class; endclass\n", encoding="utf-8", newline="")
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["top_class", "x_class"]
     (root / "inc" / "deep" / "er").mkdir(parents=True)  # a subtree created with its header before a refresh
-    (root / "inc" / "deep" / "er" / "y.svh").write_text("class y_class; endclass\n")
+    (root / "inc" / "deep" / "er" / "y.svh").write_text("class y_class; endclass\n", encoding="utf-8", newline="")
     server.refresh(force=True)
     assert count == [2] and class_names(server) == ["top_class", "x_class", "y_class"]
-    (root / "inc" / "sub" / "x.svh").write_text("class x_class; endclass\nclass x_more; endclass\n")  # edited in place
+    (root / "inc" / "sub" / "x.svh").write_text("class x_class; endclass\nclass x_more; endclass\n", encoding="utf-8", newline="")  # edited in place
     server.refresh(force=True)
     assert count == [2] and class_names(server) == ["top_class", "x_class", "x_more", "y_class"]
 
@@ -730,8 +730,8 @@ def test_a_linked_root_source_navigates_its_members(tmp_path):
     real = tmp_path / "real"
     real.mkdir()
     (real / "top.sv").write_text("class probe_class;\n  int member;\n  function void action();\n"
-                                 "    member = 1;\n  endfunction\nendclass\n")
-    (real / "tb.f").write_text("top.sv\n")
+                                 "    member = 1;\n  endfunction\nendclass\n", encoding="utf-8", newline="")
+    (real / "tb.f").write_text("top.sv\n", encoding="utf-8", newline="")
     alias = tmp_path / "alias"
     alias.symlink_to(real, target_is_directory=True)
     c = serve(alias, "-f", str(alias / "tb.f"))  # by its alias: the server's cwd resolves a relative one
@@ -759,11 +759,11 @@ def test_a_linked_root_source_navigates_its_members(tmp_path):
 def test_retargeting_an_included_link_is_noticed(tmp_path, monkeypatch):
     root = tmp_path / "ws"
     root.mkdir()
-    (root / "one.svh").write_text("class old_target; endclass\n")
-    (root / "two.svh").write_text("class new_target; endclass\n")
+    (root / "one.svh").write_text("class old_target; endclass\n", encoding="utf-8", newline="")
+    (root / "two.svh").write_text("class new_target; endclass\n", encoding="utf-8", newline="")
     (root / "selected.svh").symlink_to(root / "one.svh")
-    (root / "top.sv").write_text('`include "selected.svh"\nclass top; endclass\n')
-    (root / "tb.f").write_text("top.sv\n")
+    (root / "top.sv").write_text('`include "selected.svh"\nclass top; endclass\n', encoding="utf-8", newline="")
+    (root / "tb.f").write_text("top.sv\n", encoding="utf-8", newline="")
     server = in_process(root, "tb.f")
     count = counting(server, monkeypatch)
     assert class_names(server) == ["old_target", "top"]
@@ -771,7 +771,7 @@ def test_retargeting_an_included_link_is_noticed(tmp_path, monkeypatch):
     os.replace(root / "selected.tmp", root / "selected.svh")  # the name and its stamp stay; the target changes
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["new_target", "top"]
-    (root / "two.svh").write_text("class new_target; endclass\nclass more; endclass\n")  # the target edited in place
+    (root / "two.svh").write_text("class new_target; endclass\nclass more; endclass\n", encoding="utf-8", newline="")  # the target edited in place
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["more", "new_target", "top"]
 
@@ -779,20 +779,20 @@ def test_retargeting_an_included_link_is_noticed(tmp_path, monkeypatch):
 def test_a_missing_header_of_any_extension_is_noticed_when_it_appears(tmp_path, monkeypatch):
     root = tmp_path / "ws"
     (root / "inc").mkdir(parents=True)
-    (root / "top.sv").write_text('`include "generated.inc"\n`include "gen/other.inc"\nclass top; endclass\n')
-    (root / "tb.f").write_text("+incdir+inc\ntop.sv\n")
+    (root / "top.sv").write_text('`include "generated.inc"\n`include "gen/other.inc"\nclass top; endclass\n', encoding="utf-8", newline="")
+    (root / "tb.f").write_text("+incdir+inc\ntop.sv\n", encoding="utf-8", newline="")
     server = in_process(root, "tb.f")
     count = counting(server, monkeypatch)
     assert class_names(server) == ["top"]
     assert {os.path.basename(p) for p in server.stamps if server.stamps[p] is None} >= {"generated.inc", "other.inc"}
-    (root / "generated.inc").write_text("class generated_header; endclass\n")  # next to the including file
+    (root / "generated.inc").write_text("class generated_header; endclass\n", encoding="utf-8", newline="")  # next to the including file
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["generated_header", "top"]
     (root / "inc" / "gen").mkdir()
-    (root / "inc" / "gen" / "other.inc").write_text("class other_header; endclass\n")  # in an include directory
+    (root / "inc" / "gen" / "other.inc").write_text("class other_header; endclass\n", encoding="utf-8", newline="")  # in an include directory
     server.refresh(force=True)
     assert count == [2] and class_names(server) == ["generated_header", "other_header", "top"]
-    (root / "generated.inc").write_text("class generated_header; endclass\nclass second; endclass\n")
+    (root / "generated.inc").write_text("class generated_header; endclass\nclass second; endclass\n", encoding="utf-8", newline="")
     server.refresh(force=True)
     assert count == [2] and class_names(server) == ["generated_header", "other_header", "second", "top"]
 
@@ -804,10 +804,10 @@ def test_a_batch_of_saves_parses_each_root_once(tmp_path, monkeypatch):
     for i in range(40):
         header = root / f"d{i:02d}" / "h.svh"
         header.parent.mkdir()
-        header.write_text(f"class c{i}; endclass\n")
+        header.write_text(f"class c{i}; endclass\n", encoding="utf-8", newline="")
         headers.append(header)
-    (root / "top.sv").write_text("".join(f'`include "{h.relative_to(root)}"\n' for h in headers))
-    (root / "tb.f").write_text("top.sv\n")
+    (root / "top.sv").write_text("".join(f'`include "{h.relative_to(root)}"\n' for h in headers), encoding="utf-8", newline="")
+    (root / "tb.f").write_text("top.sv\n", encoding="utf-8", newline="")
     server = in_process(root, "tb.f")
     count = counting(server, monkeypatch)
     parses = []
@@ -815,7 +815,7 @@ def test_a_batch_of_saves_parses_each_root_once(tmp_path, monkeypatch):
     monkeypatch.setattr(Indexer, "parse", lambda self, root, *a, **k: (parses.append(root), original(self, root, *a, **k))[1])
     for header in headers:
         tmp = header.with_suffix(".tmp")
-        tmp.write_text(header.read_text().replace("; endclass", "_saved; endclass"))
+        tmp.write_text(header.read_text(encoding="utf-8").replace("; endclass", "_saved; endclass"), encoding="utf-8", newline="")
         os.replace(tmp, header)
     server.refresh(force=True)
     assert count == [0] and parses == [str(root / "top.sv")]
@@ -825,7 +825,7 @@ def test_a_batch_of_saves_parses_each_root_once(tmp_path, monkeypatch):
 def test_a_source_landing_right_after_a_new_directory_is_listed_is_indexed(tmp_path, monkeypatch):
     root = tmp_path / "ws"
     root.mkdir()
-    (root / "top.sv").write_text("class top; endclass\n")
+    (root / "top.sv").write_text("class top; endclass\n", encoding="utf-8", newline="")
     ws = Workspace()
     ws.configure(ProjectConfig(workspace_roots=[str(root)], bundled_uvm=False))  # discovery
     server = mcp.McpServer(ws)
@@ -836,7 +836,7 @@ def test_a_source_landing_right_after_a_new_directory_is_listed_is_indexed(tmp_p
     def listing(directory):
         out = original(directory)
         if directory == str(new) and not (new / "h.sv").exists():
-            (new / "h.sv").write_text("class arrived; endclass\n")  # lands right after the listing
+            (new / "h.sv").write_text("class arrived; endclass\n", encoding="utf-8", newline="")  # lands right after the listing
         return out
     monkeypatch.setattr(server, "_listing", listing)
     server.refresh(force=True)
@@ -849,7 +849,7 @@ def test_a_source_landing_right_after_a_new_directory_is_listed_is_indexed(tmp_p
     def stamped(path):
         out = stamp(path)
         if path == str(later) and not (later / "h.sv").exists():
-            (later / "h.sv").write_text("class between; endclass\n")  # lands between the stamp and the listing
+            (later / "h.sv").write_text("class between; endclass\n", encoding="utf-8", newline="")  # lands between the stamp and the listing
         return out
     monkeypatch.setattr(mcp, "_stamp", stamped)
     server.refresh(force=True)  # in the listing: rebuilt at once
@@ -862,10 +862,10 @@ def test_retargeting_an_included_link_of_any_name_is_noticed(tmp_path, monkeypat
     root, outside = tmp_path / "ws", tmp_path / "external"
     root.mkdir()
     outside.mkdir()
-    (outside / "one").write_text("class old_target; endclass\n")
-    (outside / "two").write_text("class new_target; endclass\n")
-    (root / "top.sv").write_text('`include "selected.inc"\nclass top; endclass\n')
-    (root / "tb.f").write_text("top.sv\n")
+    (outside / "one").write_text("class old_target; endclass\n", encoding="utf-8", newline="")
+    (outside / "two").write_text("class new_target; endclass\n", encoding="utf-8", newline="")
+    (root / "top.sv").write_text('`include "selected.inc"\nclass top; endclass\n', encoding="utf-8", newline="")
+    (root / "tb.f").write_text("top.sv\n", encoding="utf-8", newline="")
     (root / "selected.inc").symlink_to(outside / "one")
     server = in_process(root, "tb.f")
     count = counting(server, monkeypatch)
@@ -874,7 +874,7 @@ def test_retargeting_an_included_link_of_any_name_is_noticed(tmp_path, monkeypat
     os.replace(root / "swap.tmp", root / "selected.inc")
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["new_target", "top"]
-    (outside / "two").write_text("class newer_target; endclass\n")
+    (outside / "two").write_text("class newer_target; endclass\n", encoding="utf-8", newline="")
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["newer_target", "top"]
     with pytest.raises(mcp.ToolError, match="outside the workspace"):
@@ -884,8 +884,8 @@ def test_retargeting_an_included_link_of_any_name_is_noticed(tmp_path, monkeypat
 def test_a_missing_header_in_an_include_dir_absent_at_startup_is_noticed(tmp_path, monkeypatch):
     root = tmp_path / "ws"
     (root / "inc1").mkdir(parents=True)
-    (root / "top.sv").write_text('`include "generated.inc"\nclass top; endclass\n')
-    (root / "tb.f").write_text("+incdir+inc1+inc2\ntop.sv\n")  # inc2 does not exist yet
+    (root / "top.sv").write_text('`include "generated.inc"\nclass top; endclass\n', encoding="utf-8", newline="")
+    (root / "tb.f").write_text("+incdir+inc1+inc2\ntop.sv\n", encoding="utf-8", newline="")  # inc2 does not exist yet
     server = in_process(root, "tb.f")
     count = counting(server, monkeypatch)
     assert server.ws.sources.absent_include_dirs == [str(root / "inc2")]
@@ -893,11 +893,11 @@ def test_a_missing_header_in_an_include_dir_absent_at_startup_is_noticed(tmp_pat
     (root / "inc2").mkdir()
     server.refresh(force=True)
     assert count == [0] and class_names(server) == ["top"]  # created but still empty
-    (root / "inc2" / "generated.inc").write_text("class generated; endclass\n")
+    (root / "inc2" / "generated.inc").write_text("class generated; endclass\n", encoding="utf-8", newline="")
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["generated", "top"]
     assert server.ws.sources.absent_include_dirs == []
-    (root / "inc1" / "generated.inc").write_text("class shadowing; endclass\n")  # earlier in the search order
+    (root / "inc1" / "generated.inc").write_text("class shadowing; endclass\n", encoding="utf-8", newline="")  # earlier in the search order
     server.refresh(force=True)
     assert count == [2] and class_names(server) == ["shadowing", "top"]
 
@@ -907,7 +907,7 @@ def linked_pair(tmp_path, files: dict) -> tuple[mcp.McpServer, mcp.McpServer]:
     real, alias = tmp_path / "real", tmp_path / "alias"
     real.mkdir()
     for name, text in files.items():
-        (real / name).write_text(text)
+        (real / name).write_text(text, encoding="utf-8", newline="")
     alias.symlink_to(real, target_is_directory=True)
     return in_process(real, "tb.f"), in_process(alias, "tb.f")
 
@@ -924,7 +924,7 @@ def test_signature_help_through_a_linked_root(tmp_path):
     assert linked.tool_signature(at) == expected
     assert linked.tool_signature({"file": str(tmp_path / "real" / "top.sv"), "line": 4, "col": 5}) == expected
     (tmp_path / "real" / "top.sv").write_text(
-        "class c;\n function void f(int arg, int more); endfunction\n function void g();\n  f(1);\n endfunction\nendclass\n")
+        "class c;\n function void f(int arg, int more); endfunction\n function void g();\n  f(1);\n endfunction\nendclass\n", encoding="utf-8", newline="")
     for server in (normal, linked):
         server.refresh(force=True)
     assert linked.tool_signature(at) == normal.tool_signature(at)
@@ -944,14 +944,14 @@ def test_the_complete_include_graph_through_a_linked_root(tmp_path):
 def test_the_real_path_cache_holds_the_live_files_only(tmp_path):
     root = tmp_path / "ws"
     root.mkdir()
-    (root / "top.sv").write_text("class top; endclass\n")
-    (root / "tb.f").write_text("top.sv\n")
+    (root / "top.sv").write_text("class top; endclass\n", encoding="utf-8", newline="")
+    (root / "tb.f").write_text("top.sv\n", encoding="utf-8", newline="")
     for i in range(20):
-        (root / f"h{i}.inc").write_text(f"class h{i}; endclass\n")
+        (root / f"h{i}.inc").write_text(f"class h{i}; endclass\n", encoding="utf-8", newline="")
     server = in_process(root, "tb.f")
     sources = server.ws.sources
     for i in range(20):
-        (root / "top.sv").write_text(f'`include "h{i}.inc"\nclass top; endclass\n')
+        (root / "top.sv").write_text(f'`include "h{i}.inc"\nclass top; endclass\n', encoding="utf-8", newline="")
         server.refresh(force=True)
         server.path_of("top.sv")
         assert set(server._real_of) == server.ws.files() == {str(root / "top.sv"), str(root / f"h{i}.inc")}
@@ -962,18 +962,18 @@ def test_discovery_watches_an_include_dir_outside_the_roots(tmp_path, monkeypatc
     root, first, last = tmp_path / "ws", tmp_path / "first", tmp_path / "last"
     root.mkdir()
     last.mkdir()
-    (last / "generated.inc").write_text("class fallback; endclass\n")
-    (root / "top.sv").write_text('`include "generated.inc"\nclass top; endclass\n')
+    (last / "generated.inc").write_text("class fallback; endclass\n", encoding="utf-8", newline="")
+    (root / "top.sv").write_text('`include "generated.inc"\nclass top; endclass\n', encoding="utf-8", newline="")
     ws = Workspace()
     ws.configure(ProjectConfig(workspace_roots=[str(root)], include_dirs=[str(first), str(last)], bundled_uvm=False))
     server = mcp.McpServer(ws)
     count = counting(server, monkeypatch)
     assert class_names(server) == ["fallback", "top"]
     first.mkdir()  # absent at the start, earlier in the search order
-    (first / "generated.inc").write_text("class preferred; endclass\n")
+    (first / "generated.inc").write_text("class preferred; endclass\n", encoding="utf-8", newline="")
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["preferred", "top"]
-    (first / "generated.inc").write_text("class preferred; endclass\nclass more; endclass\n")
+    (first / "generated.inc").write_text("class preferred; endclass\nclass more; endclass\n", encoding="utf-8", newline="")
     server.refresh(force=True)
     assert count == [1] and class_names(server) == ["more", "preferred", "top"]
 
@@ -982,11 +982,11 @@ def test_a_file_reached_by_its_real_path_and_through_a_link_keeps_both_roots_rec
     # alias.sv is a root through a link to shared.svh, which parent.sv also includes by its real
     # path with EXTRA defined: the call parent.sv's view records must survive the link's mapping.
     (tmp_path / 'alias.sv').symlink_to(tmp_path / 'shared.svh')
-    (tmp_path / 'tb.f').write_text('alias.sv\nparent.sv\n')
-    (tmp_path / 'parent.sv').write_text('`define EXTRA\n`include "shared.svh"\n')
+    (tmp_path / 'tb.f').write_text('alias.sv\nparent.sv\n', encoding="utf-8", newline="")
+    (tmp_path / 'parent.sv').write_text('`define EXTRA\n`include "shared.svh"\n', encoding="utf-8", newline="")
     (tmp_path / 'shared.svh').write_text(
         'class c;\n function void f(int arg); endfunction\n function void g();\n'
-        '`ifdef EXTRA\n  f(1);\n`else\n  f(2);\n`endif\n endfunction\nendclass\n')
+        '`ifdef EXTRA\n  f(1);\n`else\n  f(2);\n`endif\n endfunction\nendclass\n', encoding="utf-8", newline="")
     server = in_process(tmp_path, 'tb.f')
     found = server.tool_signature({'file': 'shared.svh', 'line': 5, 'col': 5})
     assert found['signature'] and found['signature']['label'] == 'function void f(int arg)'

@@ -4,6 +4,8 @@ import shutil
 
 import pytest
 
+from uvmls.server import path_to_uri
+
 from conftest import EXAMPLE
 from test_code_actions import Doc, start
 from test_lsp import Client
@@ -16,7 +18,7 @@ def tb(tmp_path_factory):
     root = tmp_path_factory.mktemp("inlay-hints") / "alu_tb"
     shutil.copytree(EXAMPLE, root)
     path = root / "tests/alu_tests.svh"
-    path.write_text(path.read_text().replace(
+    path.write_text(path.read_text(encoding="utf-8").replace(
         "alu_random_seq::type_id::set_type_override",
         "set_type_override_by_type(alu_driver::get_type(), alu_error_driver::get_type());\n"
         "    alu_random_seq::type_id::set_type_override") + '''
@@ -27,14 +29,14 @@ class alu_instance_test extends alu_base_test;
     super.build_phase(phase);
   endfunction
 endclass
-''')
+''', encoding="utf-8", newline="")
     path = root / "env/alu_env.svh"
-    path.write_text(path.read_text().replace("alu_agent      m_agent;", "alu_agent      m_agent;\n  alu_agent m_other;").replace(
+    path.write_text(path.read_text(encoding="utf-8").replace("alu_agent      m_agent;", "alu_agent      m_agent;\n  alu_agent m_other;").replace(
         'm_agent = alu_agent::type_id::create("m_agent", this);',
         'm_agent = alu_agent::type_id::create("m_agent", this);\n'
-        '    m_other = alu_agent::type_id::create("m_other", this);'))
+        '    m_other = alu_agent::type_id::create("m_other", this);'), encoding="utf-8", newline="")
     path = root / "tb/tb_top.sv"
-    path.write_text(path.read_text().replace('run_test("alu_random_test")', 'run_test("alu_add_test")'))
+    path.write_text(path.read_text(encoding="utf-8").replace('run_test("alu_random_test")', 'run_test("alu_add_test")'), encoding="utf-8", newline="")
     return root
 
 
@@ -44,7 +46,7 @@ def settings(root, **extra):
 
 def hints(client, path, start=(0, 0), end=(10000, 0)):
     return client.request("textDocument/inlayHint", {
-        "textDocument": {"uri": path.as_uri()},
+        "textDocument": {"uri": path_to_uri(str(path))},
         "range": {"start": {"line": start[0], "character": start[1]},
                   "end": {"line": end[0], "character": end[1]}}})
 
@@ -66,16 +68,16 @@ def test_factory_type_override(client, tb):
     [hint] = hints(client, path)
     assert label(hint) == " → alu_error_driver"
     assert hint["kind"] == 1 and hint["paddingLeft"] is True
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     line = next(i for i, text in enumerate(lines) if 'create("m_driver"' in text)
     assert hint["position"] == {"line": line, "character": lines[line].index(");") + 1}
     target = tb / "tests/alu_tests.svh"
-    override_line = next(i for i, text in enumerate(target.read_text().splitlines())
+    override_line = next(i for i, text in enumerate(target.read_text(encoding="utf-8").splitlines())
                          if "set_type_override_by_type" in text)
     assert hint["tooltip"] == {"kind": "markdown", "value":
         f"overridden in alu_add_test::build_phase (alu_tests.svh:{override_line + 1})"}
     [part] = hint["label"]
-    assert part["location"]["uri"] == target.as_uri()
+    assert part["location"]["uri"] == path_to_uri(str(target))
     assert part["location"]["range"]["start"] == {"line": override_line, "character": 4}
     tree = client.request("uvm/topology", {})["root"]
     drivers = [child for agent in tree["children"][0]["children"] for child in agent["children"]
@@ -95,9 +97,9 @@ def test_object_creates_do_not_replace_components(tb, tmp_path, before):
     root = tmp_path / "alu_tb"
     shutil.copytree(tb, root)
     test = root / "tests/alu_tests.svh"
-    test.write_text(test.read_text().replace("    alu_random_seq::type_id::set_type_override",
+    test.write_text(test.read_text(encoding="utf-8").replace("    alu_random_seq::type_id::set_type_override",
         "    alu_seq_item::type_id::set_type_override(hint_item::get_type());\n"
-        "    alu_random_seq::type_id::set_type_override"))
+        "    alu_random_seq::type_id::set_type_override"), encoding="utf-8", newline="")
     path = root / "agent/alu_agent.svh"
     methods = '''
   function void first_sequence();
@@ -109,7 +111,7 @@ def test_object_creates_do_not_replace_components(tb, tmp_path, before):
     m_driver = alu_seq_item::type_id::create("seq");
   endfunction
 '''
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     text = text.replace("  function new", methods + "  function new") if before else text.replace(
         "endclass", methods + "endclass")
     text = '''class hint_item extends alu_seq_item;
@@ -117,7 +119,7 @@ def test_object_creates_do_not_replace_components(tb, tmp_path, before):
   function new(string name = "hint_item"); super.new(name); endfunction
 endclass
 ''' + text
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="")
     c = start(root, capabilities=CAPABILITIES)
     try:
         tree = c.request("uvm/topology", {})["root"]
@@ -167,7 +169,7 @@ def test_factory_selected_test_and_opt_out(tb, test, enabled, expected):
 def test_inlay_capability(tb, capabilities, advertised):
     c = Client()
     try:
-        result = c.request("initialize", {"processId": None, "rootUri": tb.as_uri(),
+        result = c.request("initialize", {"processId": None, "rootUri": path_to_uri(str(tb)),
             "capabilities": capabilities, "initializationOptions": {"settings": settings(tb)}})
         assert result["capabilities"].get("inlayHintProvider") == ({"resolveProvider": False} if advertised else None)
     finally:
@@ -295,7 +297,7 @@ def members_tb(tmp_path_factory, tb):
     root = tmp_path_factory.mktemp("bound-members") / "alu_tb"
     shutil.copytree(tb, root)
     path = root / "agent/alu_driver.svh"
-    path.write_text(path.read_text() + MEMBERS)
+    path.write_text(path.read_text(encoding="utf-8") + MEMBERS, encoding="utf-8", newline="")
     return root
 
 
@@ -303,7 +305,7 @@ def test_bound_user_members_and_shadowing(members_tb):
     c = start(members_tb, capabilities=CAPABILITIES)
     try:
         path = members_tb / "agent/alu_driver.svh"
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         start_line = lines.index("class hint_base #(type T = uvm_sequence_item);")
         found = hints(c, path, start=(start_line, 0))
         expected = []
@@ -339,7 +341,7 @@ def test_named_arguments_only_hint_actual_members(tb, tmp_path, bundled):
     root = tmp_path / "alu_tb"
     shutil.copytree(tb, root)
     path = root / "agent/alu_driver.svh"
-    text = path.read_text() + '''
+    text = path.read_text(encoding="utf-8") + '''
 class hint_arguments extends uvm_driver #(alu_seq_item);
   function void consume(alu_seq_item req = null, alu_seq_item rsp = null); endfunction
   function void use_members();
@@ -354,7 +356,7 @@ class hint_arguments extends uvm_driver #(alu_seq_item);
   endfunction
 endclass
 '''
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="")
     c = start(root, capabilities=CAPABILITIES, settings=settings(root, useBundledUvm=bundled))
     try:
         lines = text.splitlines()
@@ -375,18 +377,28 @@ endclass
         c.close()
 
 
-def test_bound_member_unicode_and_edits(tb):
-    c = start(tb, capabilities=CAPABILITIES)
+def test_bound_member_unicode_and_edits(tb, tmp_path):
+    root = tmp_path / "crlf"
+    shutil.copytree(tb, root)
+    path = root / "agent/alu_driver.svh"
+    path.write_bytes(path.read_text(encoding="utf-8").replace("\n", "\r\n").encode("utf-8"))
+    c = start(root, capabilities=CAPABILITIES)
     try:
-        path = tb / "agent/alu_driver.svh"
-        doc = Doc(c, str(path))
+        doc = Doc(c, str(path), newline="")
         c.wait_for("uvm/indexChanged")
         assert len(hints(c, path)) == 2
-        doc.change(doc.text.replace("    drive_item(req);", '    /* 😀 */ drive_item(req); req = req;').replace("\n", "\r\n"))
+        doc.change(doc.text.replace("    drive_item(req);", '    /* 😀 */ drive_item(req); req = req;'))
         c.wait_for("uvm/indexChanged")
         found = hints(c, path)
         assert len(found) == 2
         assert found[1]["position"] == {"line": 26, "character": 27}
+        doc.version += 1
+        doc.text = "// café😀\r\n" + doc.text
+        c.notify("textDocument/didChange", {"textDocument": {"uri": doc.uri, "version": doc.version},
+            "contentChanges": [{"range": {"start": {"line": 0, "character": 0},
+                                          "end": {"line": 0, "character": 0}}, "text": "// café😀\r\n"}]})
+        c.wait_for("uvm/indexChanged")
+        assert hints(c, path)[1]["position"] == {"line": 27, "character": 27}
         doc.change(doc.text.replace("uvm_driver #(alu_seq_item)", "uvm_driver #(alu_agent_config)"))
         c.wait_for("uvm/indexChanged")
         assert [label(h) for h in hints(c, path)] == [": alu_agent_config", ": alu_agent_config"]
@@ -403,7 +415,7 @@ def test_compound_bindings_through_intermediate_classes(tb, tmp_path, argument, 
     root = tmp_path / "alu_tb"
     shutil.copytree(tb, root)
     path = root / "agent/alu_driver.svh"
-    text = path.read_text() + '''
+    text = path.read_text(encoding="utf-8") + '''
 class box #(type U = int); endclass
 class chain_base #(type T = int);
   T item;
@@ -419,7 +431,7 @@ class chain_open #(type A = alu_seq_item) extends chain_mid #(A);
   function void use_item(); item = null; endfunction
 endclass
 '''.replace("ARGUMENT", argument)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="")
     c = start(root, capabilities=CAPABILITIES)
     try:
         lines = text.splitlines()
@@ -436,13 +448,13 @@ def test_cold_hints_allow_queued_stats_request(tb, tmp_path):
     root = tmp_path / "alu_tb"
     shutil.copytree(tb, root)
     path = root / "agent/alu_driver.svh"
-    path.write_text(path.read_text().replace("    drive_item(req);", "    drive_item(req);\n" * 6000))
+    path.write_text(path.read_text(encoding="utf-8").replace("    drive_item(req);", "    drive_item(req);\n" * 6000), encoding="utf-8", newline="")
     c = start(root, capabilities=CAPABILITIES)
     try:
         c.next_id += 2
         hint_id, stats_id = c.next_id - 1, c.next_id
         c.send({"jsonrpc": "2.0", "id": hint_id, "method": "textDocument/inlayHint", "params": {
-            "textDocument": {"uri": path.as_uri()},
+            "textDocument": {"uri": path_to_uri(str(path))},
             "range": {"start": {"line": 0, "character": 0}, "end": {"line": 10000, "character": 0}}}})
         c.send({"jsonrpc": "2.0", "id": stats_id, "method": "uvm/stats", "params": {}})
         responses = []
@@ -471,7 +483,7 @@ def test_inlay_refresh_after_configuration_change(tb, refresh):
 
     c.read = record
     try:
-        c.request("initialize", {"processId": None, "rootUri": tb.as_uri(), "capabilities": {
+        c.request("initialize", {"processId": None, "rootUri": path_to_uri(str(tb)), "capabilities": {
             **CAPABILITIES, "workspace": {"inlayHint": {"refreshSupport": refresh}}},
             "initializationOptions": {"settings": settings(tb)}})
         c.notify("initialized", {})
@@ -493,7 +505,7 @@ def test_factory_hint_reveals_the_override_when_the_client_can(tb):
         [part] = hint["label"]
         assert "location" not in part  # VS Code would go to the definition of the call instead
         target = tb / "tests/alu_tests.svh"
-        line = next(i for i, text in enumerate(target.read_text().splitlines()) if "set_type_override_by_type" in text)
+        line = next(i for i, text in enumerate(target.read_text(encoding="utf-8").splitlines()) if "set_type_override_by_type" in text)
         assert part["command"]["command"] == "uvm.revealLocation"
         [arg] = part["command"]["arguments"]
         assert (arg["file"], arg["line"], arg["col"]) == (str(target), line, 4)

@@ -5,6 +5,8 @@ from copy import deepcopy
 
 import pytest
 
+from uvmls.server import path_to_uri
+
 from conftest import EXAMPLE
 from test_code_actions import Doc, start
 from test_lsp import Client
@@ -18,7 +20,7 @@ def tb(tmp_path_factory):
     root = tmp_path_factory.mktemp("config-navigation") / "alu_tb"
     shutil.copytree(EXAMPLE, root)
     path = root / "env/alu_env.svh"
-    path.write_text(path.read_text().replace("endclass", '''
+    path.write_text(path.read_text(encoding="utf-8").replace("endclass", '''
   task config_examples();
     int value;
     string field;
@@ -37,7 +39,7 @@ def tb(tmp_path_factory):
     uvm_resource_db #(int)::set("*", "resource", 1);
     void'(uvm_resource_db #(int)::read_by_name("", "resource", value));
   endtask
-endclass'''))
+endclass'''), encoding="utf-8", newline="")
     return root
 
 
@@ -49,7 +51,7 @@ def client(tb):
 
 
 def lenses(client, path):
-    return client.request("textDocument/codeLens", {"textDocument": {"uri": path.as_uri()}})
+    return client.request("textDocument/codeLens", {"textDocument": {"uri": path_to_uri(str(path))}})
 
 
 def config_lenses(client, path):
@@ -81,7 +83,7 @@ def test_config_lenses(client, tb):
     assert single["command"]["command"] == "uvm.revealLocation"
     [target] = single["command"]["arguments"]
     assert target == {"file": str(path), "line": 15, "col": 4, "endLine": 15, "endCol": 99}
-    line = (tb / "agent/alu_driver.svh").read_text().splitlines()[13]
+    line = (tb / "agent/alu_driver.svh").read_text(encoding="utf-8").splitlines()[13]
     assert single["range"] == {"start": {"line": 13, "character": line.index("uvm_config_db")},
                                 "end": {"line": 13, "character": line.rindex(")")}}
     assert any(l["command"]["title"] == "$(database) 'checks_enable' · no set"
@@ -112,12 +114,12 @@ def test_config_lenses_opt_out_keeps_class_lenses(tb, capabilities, setting):
 
 
 def at(path, needle, within=0, occurrence=0):
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     offset = -1
     for _ in range(occurrence + 1):
         offset = text.index(needle, offset + 1)
     offset += within
-    return {"textDocument": {"uri": path.as_uri()},
+    return {"textDocument": {"uri": path_to_uri(str(path))},
             "position": {"line": text[:offset].count("\n"),
                          "character": len(text[:offset].rsplit("\n", 1)[-1].encode("utf-16-le")) // 2}}
 
@@ -180,7 +182,7 @@ def test_config_hover_multiple_types_dynamic_scope_and_no_set(tmp_path):
     root = tmp_path / "alu_tb"
     shutil.copytree(EXAMPLE, root)
     path = root / "env/alu_env.svh"
-    path.write_text(path.read_text().replace("endclass", '''
+    path.write_text(path.read_text(encoding="utf-8").replace("endclass", '''
   typedef int integer_alias;
   function void extra();
     int value;
@@ -189,7 +191,7 @@ def test_config_hover_multiple_types_dynamic_scope_and_no_set(tmp_path):
     uvm_config_db #(bit)::set(this, "*", "typed", 1);
     void'(uvm_config_db #(int)::get(this, "", "typed", value));
   endfunction
-endclass'''))
+endclass'''), encoding="utf-8", newline="")
     c = start(root, capabilities=CAPABILITIES, clientCommands=COMMANDS)
     try:
         md = hover(c, path, '"typed"', 2)
@@ -207,7 +209,7 @@ def test_config_literal_ranges_with_unicode_and_crlf(tmp_path):
     root = tmp_path / "café"
     shutil.copytree(EXAMPLE, root)
     path = root / "env/alu_env.svh"
-    text = path.read_text().replace("endclass", '''
+    text = path.read_text(encoding="utf-8").replace("endclass", '''
   function void extra();
     int value;
     /* 😀 */ uvm_config_db #(int)::set(this, "café😀", "café😀", 1);
@@ -239,7 +241,7 @@ endclass''')
 
 def literal_location(path, field, occurrence=0):
     needle = '"' + field + '"'
-    return {"uri": path.as_uri(),
+    return {"uri": path_to_uri(str(path)),
             "range": {"start": at(path, needle, occurrence=occurrence)["position"],
                       "end": at(path, needle, len(needle), occurrence)["position"]}}
 
@@ -275,9 +277,9 @@ def test_config_definition_exists_and_wait_modified(client, tb):
 def test_config_definition_falls_back_without_counterparts_or_off_literal(client, tb):
     path = tb / "agent/alu_monitor.svh"
     [found] = definitions(client, path, '"checks_enable"')
-    assert found["uri"] == path.as_uri() and found["range"]["start"]["line"] == 7
+    assert found["uri"] == path_to_uri(str(path)) and found["range"]["start"]["line"] == 7
     [found] = definitions(client, path, "#(alu_agent_config)", 4)
-    assert found["uri"] == (tb / "agent/alu_agent_config.svh").as_uri()
+    assert found["uri"] == path_to_uri(str(tb / "agent/alu_agent_config.svh"))
     [found] = definitions(client, path, "::get", 3)
     assert found["uri"].endswith("uvm_config_db.svh")
     assert definitions(client, tb / "env/alu_env.svh", '"orphan"') is None
@@ -289,8 +291,8 @@ def test_config_navigation_follows_unsaved_set_location(tb):
     try:
         c.forget("uvm/indexChanged")
         c.notify("textDocument/didOpen", {"textDocument": {
-            "uri": path.as_uri(), "languageId": "systemverilog", "version": 1,
-            "text": "// moved\n" + path.read_text()}})
+            "uri": path_to_uri(str(path)), "languageId": "systemverilog", "version": 1,
+            "text": "// moved\n" + path.read_text(encoding="utf-8")}})
         c.wait_for("uvm/indexChanged")
         expected = literal_location(path, "alu_agent_config")
         for pos in expected["range"].values():
@@ -368,7 +370,7 @@ def test_config_lenses_refresh_after_index_and_settings(tb, support, refresh):
     path = tb / "agent/alu_driver.svh"
     count = int(bool(support and refresh))
     try:
-        c.request("initialize", {"processId": None, "rootUri": tb.as_uri(), "capabilities": caps,
+        c.request("initialize", {"processId": None, "rootUri": path_to_uri(str(tb)), "capabilities": caps,
                                 "initializationOptions": {"settings": settings, "clientCommands": COMMANDS}})
         c.notify("initialized", {})
         c.wait_for("uvm/indexChanged")
@@ -409,9 +411,9 @@ def macro_tb(tmp_path_factory, request):
         '`define PUT_WRAPPER(F) `PUT_CONFIG(F)\n'
         '`define GET_WRAPPER(F) `GET_CONFIG(F)\n'
         '`define BODY_CONFIG `PUT_CONFIG("body_field")\n'
-        f'`define CALL_CONFIG(OP,F) {db} #(int)::OP({context}"", F, value)\n')
+        f'`define CALL_CONFIG(OP,F) {db} #(int)::OP({context}"", F, value)\n', encoding="utf-8", newline="")
     path = root / "env/alu_env.svh"
-    text = '`include "config_macros.svh"\n' + path.read_text().replace("endclass", '''
+    text = '`include "config_macros.svh"\n' + path.read_text(encoding="utf-8").replace("endclass", '''
   function void macro_examples();
     int value;
     /* 😀 */ `PUT_CONFIG("café😀");
@@ -477,9 +479,9 @@ def multi_macro_tb(tmp_path_factory, request):
         f'`define SET_PAIR(A, B) {put_call}; \\\n'
         f'  {put_call.replace(", A,", ", B,")}\n'
         '`define PAIR_WRAPPER(A, B) `SET_PAIR(A, B)\n'
-        f'`define ROUND_TRIP(A, B) {put_call}; {get_call}\n')
+        f'`define ROUND_TRIP(A, B) {put_call}; {get_call}\n', encoding="utf-8", newline="")
     path = root / "env/alu_env.svh"
-    text = '`include "config_pairs.svh"\n' + path.read_text().replace("endclass", '''
+    text = '`include "config_pairs.svh"\n' + path.read_text(encoding="utf-8").replace("endclass", '''
   function void macro_pairs();
     int value;
     string dynamic_field;

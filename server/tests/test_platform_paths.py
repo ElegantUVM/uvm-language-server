@@ -13,7 +13,7 @@ from uvmls.server import path_to_uri, uri_to_path
 @pytest.mark.parametrize("name", ["Mixed Case.sv", "a#b%25.sv", "unicode-µ.sv"])
 def test_file_uri_round_trip(tmp_path, name):
     file = tmp_path / name
-    file.write_text("module top; endmodule\n", encoding="utf-8")
+    file.write_text("module top; endmodule\n", encoding="utf-8", newline="")
     key = project.norm(str(file))
     assert uri_to_path(path_to_uri(str(file))) == key
     assert os.path.isfile(key)
@@ -85,7 +85,7 @@ def test_index_lookups_normalize_aliases(tmp_path):
 
     text = 'module top;\n  function void go(int n); endfunction\n  initial go(1);\nendmodule\n'
     file = tmp_path / 'MixedCase.sv'
-    file.write_text(text, encoding='utf-8')
+    file.write_text(text, encoding='utf-8', newline="")
     ws = Workspace()
     ws.configure(project.ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
     key = project.norm(str(file))
@@ -107,6 +107,10 @@ def test_index_lookups_normalize_aliases(tmp_path):
     nav = Navigator(ws)
     assert nav.definition(alias, 2, 11, text) == nav.definition(key, 2, 11, text)
     assert nav.bound_member_hints(alias) == nav.bound_member_hints(key)
+    assert nav.occurrences("go", key)
+    assert nav.occurrences("go", alias) == nav.occurrences("go", key)
+    assert nav.document_highlights(key, 2, 10)
+    assert nav.document_highlights(alias, 2, 10) == nav.document_highlights(key, 2, 10)
     current = FileTexts({alias: (text + '// unsaved\n', 2)})
     assert current.get(key).text == text + '// unsaved\n'
     assert current.get(alias) is current.get(key)
@@ -125,3 +129,14 @@ def test_relative_or_absolute_across_windows_drives(monkeypatch, path, start, ex
 def test_relative_or_absolute_defaults_to_working_directory(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert project.relative_or_absolute(str(tmp_path / 'Top.sv')) == 'Top.sv'
+
+
+@pytest.mark.parametrize("path,root,expected", [
+    (r"C:\Design\agent\Top.sv", r"C:\Design", "agent/Top.sv"),
+    (r"C:\Design\Top.sv", r"D:\Workspace", "C:/Design/Top.sv"),
+    (r"\\Server\Share\Top.sv", r"C:\Design", "//Server/Share/Top.sv"),
+    (r"C:\Design\Top.sv", None, "C:/Design/Top.sv"),
+])
+def test_display_path_on_windows(monkeypatch, path, root, expected):
+    monkeypatch.setattr(project, "os", SimpleNamespace(path=ntpath, sep="\\"))
+    assert project.display_path(path, root) == expected

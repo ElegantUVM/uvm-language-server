@@ -22,7 +22,7 @@ from .lints import (
 from .elab import SOURCE as ELAB_SOURCE
 from .indexer import EOL_RE, FIX_DATA, IGNORE_RE, MASK_RE, NOT_EOL_RE, argument_spans, ignore_codes, ignore_directives, mask
 from .model import ClassInfo, Method, Range, Variable
-from .project import directory_stamp, discover_files, is_bundled, norm, relative_or_absolute
+from .project import directory_stamp, discover_files, display_path, is_bundled, norm
 from .views import canonical_type, config_db_report, mismatched
 from .workspace import BUILTIN_TYPES
 
@@ -829,7 +829,7 @@ def setting_value(ws, path: str) -> str:
     paths in it are read against) when inside it, else absolute."""
     roots = ws.config.workspace_roots
     if roots and (path == roots[0] or path.startswith(os.path.join(roots[0], ""))):
-        return relative_or_absolute(path, roots[0]).replace(os.sep, "/")
+        return display_path(path, roots[0])
     return path
 
 

@@ -2,6 +2,8 @@
 
 import pytest
 
+from uvmls.server import path_to_uri
+
 from test_fixes import CONFIG, example, findings, fix_once, index, offered, user_errors
 
 
@@ -41,7 +43,7 @@ def test_config_type_uses_a_direct_interface_spelling(tmp_path):
 def test_config_type_withholds_a_member_private_typedef(tmp_path):
     w = aliased_vif(tmp_path)
     path = tmp_path / "alu_tb" / "agent" / "alu_agent_config.svh"
-    path.write_text(path.read_text().replace("virtual alu_if        vif;", "typedef virtual alu_if vif_t;\n  vif_t vif;"))
+    path.write_text(path.read_text(encoding="utf-8").replace("virtual alu_if        vif;", "typedef virtual alu_if vif_t;\n  vif_t vif;"), encoding="utf-8", newline="")
     w.reindex_all()
     [d] = findings(w, "config-db-type-mismatch")
     assert offered(w, d) == []
@@ -54,15 +56,15 @@ def test_config_type_replaces_a_setter_private_class_alias(tmp_path, scope):
     w = example(tmp_path, {"agent/alu_driver.svh": ('#(alu_agent_config)::get', '#(uvm_object)::get')})
     root = tmp_path / "alu_tb"
     path = root / "env" / "alu_env.svh"
-    text = path.read_text().replace('#(alu_agent_config)::set', '#(agent_cfg_t)::set')
+    text = path.read_text(encoding="utf-8").replace('#(alu_agent_config)::set', '#(agent_cfg_t)::set')
     if scope == "class":
         text = text.replace('  `uvm_component_utils(alu_env)',
                             '  `uvm_component_utils(alu_env)\n  typedef alu_agent_config agent_cfg_t;')
     else:
         pkg = root / "env" / "alu_env_pkg.sv"
-        pkg.write_text(pkg.read_text().replace('  `include "alu_env.svh"',
-                                               '  typedef alu_agent_config agent_cfg_t;\n  `include "alu_env.svh"'))
-    path.write_text(text)
+        pkg.write_text(pkg.read_text(encoding="utf-8").replace('  `include "alu_env.svh"',
+                                               '  typedef alu_agent_config agent_cfg_t;\n  `include "alu_env.svh"'), encoding="utf-8", newline="")
+    path.write_text(text, encoding="utf-8", newline="")
     w.reindex_all()
     fix = fix_once(w, "config-db-type-mismatch")
     assert fix.preferred and "#(alu_agent_config)" in fix.title
@@ -166,9 +168,9 @@ def test_config_type_shadow_has_no_preferred_lsp_fix(tmp_path, shadow):
     from test_code_actions import IGNORE, start
 
     path = tmp_path / "t.sv"
-    path.write_text(shadowed_member_alias(shadow))
-    (tmp_path / "alu_tb.f").write_text("t.sv\n")
-    uri = path.as_uri()
+    path.write_text(shadowed_member_alias(shadow), encoding="utf-8", newline="")
+    (tmp_path / "alu_tb.f").write_text("t.sv\n", encoding="utf-8", newline="")
+    uri = path_to_uri(str(path))
     c = start(tmp_path, clientCommands=["uvm.showConfigDb"])
     try:
         msg = c.wait_for("textDocument/publishDiagnostics", lambda m: m["params"]["uri"] == uri)

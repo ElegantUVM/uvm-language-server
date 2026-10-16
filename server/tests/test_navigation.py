@@ -2,12 +2,13 @@ import os
 import re
 
 from uvmls.navigation import Navigator, expr_at
+from uvmls.project import display_path
 
 from conftest import EXAMPLE, position
 
 
 def rel(r):
-    return f"{os.path.relpath(r.path, EXAMPLE)}:{r.line + 1}"
+    return f"{display_path(r.path, EXAMPLE)}:{r.line + 1}"
 
 
 def defs(ws, *args, **kw):
@@ -184,6 +185,8 @@ def test_document_symbols(ws):
     syms = Navigator(ws).document_symbols(os.path.join(EXAMPLE, "agent/alu_driver.svh"))
     names = [s["name"] for s in syms]
     assert names == ["alu_driver", "alu_driver::run_phase", "alu_driver::drive_item", "alu_error_driver"]
+    alias = os.path.join(EXAMPLE, "agent", ".", "alu_driver.svh")
+    assert Navigator(ws).document_symbols(alias) == syms
 
 
 def test_with_real_uvm(uvm_ws):
@@ -191,7 +194,7 @@ def test_with_real_uvm(uvm_ws):
     target = defs(uvm_ws, "agent/alu_driver.svh", "get_next_item(req)", 14)[0]
     path, line = target.rsplit(":", 1)
     assert path.endswith("uvm_driver.svh")
-    with open(os.path.join(EXAMPLE, path)) as f:
+    with open(os.path.join(EXAMPLE, path), encoding="utf-8") as f:
         assert re.search(r"\bREQ\s+req\b", f.read().splitlines()[int(line) - 1])
 
 

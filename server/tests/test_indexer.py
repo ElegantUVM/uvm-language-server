@@ -69,7 +69,7 @@ def test_macro_shim_keeps_if_bodies_intact(ws):
 
 def test_unsaved_buffer_override(tmp_path):
     f = tmp_path / "a.sv"
-    f.write_text("class a; endclass\n")
+    f.write_text("class a; endclass\n", encoding="utf-8", newline="")
     ix = Indexer([], {}, use_shim=True)
     idx = ix.parse(str(f), {str(f): "class b extends a; endclass\n"})
     assert [c.name for c in idx.classes] == ["b"]
@@ -80,7 +80,7 @@ def test_structural_pairs_are_plain_source_tokens(tmp_path):
     from test_folding_range import SOURCE
 
     path = tmp_path / "structure.sv"
-    path.write_text(SOURCE)
+    path.write_text(SOURCE, encoding="utf-8", newline="")
     idx = Indexer([], {}, use_shim=True).parse(str(path), complete=True)
     lines = SOURCE.splitlines()
     found = []
@@ -99,7 +99,7 @@ def test_escaped_identifier_ranges(tmp_path):
     from uvmls.model import Range
 
     path = tmp_path / "escaped.sv"
-    path.write_text('class c;\n  int \\foo.bar ;\n  function void f(); \\foo.bar = 1; endfunction\nendclass\n')
+    path.write_text('class c;\n  int \\foo.bar ;\n  function void f(); \\foo.bar = 1; endfunction\nendclass\n', encoding="utf-8", newline="")
     idx = Indexer([], {}, use_shim=True).parse(str(path))
     assert idx.identifiers["foo.bar"] == [Range(str(path), 1, 6, 1, 14), Range(str(path), 2, 21, 2, 29)]
 
@@ -186,9 +186,9 @@ endclass
 `ifdef FOO
 typedef int t_foo;
 `endif
-''')
+''', encoding="utf-8", newline="")
     root = tmp_path / "top.sv"
-    root.write_text('package p1;\n`include "common.svh"\nendpackage\npackage p2;\n`include "common.svh"\nendpackage\n')
+    root.write_text('package p1;\n`include "common.svh"\nendpackage\npackage p2;\n`include "common.svh"\nendpackage\n', encoding="utf-8", newline="")
     idx = Indexer([str(tmp_path)], {}, use_shim=True).parse(str(root), complete=True)
     header = str(tmp_path / "common.svh")
     assert len([p for p in idx.structures if p.opening.path == header]) == 4
@@ -245,7 +245,7 @@ endclass
   int value;
 endclass
 '''
-    path.write_text(source)
+    path.write_text(source, encoding="utf-8", newline="")
     idx = Indexer([], {}, use_shim=True).parse(str(path), complete=True)
     [pair] = idx.structures
     assert (pair.opening.line, pair.closing.line) == (8, 13)
@@ -253,14 +253,14 @@ endclass
 
 def test_syntax_errors_are_reported(tmp_path):
     f = tmp_path / "bad.sv"
-    f.write_text("class c;\n  int x = ;\nendclass\n")
+    f.write_text("class c;\n  int x = ;\nendclass\n", encoding="utf-8", newline="")
     idx = Indexer([], {}, use_shim=True).parse(str(f))
     assert any(d.severity == "error" and d.range.line == 1 for d in idx.diagnostics)
 
 
 def test_include_skipped_by_its_guard(tmp_path):
-    (tmp_path / "h.svh").write_text("`ifndef H\n`define H\n`endif\n")
-    (tmp_path / "a.sv").write_text('`include "h.svh"\n`include "h.svh"\nmodule a; endmodule\n')
+    (tmp_path / "h.svh").write_text("`ifndef H\n`define H\n`endif\n", encoding="utf-8", newline="")
+    (tmp_path / "a.sv").write_text('`include "h.svh"\n`include "h.svh"\nmodule a; endmodule\n', encoding="utf-8", newline="")
     idx = Indexer([], {}, use_shim=True).parse(str(tmp_path / "a.sv"))
     h = str(tmp_path / "h.svh")
     assert idx.files == {str(tmp_path / "a.sv"), h}
@@ -296,7 +296,7 @@ class c;
   /* uvm-lint: ignore is only a line-comment directive. */
   function void h(); endfunction
 endclass
-""")
+""", encoding="utf-8", newline="")
     [cls] = Indexer([], {}, use_shim=True).parse(str(f)).classes
     assert cls.doc == ''
     assert {m.name: m.doc for m in cls.methods} == {
@@ -322,7 +322,7 @@ def test_doc_comments(tmp_path):
         "  // Function: other\n  // Not about stop.\n\n"
         "  extern function void stop();\n"
         "endclass\n"
-        "endpackage\n")
+        "endpackage\n", encoding="utf-8", newline="")
     (idx_cls,) = Indexer([], {}, use_shim=True).parse(str(f)).classes
     props = {v.name: v.doc for v in idx_cls.properties}
     meths = {m.name: m.doc for m in idx_cls.methods}
@@ -362,7 +362,7 @@ endpackage
 def test_where_edits_go(tmp_path):
     """Header ends, body statements, argument defaults and the registration macro call, in the
     file; never inside a macro's text."""
-    (tmp_path / "p.sv").write_text(EDIT_ANCHORS)
+    (tmp_path / "p.sv").write_text(EDIT_ANCHORS, encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     item, drv, ext = (w.find_class(n) for n in ("item", "drv", "ext"))
@@ -396,7 +396,7 @@ def test_where_edits_go(tmp_path):
 
 
 def test_fix_data_of_parse_diagnostics(tmp_path):
-    (tmp_path / "a.sv").write_text('`include "sub/missing_hdr.svh"\nmodule m;\n  intial begin end\nendmodule\n')
+    (tmp_path / "a.sv").write_text('`include "sub/missing_hdr.svh"\nmodule m;\n  intial begin end\nendmodule\n', encoding="utf-8", newline="")
     idx = Indexer([], {}, use_shim=True).parse(str(tmp_path / "a.sv"))
     assert [(d.code, d.data) for d in idx.diagnostics] == [
         ("CouldNotOpenIncludeFile", {"include": "sub/missing_hdr.svh"}),
@@ -718,7 +718,7 @@ def test_library_fold_walk_sees_directives_inside_skipped_syntax(tmp_path):
 def test_an_open_buffer_with_a_lone_surrogate_does_not_stop_indexing(tmp_path):
     # A client sends a lone surrogate as a \uXXXX escape; slang cannot take it as UTF-8.
     for name, cls in (('a.sv', 'a_c'), ('b.sv', 'b_c')):
-        (tmp_path / name).write_text(f'class {cls}; endclass\n')
+        (tmp_path / name).write_text(f'class {cls}; endclass\n', encoding="utf-8", newline="")
     ws = Workspace()
     ws.configure(ProjectConfig(workspace_roots=[str(tmp_path)]))
     ws.update_document(str(tmp_path / 'a.sv'), 'class a_c; // \ud800\nendclass\n')
@@ -733,11 +733,11 @@ def test_a_library_header_folds_the_same_whichever_file_asked_first(tmp_path):
     # roots, so they do not depend on which file was folded first.
     lib = tmp_path / 'lib'
     lib.mkdir()
-    (lib / 'uvm_pkg.sv').write_text('package uvm_pkg;\n`include "header.svh"\nendpackage\n')
-    (lib / 'uvm_macros.svh').write_text('// macros\n')
-    (lib / 'header.svh').write_text('class c;\n  function void f();\n    begin\n    end\n  endfunction\nendclass\n')
-    (tmp_path / 'top.sv').write_text('`include "header.svh"\nclass top;\nendclass\n')
-    (tmp_path / 'tb.f').write_text('top.sv\n')
+    (lib / 'uvm_pkg.sv').write_text('package uvm_pkg;\n`include "header.svh"\nendpackage\n', encoding="utf-8", newline="")
+    (lib / 'uvm_macros.svh').write_text('// macros\n', encoding="utf-8", newline="")
+    (lib / 'header.svh').write_text('class c;\n  function void f();\n    begin\n    end\n  endfunction\nendclass\n', encoding="utf-8", newline="")
+    (tmp_path / 'top.sv').write_text('`include "header.svh"\nclass top;\nendclass\n', encoding="utf-8", newline="")
+    (tmp_path / 'tb.f').write_text('top.sv\n', encoding="utf-8", newline="")
     ws = Workspace()
     ws.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / 'tb.f')],
                                uvm_home=str(lib), bundled_uvm=False, include_dirs=[str(lib)]))
@@ -757,13 +757,13 @@ def test_an_editor_text_sent_under_a_linked_path_reaches_the_index(tmp_path, con
     real, alias = tmp_path / "real", tmp_path / "alias"
     real.mkdir()
     alias.symlink_to(real, target_is_directory=True)
-    (real / "top.sv").write_text('`include "h.svh"\nclass top; endclass\n')
-    (real / "h.svh").write_text("class header; endclass\n")
-    (real / "tb.f").write_text("top.sv\n")
+    (real / "top.sv").write_text('`include "h.svh"\nclass top; endclass\n', encoding="utf-8", newline="")
+    (real / "h.svh").write_text("class header; endclass\n", encoding="utf-8", newline="")
+    (real / "tb.f").write_text("top.sv\n", encoding="utf-8", newline="")
     folder = alias if configured_alias else real
     ws = Workspace()
     ws.configure(ProjectConfig(workspace_roots=[str(folder)], filelists=[str(folder / "tb.f")], bundled_uvm=False))
-    ws.update_document(str(alias / file), (real / file).read_text() + "class unsaved; endclass\n")
+    ws.update_document(str(alias / file), (real / file).read_text(encoding="utf-8") + "class unsaved; endclass\n")
     assert "unsaved" in ws.classes_by_name and "top" in ws.classes_by_name
     assert any("class unsaved;" in t for t in ws.texts.values())
     ws.update_document(str(alias / file), None)

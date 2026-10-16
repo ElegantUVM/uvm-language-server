@@ -267,3 +267,179 @@ Only the Windows server CI log was present in the supplied `ci/` directory; it w
 first-run setup after these changes, and the launch corpus comparison (corpus unavailable here).
 No native failures can be declared eliminated from Linux evidence alone. F57/F27 remain partial;
 the reviewer should commit and push for the next native CI run.
+
+## 2026-10-16 19:45 UTC: second native CI run (reviewer) — instructions for the next turn
+
+Commit `109dc83`, run 38953024513. All setup-<target> jobs and client-and-packages **pass**. Every server job
+**fails**: ubuntu 3.11–3.14 and both macOS with the same 3 tests; Windows with 124 (down from 444). Logs:
+`.local-backups/f57-platforms/ci/windows-server-py312-run38953024513.log`. Items, in order:
+
+1. **All OSes, `tests/test_folding_range.py` (3):** `test_crossing_intervals_and_shared_start`,
+   `test_crossing_check_matches_pairwise_check`, `test_no_crossing_sweeps_without_crossing_folds` inject the
+   relative key `"a.sv"` into `folds_by_file` (lines ~673–710); `folding_ranges` now normalises its argument and
+   finds nothing. Use an absolute `tmp_path` key, as done for the highlight test. Grep every test module for
+   other relative keys (`"a.sv"`, `"t.sv"`, `"x.sv"` …) injected straight into workspace dicts and fix them all.
+2. **Production bug, filelists on Windows:** `project.parse_filelist` tokenises with `shlex.split(text, posix=True)`,
+   which eats backslashes: `C:\Users\...\proj\ext\uvm\src\uvm_pkg.sv` becomes `proj\UsersrunneradminAppData...`
+   (`test_configured_uvm_replaces_the_projects_own`), so the project's own UVM is not found
+   (`test_uvm_library_precedence`, `test_project_uvm_on_include_path_or_behind_uvm_sv`,
+   `test_a_listed_uvm_pkg_that_does_not_exist_is_not_the_uvm_library`, `test_elab.py::test_uvm_home_replaces_...`,
+   likely `test_include_cache`, `test_views`, `test_mcp`). **Decision:** on every platform, join `\`+newline
+   continuations first, then tokenise with backslash escapes disabled (`shlex.shlex(text, posix=True)` with
+   `escape = ""`, `whitespace_split = True`, keep quotes and `#`/`//` comment handling exactly as today). Tests:
+   a Windows absolute path, a UNC path, a quoted path with spaces, a `\`-continued line; existing filelist tests
+   must not change. The corpus baseline is the guard for Linux (the reviewer runs it).
+3. **Encoding:** Windows' default text encoding is cp1252. Production: `cli.py:183` (`open(args.output, "w")`) and
+   `elab.py:456` (`os.fdopen(result_fd, "w")`) need `encoding="utf-8"`; grep for any other `open(`/`read_text(`/
+   `write_text(` without an encoding in `uvmls/`. Tests: every helper that reads or writes fixtures (`at()` in
+   `test_config_navigation.py:221`, and the `substring not found` families in `test_document_highlight`,
+   `test_folding_range`, `test_navigation`, `test_code_actions`…) must pass `encoding="utf-8"`, and
+   `newline=""` where the EOL matters (62 of the 124 are this).
+4. **Relative paths shown to users** (`test_navigation`: `'agent\\alu_seq_item.svh:3'` vs `'agent/alu_seq_item.svh:3'`;
+   `test_mcp` `file` fields; `test_views`, `test_include_cache`, `test_inlay_hints`): **Decision:** labels, MCP
+   `file` values and lens/hover text always use `/`. One helper (`project.display_path(path, root)` built on
+   `relative_or_absolute(...).replace(os.sep, "/")`), used at every site; index keys and URIs stay native.
+5. **URIs:** `path_to_uri` (pygls `from_fs_path`) lower-cases the drive letter, which is VS Code's own form
+   (`test_inlay_hints::test_factory_type_override`: `file:///c:/...` vs `file:///C:/...`). Keep it; make the tests
+   build expectations with `uvmls.server.path_to_uri`, never `Path.as_uri()` or `"file://" + path`.
+6. **CRLF line doubling:** `test_inlay_hints::test_bound_member_unicode_and_edits` reports `line 52` where `26` is
+   expected: a CRLF document (written by `write_text` on Windows) is counted twice somewhere in the edit path
+   (incremental `didChange` application or position mapping; `EOL_RE` itself is right). Reproduce on Linux by
+   writing the fixture with explicit `\r\n` bytes, fix production, keep the regression test with CRLF on all OSes.
+7. **Diagnosability for the next run:** the 11 `TimeoutError: textDocument/publishDiagnostics`
+   (`test_code_actions::test_removed_finding_does_not_match_its_neighbour[*]`, `test_config_type_scope`),
+   `test_lsp` elaboration tests (`TimeoutError: uvm/elaborationStatus`, `assert 'running' == 'off'`,
+   `assert 0 == 1`) and `test_sarif::test_stdout_is_only_sarif_and_file_can_accompany_json[*-elab]`
+   (`elab` exits 2 with `--sarif -`) give no reason in the log. Make `tests/test_lsp.py`'s `wait_for` include the
+   server's stderr tail in the `TimeoutError` message, and make the CLI print the elaboration worker's failure
+   reason to stderr when it exits 2. Then read `cli.py` / `elab.py` for how `--sarif -` redirects stdout and how
+   the worker is spawned (`sys.executable`, `-m uvmls elab-worker`, env, pipes) and fix what is Windows-unsafe
+   (an fd-level `dup2` of stdout while a child inherits it, `PYTHONPATH` separators, `creationflags`), with
+   a test that runs the worker spawn on all OSes.
+8. Local verification as before (client tests, typecheck, focused server tests incl. `test_project`,
+   `test_folding_range`, `test_inlay_hints`, `test_sarif`), append a dated section to this note, checkpoint.
+
+## 2026-10-16 19:55 UTC: second native CI follow-up (items 1–8)
+
+Worked through the reviewer's items in order from `109dc83`. Changes remain uncommitted;
+no commit, push, merge, publication, network fetch or lock resolution was performed. All
+four wheel locks and the Verible lock match `HEAD` byte-for-byte. The existing reviewer
+instructions in this note were preserved. Checkpoints were taken after each substantial step.
+
+1. **Workspace fixture keys:** the three folding regressions now inject absolute `tmp_path`
+   keys and use the same paths in `FoldRegion` and requests. All three failed before and pass
+   after the fix. A search across every test module found no other relative literal keys
+   injected into workspace dictionaries. Final CI-log review also identified a remaining
+   production path alias bug in document-symbol filtering: `agent/alu_driver.svh` was compared
+   directly with native index paths. Document symbols, document highlights and occurrences
+   now normalize their incoming paths before direct path comparisons. Dotted absolute aliases
+   reproduce the symbol/occurrence failures on Linux and pass after the fix; the alias regression
+   also checks highlight results and Windows drive aliases.
+2. **Filelists:** join backslash-newline continuations before stripping comments, then use
+   `shlex.shlex(posix=True)` with escaping disabled, whitespace splitting enabled and its own
+   commenters disabled. Existing quote and comment handling is retained. New tests cover a
+   Windows absolute path, UNC path, quoted spaces and LF/CRLF continuations. Existing filelist
+   expectations were not changed. The project module's 37 tests pass locally.
+3. **UTF-8 and fixture EOLs:** the two production omissions (`cli` output and the worker result
+   descriptor) now specify UTF-8; an AST/text audit found no other production text opens lacking
+   an encoding. Test fixture reads/writes specify UTF-8, and writers preserve their chosen
+   newlines. The shared `Doc` fixture normally opens an LF editor buffer, with `newline=""`
+   available for raw EOL tests. Formatting and explicit CRLF highlight tests use that option.
+   Unchanged-library tests read raw endings so opening an unchanged CRLF file is actually
+   unchanged. A formatter failure assertion uses `repr(path)`, matching production escaping.
+4. **Display paths:** added `project.display_path`, relative to a supplied root (absolute
+   otherwise), with `/` separators. CLI diagnostic labels, MCP file values, discovery paths
+   and relative include-directory setting values use it. Navigation/view test display helpers
+   use the same convention. Windows same-drive, cross-drive and UNC display regressions run on
+   every host. Index keys and location data used internally remain native.
+5. **Editor URIs:** fixture requests and expectations use `uvmls.server.path_to_uri`, including
+   config navigation, inlay hints, code actions, freshness and performance checks. No test uses
+   `Path.as_uri()` or concatenates `file://` with a filesystem path. SARIF's file URI checks
+   canonicalize through the server helpers, accepting the valid drive-letter casing of its
+   existing serializer. Production URI conversion was not changed.
+6. **CRLF line doubling:** an explicit CRLF-byte fixture reproduced the exact CI mismatch
+   `assert {'line': 52, 'character': 27} == {'line': 26, 'character': 27}` on Linux. The test was
+   replacing every LF in an already-CRLF buffer with CRLF, creating `\r\r\n`. Preserving the
+   existing endings fixes it; production correctly counts `\r\r\n` as two line breaks.
+   The permanent test starts from CRLF bytes on every host and checks a full Unicode edit,
+   an incremental CRLF insertion (hint moves from line 26 to 27) and a subsequent type edit.
+   Valid CRLF buffers showed no production line-counting bug, so no speculative edit-path
+   normalization was added.
+   The CRLF checkout check also reproduced a reverted-buffer elaboration timeout: its fixture
+   read CRLF disk files as LF, so the requested revert was still an unsaved change. That test
+   now preserves disk endings, covers both LF/CRLF explicitly and owns its server, preventing
+   open documents from leaking into later tests if it fails.
+7. **Diagnosability and worker audit:** `Client` drains bounded stderr in a background thread;
+   `wait_for` timeouts include its tail and recent worker status/log notifications. A focused
+   regression checks that Unicode stderr and the worker failure reason reach the exception.
+   The CLI already printed `elaboration failed: <reason>` before returning 2; four new tests
+   retain that guarantee for text, JSON and stdout SARIF combinations. The SARIF assertion now
+   includes captured stderr instead of discarding the reason. Inspection confirmed that CLI
+   elaboration is in-process, with SARIF directed explicitly to stdout; it does not redirect
+   the parent's stdout descriptor while spawning a worker. LSP/MCP workers already use
+   `sys.executable`, `-m uvmls elab-worker`, `os.pathsep`, separate pipes and no shell or
+   platform creation flags. New tests exercise both real spawn paths from another working
+   directory, with an existing multi-entry PYTHONPATH and cp1252 Python stream encoding.
+   The worker's own native-output redirection stays confined to the worker. No additional
+   Windows-unsafe spawn operation was established locally.
+8. **Local verification (Linux, offline):**
+   - `cd client && node --test tests/*.test.cjs`: passed (five isolated test-file entries).
+     `node --test --test-isolation=none tests/*.test.cjs`: **41 passed**.
+   - `cd client && npm run typecheck`: passed.
+   - Direct `.venv/bin/python` path/project/navigation/view checks: **97 passed**.
+     After the final path-alias correction, navigation/platform tests: **41 passed**.
+   - Direct final SARIF module: **35 passed**; Python 3.11 syntax compatibility: **2 passed**.
+   - New timeout diagnostic regression: **1 passed**; worker-spawn/CLI-failure tests: **6 passed**.
+   - With the selector wrapper, final highlight/formatter checks: **72 passed, 133 deselected**;
+     final LSP module: **27 passed**, including explicit LF and CRLF reverted-buffer cases.
+   - Temporary CRLF checkout: **13 passed, 377 deselected** for folding/highlight/hints/signatures/
+     library identity; **2 passed, 187 deselected** for the final code-action/formatter fixtures;
+     final affected LSP cases: **5 passed, 22 deselected**. The initial CRLF LSP run had one
+     failure (`test_reverted_buffer_is_elaborated_again`, `TimeoutError: uvm/elaborationStatus`),
+     reproduced and corrected as described in item 6.
+   - Broad server suite with the selector wrapper: **1,587 passed, 13 skipped in 565.30 s**.
+     This run started before the final navigation/fixture follow-ups; the affected modules
+     were rerun after their final edits as listed above. The last filelist fixture check also
+     passes with unquoted drive/UNC paths and a quoted path containing spaces (**37 passed**).
+   - `git diff --check`: passed. Encoding audit and five lock-byte comparisons: passed.
+
+The selector wrapper is the pre-existing `/tmp/f57-validation/python`; protocol results using it
+are Linux evidence only. A temporary copy with CRLF example and bundled-library sources was
+used for checkout-EOL checks; tracked examples and bundled sources were not modified. Evidence
+is under `.local-backups/f57-platforms/evidence/second-native-followup/`, including the failing
+CRLF reproduction and navigation-alias regressions before their fixes.
+
+**Native follow-up remains required.** No local result establishes Windows/macOS acceptance,
+packaging/first-run acceptance after these changes, or the launch corpus baseline (not available
+here; the reviewer runs it). The prior native failures below could not be established as fixed
+by native execution in this sandbox. These are the exact assertions/errors from run 38953024513,
+not claims that all still fail in the edited tree:
+
+```text
+FAILED tests/test_code_actions.py::test_removed_finding_does_not_match_its_neighbour[False-False-False] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_code_actions.py::test_removed_finding_does_not_match_its_neighbour[False-False-True] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_code_actions.py::test_removed_finding_does_not_match_its_neighbour[False-True-False] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_code_actions.py::test_removed_finding_does_not_match_its_neighbour[False-True-True] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_code_actions.py::test_removed_finding_does_not_match_its_neighbour[True-False-False] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_code_actions.py::test_removed_finding_does_not_match_its_neighbour[True-False-True] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_code_actions.py::test_removed_finding_does_not_match_its_neighbour[True-True-False] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_code_actions.py::test_removed_finding_does_not_match_its_neighbour[True-True-True] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_config_type_scope.py::test_config_type_shadow_has_no_preferred_lsp_fix[localparam-type] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_config_type_scope.py::test_config_type_shadow_has_no_preferred_lsp_fix[enum-value] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_config_type_scope.py::test_config_type_shadow_has_no_preferred_lsp_fix[import] - TimeoutError: textDocument/publishDiagnostics
+FAILED tests/test_include_cache.py::test_include_cache_finds_new_unwatched_headers[True-True-h] - AssertionError: assert [('a', True)] == [('a', False), ('b', False)]
+FAILED tests/test_lsp.py::test_reverted_buffer_is_elaborated_again - assert 0 == 1
+FAILED tests/test_lsp.py::test_open_file_changed_by_another_program_is_elaborated - TimeoutError: uvm/elaborationStatus
+FAILED tests/test_lsp.py::test_elaboration_off_results_do_not_outlive_a_fix - AssertionError: assert 'running' == 'off'
+FAILED tests/test_lsp.py::test_an_edit_in_on_change_mode_supersedes_a_run_in_progress - assert [] == [18]
+FAILED tests/test_mcp.py::test_a_source_landing_right_after_a_new_directory_is_listed_is_indexed - AssertionError: assert ['top'] == ['arrived', 'top']
+FAILED tests/test_sarif.py::test_stdout_is_only_sarif_and_file_can_accompany_json[False-elab] - assert 2 == 1
+FAILED tests/test_sarif.py::test_stdout_is_only_sarif_and_file_can_accompany_json[True-elab] - assert 2 == 1
+```
+
+The SARIF native log additionally reports `The system cannot find the path specified` for
+sources below `alu tb é` (rendered with a replacement character in the saved log). Its CLI
+elaboration fails before producing findings; Linux elaboration of the same Unicode-path
+fixture succeeds. The directory-cache races likewise did not reproduce locally. They have not
+been masked with skips or timing sleeps. F57/F27 remain partial pending native CI and corpus
+acceptance. Final checkpoint taken after this note.

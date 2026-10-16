@@ -453,5 +453,5 @@ def worker():
         result["seconds"] = 0.0
     else:
         result = elaborate(request)
-    with os.fdopen(result_fd, "w") as f:
+    with os.fdopen(result_fd, "w", encoding="utf-8") as f:
         json.dump(result, f)

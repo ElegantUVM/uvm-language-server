@@ -121,8 +121,8 @@ def test_phase_fix_requires_complete_helper_bodies(tmp_path, shape):
 def test_phase_actions_follow_helper_visibility(tmp_path, phase):
     text = SOURCE.replace('build_phase', phase)
     path = tmp_path / 't.sv'
-    path.write_text(text)
-    (tmp_path / 'alu_tb.f').write_text('t.sv\n')
+    path.write_text(text, encoding="utf-8", newline="")
+    (tmp_path / 'alu_tb.f').write_text('t.sv\n', encoding="utf-8", newline="")
     c = start(str(tmp_path))
     try:
         doc = Doc(c, str(path))

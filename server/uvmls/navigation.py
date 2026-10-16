@@ -679,6 +679,7 @@ class Navigator:
         return out
 
     def occurrences(self, name, path=None) -> list[Range]:
+        path = norm(path) if path is not None else None
         out: list[Range] = []
         seen = set()
         for idx in self.ws.indices.values():
@@ -697,6 +698,7 @@ class Navigator:
     def document_highlights(self, path, line, col) -> list[Range]:
         """A keyword's matched pair, or the occurrences of an identifier in the file. The position
         just after a word is on it, unless a word starts there: editors ask with the cursor there."""
+        path = norm(path)
         pos = (line, col)
         structures = self.ws.structures_in(path)
 
@@ -891,6 +893,7 @@ class Navigator:
     # -- symbols ---------------------------------------------------------------
 
     def document_symbols(self, path: str) -> list[dict]:
+        path = norm(path)
         ws = self.ws
         syms = ws.symbols_in(path)
         units = [s for s in syms if isinstance(s, DesignUnit)]

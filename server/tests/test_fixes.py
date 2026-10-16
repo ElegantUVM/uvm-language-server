@@ -19,7 +19,7 @@ def index(tmp_path, files: dict[str, str | bytes], bundled=False, **cfg) -> Work
         if isinstance(text, bytes):
             p.write_bytes(text)
         else:
-            with open(p, "w", newline="") as f:  # keep the line ends as given
+            with open(p, "w", newline="", encoding="utf-8") as f:  # keep the line ends as given
                 f.write(text)
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=bundled, **cfg))
@@ -58,7 +58,7 @@ def round_trip(tmp_path, original: dict[str, str], planted: dict[str, str], code
     w = index(tmp_path, {**original, **planted}, bundled=bundled)
     fix = fix_once(w, code, title)
     for name, text in original.items():
-        with open(tmp_path / name, newline="") as f:
+        with open(tmp_path / name, newline="", encoding="utf-8") as f:
             assert f.read() == text, name
     assert not findings(w, code)
     return w, fix
@@ -199,7 +199,7 @@ def test_create_no_parent_after_a_comment(tmp_path):
     planted = COMPONENT.replace('create("m_drv", this)', 'create("m_drv" // its name\n    )')
     w = index(tmp_path, {"t.sv": planted})
     fix_once(w, "create-no-parent")
-    assert 'create("m_drv", this // its name\n    )' in (tmp_path / "t.sv").read_text()
+    assert 'create("m_drv", this // its name\n    )' in (tmp_path / "t.sv").read_text(encoding="utf-8")
     assert not findings(w, "create-no-parent")
 
 
@@ -219,7 +219,7 @@ def test_create_no_parent_after_named_name(tmp_path, arg, component):
         assert f'create({arg}, .parent({parent}))' in apply(FileText.from_disk(path).text, changes)
     fix = fix_once(w, "create-no-parent")
     assert fix.preferred == fix.safe == component
-    assert f'create({arg}, .parent({parent}))' in (tmp_path / "t.sv").read_text()
+    assert f'create({arg}, .parent({parent}))' in (tmp_path / "t.sv").read_text(encoding="utf-8")
     assert not findings(w, "create-no-parent")
     assert user_errors(w) == []
 
@@ -254,7 +254,7 @@ endclass
     fix_once(w, "create-no-parent")
     fix_once(w, "create-no-parent")
     assert not findings(w, "create-no-parent")
-    assert (tmp_path / "t.sv").read_text().count('create("d", null)') == 1
+    assert (tmp_path / "t.sv").read_text(encoding="utf-8").count('create("d", null)') == 1
 
 
 def test_create_no_parent_not_offered_in_a_macro_or_for_stale_text(tmp_path):
@@ -264,7 +264,7 @@ def test_create_no_parent_not_offered_in_a_macro_or_for_stale_text(tmp_path):
     macro, plain = findings(w, "create-no-parent")
     assert offered(w, macro) == [] and len(offered(w, plain)) == 1
     # The call no longer reads as the index has it (edited since): no fix.
-    (tmp_path / "t.sv").write_text((tmp_path / "t.sv").read_text().replace('create("d2")', 'create("d2" + "")'))
+    (tmp_path / "t.sv").write_text((tmp_path / "t.sv").read_text(encoding="utf-8").replace('create("d2")', 'create("d2" + "")'), encoding="utf-8", newline="")
     assert offered(w, plain) == []
 
 
@@ -340,7 +340,7 @@ endclass
     fix_once(w, "create-unregistered")
     fix_once(w, "create-unregistered")
     assert not findings(w, "create-unregistered")
-    after = (tmp_path / "t.sv").read_text()
+    after = (tmp_path / "t.sv").read_text(encoding="utf-8")
     assert "extends uvm_driver;\n  `uvm_component_param_utils(drv #(T, N))\n\n  T x;" in after
     assert "  class inner extends uvm_object;\n    `uvm_object_utils(inner)\n  endclass" in after
 
@@ -371,10 +371,10 @@ def test_register_does_not_duplicate_an_unknown_macro(tmp_path, check, location)
         hidden = hidden.replace("`project_component_utils(drv)", '`include "registration.svh"')
         registration = "`project_component_utils(drv)\n"
         if location == "nested-include":
-            (tmp_path / "utils.svh").write_text(registration)
+            (tmp_path / "utils.svh").write_text(registration, encoding="utf-8", newline="")
             registration = '`include "utils.svh"\n'
-        (tmp_path / "registration.svh").write_text(registration)
-    (tmp_path / "t.sv").write_text(hidden)
+        (tmp_path / "registration.svh").write_text(registration, encoding="utf-8", newline="")
+    (tmp_path / "t.sv").write_text(hidden, encoding="utf-8", newline="")
     w.reindex_all()
     assert slang_findings(w, "UnknownDirective")
     if check == "lint":
@@ -386,7 +386,7 @@ def test_register_does_not_duplicate_an_unknown_macro(tmp_path, check, location)
         assert fix_all(ctx, [stale]) == ([], [])
         assert all_fixed(w, path) == ([], [])
     # Restoring the missing definition must leave just one registration, which compiles.
-    (tmp_path / "t.sv").write_text('`define project_component_utils(T) `uvm_component_utils(T)\n' + hidden)
+    (tmp_path / "t.sv").write_text('`define project_component_utils(T) `uvm_component_utils(T)\n' + hidden, encoding="utf-8", newline="")
     w.reindex_all()
     assert not findings(w, "create-unregistered") and user_errors(w) == []
 
@@ -701,7 +701,7 @@ class c extends uvm_object; `uvm_object_utils(c) endclass
     fix_once(w, "factory-ctor")
     fix_once(w, "factory-ctor")
     assert [(d.data["cls"], offered(w, d)) for d in findings(w, "factory-ctor")] == [("c", [])]  # one line
-    assert (tmp_path / "t.sv").read_text() == """import uvm_pkg::*;
+    assert (tmp_path / "t.sv").read_text(encoding="utf-8") == """import uvm_pkg::*;
 class a extends uvm_object; `uvm_object_utils(a)
 
   function new(string name = "a");
@@ -745,7 +745,7 @@ def test_factory_ctor_after_closed_trailing_comment(tmp_path, after):
     w = index(tmp_path, {"t.sv": text})
     fix_once(w, "factory-ctor")
     assert not findings(w, "factory-ctor")
-    assert (tmp_path / "t.sv").read_text() == text.replace(
+    assert (tmp_path / "t.sv").read_text(encoding="utf-8") == text.replace(
         "\nendclass", '\n\n  function new(string name = "itm");\n    super.new(name);\n  endfunction\nendclass')
 
 
@@ -910,7 +910,7 @@ def test_create_new_with_factory_named_arguments(tmp_path, args):
     w = index(tmp_path, {"t.sv": '`include "uvm_macros.svh"\n' + text}, bundled=True)
     assert user_errors(w) == []
     fix_once(w, "create-new")
-    assert f'm = mon::type_id::create({args})' in (tmp_path / "t.sv").read_text()
+    assert f'm = mon::type_id::create({args})' in (tmp_path / "t.sv").read_text(encoding="utf-8")
     assert not findings(w, "create-new") and user_errors(w) == []
 
 
@@ -1253,7 +1253,7 @@ def test_config_db_typo(tmp_path):
          ("uvm.showConfigDb", [{"field": "checks_enable"}]))]
     fix_once(w, "config-db-no-set")
     assert not findings(w, "config-db-no-set") and \
-        'get(this, "", "checks_enabled", checks_enable)' in (tmp_path / "t.sv").read_text()
+        'get(this, "", "checks_enabled", checks_enable)' in (tmp_path / "t.sv").read_text(encoding="utf-8")
 
 
 def test_config_db_typo_candidates(tmp_path):
@@ -1348,7 +1348,7 @@ def elab_findings(w: Workspace, code: str) -> list:
 def apply_fix(w: Workspace, fix):
     for path in {c.path for c in fix.changes}:
         ft = FileText.from_disk(path)
-        with open(path, "w", newline="") as f:
+        with open(path, "w", newline="", encoding="utf-8") as f:
             f.write(apply(ft.text, [c for c in fix.changes if c.path == path]))
     w.reindex_all()
 
@@ -1360,7 +1360,7 @@ def test_typo_keyword(tmp_path):
     [fix] = offered(w, d)
     assert (fix.title, fix.preferred, fix.safe) == ("Change 'alwasy' to 'always'", True, False)
     apply_fix(w, fix)
-    assert (tmp_path / "m.sv").read_text() == text and not slang_findings(w, "TypoKeyword")
+    assert (tmp_path / "m.sv").read_text(encoding="utf-8") == text and not slang_findings(w, "TypoKeyword")
 
 
 @pytest.mark.parametrize("prefix", ['', '`include "missing.svh"\n', '`UNKNOWN\n'])
@@ -1469,7 +1469,7 @@ def test_missing_include_filelist(tmp_path, before):
     assert offered(w, d) == []
     [fix] = offered(w, d, commands=frozenset({"uvm.addIncludeDir"}))
     assert fix.command == ("uvm.addIncludeDir", [{"dir": str(tmp_path / "inc"), "value": "inc"}]) and not fix.changes
-    with open(tmp_path / "tb.f", newline="") as f:
+    with open(tmp_path / "tb.f", newline="", encoding="utf-8") as f:
         assert f.read() == before
     w.configure(ProjectConfig(workspace_roots=[str(tmp_path)], filelists=[str(tmp_path / "tb.f")],
                               include_dirs=[str(tmp_path / "inc")], bundled_uvm=False))
@@ -1478,7 +1478,7 @@ def test_missing_include_filelist(tmp_path, before):
 
 def test_missing_include_filelist_outside_the_workspace(tmp_path):
     (tmp_path / "flows").mkdir()
-    (tmp_path / "flows" / "tb.f").write_text("../ws/t.sv\n")
+    (tmp_path / "flows" / "tb.f").write_text("../ws/t.sv\n", encoding="utf-8", newline="")
     files = {"inc/sub/hdr.svh": "int q;\n", "t.sv": '`include "sub/hdr.svh"\nmodule t; endmodule\n'}
     w = index(tmp_path / "ws", files, filelists=[str(tmp_path / "flows" / "tb.f")])
     [d] = slang_findings(w, "CouldNotOpenIncludeFile")
@@ -1504,7 +1504,7 @@ def test_fix_all_makes_a_shared_edit_once(tmp_path):
     # Two creates of mon, registered once.
     assert [d.code for d in fixed] == ["create-unregistered", "create-unregistered"] and len(changes) == 1
     text = apply(FileText.from_disk(path).text, changes)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     w.reindex_all()
     # Each pass fixes what it can: now the second create's missing parent shows, and is fixed.
@@ -1613,7 +1613,7 @@ def test_lint_leaves_out_ignored_findings(tmp_path):
         11: ["create-no-parent"], 15: ["no-such-code", "create-no-parent", "create-new"],
         16: ["create-no-parent"], 17: ["create-new", "factory-ctor"], 20: ["create-no-parents"]}}
     # Without them, every create reports it.
-    (tmp_path / "t.sv").write_text(IGNORED.replace("uvm-lint", "lint"))
+    (tmp_path / "t.sv").write_text(IGNORED.replace("uvm-lint", "lint"), encoding="utf-8", newline="")
     w.reindex_all()
     assert lines_of(w, "create-no-parent") == [11, 15, 16, 17, 18, 19, 20, 21] and w.ignores == {}
 
@@ -1671,7 +1671,7 @@ def test_fix_all_leaves_ignored_findings_alone(tmp_path):
                          "cfg.svh": CFG})
     path = str(tmp_path / "env.sv")
     assert [d.code for d in all_fixed(w, path)[1]] == ["create-no-parent", "create-no-parent"]
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(text.replace('create("m");', 'create("m");  // uvm-lint: ignore create-no-parent\n'
                                              '    m = mon::type_id::create("m2");'))
     w.reindex_all()
@@ -1694,7 +1694,7 @@ def test_the_cli_leaves_out_ignored_findings(tmp_path, capsys):
 
     status, out = run("--json")
     assert status == 1 and [(d["code"], d["line"]) for d in json.loads(out)] == [("create-no-parent", 13)]
-    (tmp_path / "env.sv").write_text(planted.replace('create("m");', 'create("m");  // uvm-lint: ignore create-no-parent'))
+    (tmp_path / "env.sv").write_text(planted.replace('create("m");', 'create("m");  // uvm-lint: ignore create-no-parent'), encoding="utf-8", newline="")
     assert run() == (0, "")
 
 
@@ -1768,7 +1768,7 @@ def ignore_round_trip(w: Workspace, d, expected: str):
     assert {c.path for c in fix.changes} == {d.range.path}
     before = all_findings(w)
     apply_fix(w, fix)
-    with open(d.range.path, newline="") as f:
+    with open(d.range.path, newline="", encoding="utf-8") as f:
         assert f.read() == expected
     before.remove((d.range.path, d.code, d.message))
     assert all_findings(w) == before
@@ -1812,7 +1812,7 @@ endclass
     cls = w.find_class('custom_test')
     method = cls.methods[0]
     assert method.doc == ('Custom build.' if doc else '')
-    after = Navigator(w).hover(cls.path, method.range.line, method.range.col, (tmp_path / 't.sv').read_text())
+    after = Navigator(w).hover(cls.path, method.range.line, method.range.col, (tmp_path / 't.sv').read_text(encoding="utf-8"))
     assert after == before
     assert 'uvm-lint' not in after
     assert ('Custom build.' if doc else 'doc from `base_test::build_phase`') in after
@@ -1907,9 +1907,9 @@ def example(tmp_path, plants: dict[str, tuple[str, str]]) -> Workspace:
     root = tmp_path / "alu_tb"
     shutil.copytree(EXAMPLE, root)
     for rel, (old, new) in plants.items():
-        text = (root / rel).read_text()
+        text = (root / rel).read_text(encoding="utf-8")
         assert old in text, rel
-        (root / rel).write_text(text.replace(old, new, 1))
+        (root / rel).write_text(text.replace(old, new, 1), encoding="utf-8", newline="")
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(root)], filelists=[str(root / "alu_tb.f")]))
     return w

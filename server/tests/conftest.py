@@ -49,7 +49,7 @@ def any_ws(request):
 def position(rel: str, needle: str, offset: int = 0, occurrence: int = 0):
     """(path, line, col, text) of `needle` (plus offset) in an example file."""
     path = os.path.join(EXAMPLE, rel)
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
     idx = -1
     for _ in range(occurrence + 1):

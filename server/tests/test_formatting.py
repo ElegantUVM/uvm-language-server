@@ -20,6 +20,7 @@ from conftest import EXAMPLE
 from uvmls import formatting
 from uvmls.indexer import SHIM_FILE
 from uvmls.project import BUNDLED_UVM, norm
+from uvmls.server import path_to_uri
 
 CAPABILITIES = {"textDocument": {"formatting": {}, "rangeFormatting": {}}}
 
@@ -33,7 +34,7 @@ class Formatter:
         script = (
             f"#!{sys._base_executable}\n"
             "import json, os, pathlib, subprocess, sys, time\n"
-            f"cfg = json.loads(pathlib.Path({str(self.control)!r}).read_text())\n"
+            f"cfg = json.loads(pathlib.Path({str(self.control)!r}).read_text(encoding='utf-8'))\n"
             "source = sys.stdin.buffer.read()\n"
             "child = None\n"
             "if cfg.get('child'):\n"
@@ -41,7 +42,7 @@ class Formatter:
             "        start_new_session=cfg.get('detached', False))\n"
             f"pathlib.Path({str(self.record)!r}).write_text(json.dumps({{\n"
             "    'argv': sys.argv[1:], 'stdin': source.decode('utf-8'),\n"
-            "    'cwd': os.getcwd(), 'pid': os.getpid(), 'child': child.pid if child else None}))\n"
+            "    'cwd': os.getcwd(), 'pid': os.getpid(), 'child': child.pid if child else None}), encoding='utf-8')\n"
             "sys.stderr.write(cfg.get('stderr', ''))\n"
             "sys.stderr.flush()\n"
             "time.sleep(cfg.get('delay', 0))\n"
@@ -54,22 +55,22 @@ class Formatter:
             from pip._vendor.distlib.scripts import ScriptMaker
             source = root / "formatter-source"
             source.mkdir(exist_ok=True)
-            source.joinpath(name).write_text("#!python\n" + script.split("\n", 1)[1], encoding="utf-8")
+            source.joinpath(name).write_text("#!python\n" + script.split("\n", 1)[1], encoding="utf-8", newline="")
             maker = ScriptMaker(str(source), str(root))
             maker.executable = sys.executable
             maker.make(name)
         else:
-            self.path.write_text(script, encoding="utf-8")
+            self.path.write_text(script, encoding="utf-8", newline="")
             self.path.chmod(0o755)
 
     def set(self, **kwargs):
-        self.control.write_text(json.dumps(kwargs))
+        self.control.write_text(json.dumps(kwargs), encoding="utf-8", newline="")
 
     def called(self):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             try:
-                return json.loads(self.record.read_text())
+                return json.loads(self.record.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 time.sleep(0.01)
         pytest.fail("formatter was not started")
@@ -93,7 +94,7 @@ def clients():
         params = {"processId": None, "capabilities": capabilities,
                   "initializationOptions": {"settings": c.settings}}
         if root is not None:
-            params["rootUri"] = root.as_uri()
+            params["rootUri"] = path_to_uri(str(root))
         c.initial = c.request("initialize", params)
         if initialize_index:
             c.notify("initialized", {})
@@ -109,7 +110,7 @@ def clients():
 def document(c, root, text="// BAD\n", name="t.sv"):
     path = root / name
     path.write_bytes(text.encode("utf-8"))
-    return Doc(c, str(path))
+    return Doc(c, str(path), newline="")
 
 
 def params(doc, **options):
@@ -159,7 +160,7 @@ def dead(pid, reaped=True):
             return
         if not reaped:
             try:
-                if Path(f"/proc/{pid}/stat").read_text().split(")", 1)[1].split()[0] == "Z":
+                if Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split(")", 1)[1].split()[0] == "Z":
                     return  # Orphaned descendants are reaped by the system, not the server.
             except OSError:
                 pass
@@ -255,7 +256,7 @@ def test_bad_explicit_path_does_not_fall_back(clients, fake, tmp_path, monkeypat
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     path = tmp_path / "other"
     if kind == "not_executable":
-        path.write_text("no")
+        path.write_text("no", encoding="utf-8", newline="")
     setting = "./verible-verilog-format" if kind == "relative_without_root" else str(path)
     if kind == "command":
         setting = str(fake.path) + " --extra"
@@ -276,7 +277,7 @@ def test_failure_discards_stdout(clients, fake, tmp_path, cfg, reason):
     assert format_doc(doc) == []
     msg = c.wait_for("window/logMessage", lambda m: reason in m["params"]["message"])
     assert repr(str(fake.path)) in msg["params"]["message"]
-    assert Path(doc.path).read_text() == doc.text
+    assert Path(doc.path).read_text(encoding="utf-8") == doc.text
 
 
 def test_timeout_kills_and_reaps(clients, fake, tmp_path):
@@ -346,7 +347,7 @@ def test_descendants_cannot_hold_formatter_pipes(clients, fake, tmp_path, ranged
         dead(record["pid"])
         if not detached:
             dead(record["child"], reaped=False)
-        assert Path(doc.path).read_text() == doc.text
+        assert Path(doc.path).read_text(encoding="utf-8") == doc.text
     finally:
         for pid in (record["pid"], record["child"]):
             try:
@@ -367,7 +368,7 @@ def test_stale_output_is_discarded(clients, fake, tmp_path, change):
     elif change in ("close", "reopen"):
         doc.close()
         if change == "reopen":
-            Doc(c, doc.path)
+            Doc(c, doc.path, newline="")
     else:
         c.notify("workspace/didChangeConfiguration", {"settings": {
             **c.settings, "formatter": {"path": str(fake.path) + "other"}}})
@@ -378,7 +379,7 @@ def test_stale_output_is_discarded(clients, fake, tmp_path, change):
 def test_ineligible_documents(clients, fake, tmp_path, uri):
     c = clients(tmp_path, {"path": str(fake.path)})
     if uri is None:
-        uri = Path(BUNDLED_UVM, "uvm_pkg.sv").as_uri()
+        uri = path_to_uri(str(Path(BUNDLED_UVM, "uvm_pkg.sv")))
     assert c.request("textDocument/formatting", {
         "textDocument": {"uri": uri}, "options": {"tabSize": 2, "insertSpaces": True}}) == []
     assert not fake.record.exists()
@@ -386,9 +387,9 @@ def test_ineligible_documents(clients, fake, tmp_path, uri):
 
 @pytest.mark.parametrize("bundled", [False, True])
 def test_macro_shim_is_library(clients, fake, tmp_path, bundled):
-    (tmp_path / "t.sv").write_text('`include "uvm_macros.svh"\nmodule m; endmodule\n')
+    (tmp_path / "t.sv").write_text('`include "uvm_macros.svh"\nmodule m; endmodule\n', encoding="utf-8", newline="")
     c = clients(tmp_path, {"path": str(fake.path)}, initialize_index=True, useBundledUvm=bundled)
-    shim = Doc(c, SHIM_FILE)
+    shim = Doc(c, SHIM_FILE, newline="")
     assert format_doc(shim) == format_range(shim, (0, 0), (1, 0)) == []
     assert not fake.record.exists()
 
@@ -518,7 +519,7 @@ def test_removed_directory_runs_in_nearest_existing_one(clients, fake, tmp_path)
 
 
 def test_spawn_failure(clients, fake, tmp_path):
-    fake.path.write_text("#!/nonexistent/interpreter\n")
+    fake.path.write_text("#!/nonexistent/interpreter\n", encoding="utf-8", newline="")
     c = clients(tmp_path, {"path": str(fake.path)})
     doc = document(c, tmp_path)
     assert format_doc(doc) == []
@@ -528,7 +529,7 @@ def test_spawn_failure(clients, fake, tmp_path):
 def test_library_and_language_filter_without_index(clients, fake, tmp_path):
     library = tmp_path / "library"
     library.mkdir()
-    (library / "uvm_pkg.sv").write_text("// BAD\n")
+    (library / "uvm_pkg.sv").write_text("// BAD\n", encoding="utf-8", newline="")
     c = clients(tmp_path, {"path": str(fake.path)})
     c.notify("workspace/didChangeConfiguration", {"settings": {**c.settings, "uvmHome": str(library)}})
     doc = document(c, library)
@@ -547,16 +548,16 @@ def test_project_library_is_protected_during_discovery(clients, fake, tmp_path, 
     library = tmp_path / "library"
     nested = library / "base"
     nested.mkdir(parents=True)
-    (library / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n")
-    (library / "uvm_macros.svh").write_text("// macros\n")
+    (library / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n", encoding="utf-8", newline="")
+    (library / "uvm_macros.svh").write_text("// macros\n", encoding="utf-8", newline="")
     targets = [library / "lib.svh", nested / "nested.svh"]
     for target in targets:
-        target.write_text("// BAD\n")
+        target.write_text("// BAD\n", encoding="utf-8", newline="")
     alias = tmp_path / "alias.svh"
     alias.symlink_to(targets[1])
     storage = tmp_path / "storage"
     storage.mkdir()
-    (storage / "linked.svh").write_text("// BAD\n")
+    (storage / "linked.svh").write_text("// BAD\n", encoding="utf-8", newline="")
     (library / "linked.svh").symlink_to(storage / "linked.svh")
     targets += [alias, library / "linked.svh"]
     filelist = tmp_path / "tb.f"
@@ -564,7 +565,7 @@ def test_project_library_is_protected_during_discovery(clients, fake, tmp_path, 
     entered, release = threading.Event(), threading.Event()
 
     def hold_filelist():
-        with filelist.open("w") as f:
+        with filelist.open("w", encoding="utf-8") as f:
             entered.set()
             release.wait(10)
             f.write("library/uvm_pkg.sv\nlibrary/lib.svh\n")
@@ -576,10 +577,10 @@ def test_project_library_is_protected_during_discovery(clients, fake, tmp_path, 
     request = (lambda doc: format_range(doc, (0, 0), (1, 0))) if ranged else format_doc
     try:
         assert entered.wait(5)
-        docs = [Doc(c, str(path)) for path in targets]
+        docs = [Doc(c, str(path), newline="") for path in targets]
         for doc in docs:
             assert request(doc) == []
-            assert Path(doc.path).read_text() == doc.text
+            assert Path(doc.path).read_text(encoding="utf-8") == doc.text
         assert not fake.record.exists()
         user = document(c, tmp_path)
         assert applied(user.text, request(user)) == "// good\n"
@@ -602,12 +603,12 @@ def test_library_files_through_links(clients, fake, tmp_path, ranged, indexed):
     for d in (uvm, store / "base", proj):
         d.mkdir(parents=True)
     for name in ("component", "base/object.svh", "shared.svh"):
-        (store / name).write_text("// BAD\n")
+        (store / name).write_text("// BAD\n", encoding="utf-8", newline="")
     (uvm / "uvm_component.svh").symlink_to(store / "component")
     (uvm / "base").symlink_to(store / "base", target_is_directory=True)
-    (uvm / "uvm_macros.svh").write_text("// macros\n")
+    (uvm / "uvm_macros.svh").write_text("// macros\n", encoding="utf-8", newline="")
     (uvm / "uvm_pkg.sv").write_text('package uvm_pkg;\n`include "uvm_component.svh"\n'
-                                    '`include "base/object.svh"\n`include "../../store/shared.svh"\nendpackage\n')
+                                    '`include "base/object.svh"\n`include "../../store/shared.svh"\nendpackage\n', encoding="utf-8", newline="")
     (proj / "alias.svh").symlink_to(store / "shared.svh")
     c = clients(proj, {"path": str(fake.path)}, initialize_index=indexed, uvmHome=str(uvm.parent))
     targets = [uvm / "uvm_component.svh", uvm / "base" / "object.svh"]
@@ -617,7 +618,7 @@ def test_library_files_through_links(clients, fake, tmp_path, ranged, indexed):
         targets += [store / "shared.svh", proj / "alias.svh"]
     request = (lambda doc: format_range(doc, (0, 0), (1, 0))) if ranged else format_doc
     for target in targets:
-        doc = Doc(c, str(target))
+        doc = Doc(c, str(target), newline="")
         assert request(doc) == []
         doc.close()
     assert not fake.record.exists()
@@ -633,24 +634,24 @@ def test_lone_uvm_pkg_ancestor_is_not_a_library(clients, fake, tmp_path, indexed
     (proj / "tb" / "t.sv").write_bytes(b"// BAD\n")
     settings = {"useBundledUvm": True}
     if layout == "above_workspace":
-        (tmp_path / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n")
+        (tmp_path / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n", encoding="utf-8", newline="")
     else:
-        (proj / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n")
-        (proj / "tb.f").write_text("tb/t.sv\n")
+        (proj / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n", encoding="utf-8", newline="")
+        (proj / "tb.f").write_text("tb/t.sv\n", encoding="utf-8", newline="")
         settings["filelists"] = [str(proj / "tb.f")]
     c = clients(proj, {"path": str(fake.path)}, initialize_index=indexed, **settings)
     if indexed:
         stats = c.request("uvm/stats", {})
         assert stats["uvm"]["source"] == "bundled" and stats["files"] == 1
-    doc = Doc(c, str(proj / "tb" / "t.sv"))
+    doc = Doc(c, str(proj / "tb" / "t.sv"), newline="")
     assert applied(doc.text, format_doc(doc)) == "// good\n"
     assert applied(doc.text, format_range(doc, (0, 0), (1, 0))) == "// good\n"
     # A UVM source tree stays library code even where the project uses another UVM.
     unused = tmp_path / "uvm-1.1d" / "src"
     (unused / "base").mkdir(parents=True)
     for name in ("uvm_pkg.sv", "uvm_macros.svh", "base/uvm_object.svh"):
-        (unused / name).write_text("// BAD\n")
-    assert format_doc(Doc(c, str(unused / "base" / "uvm_object.svh"))) == []
+        (unused / name).write_text("// BAD\n", encoding="utf-8", newline="")
+    assert format_doc(Doc(c, str(unused / "base" / "uvm_object.svh"), newline="")) == []
 
 
 def selection(start, end):
@@ -772,7 +773,7 @@ def test_formatter_settings_do_not_index_or_elaborate(clients, fake, tmp_path, m
     c = clients(tmp_path, {"path": str(fake.path)}, initialize_index=True, elaboration=mode)
     if mode != "off":
         c.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] != "running")
-    doc = Doc(c, str(tmp_path / "t.sv"))
+    doc = Doc(c, str(tmp_path / "t.sv"), newline="")
     c.wait_for("uvm/indexChanged")
     c.request("uvm/stats", {})
     c.forget("uvm/indexChanged", "uvm/elaborationStatus", "window/logMessage")
@@ -818,7 +819,7 @@ def test_unopened_disk_changes_during_run(clients, fake, tmp_path):
     doc.close()
     rid = pending(doc)
     fake.called()
-    Path(doc.path).write_text("// newer\n")
+    Path(doc.path).write_text("// newer\n", encoding="utf-8", newline="")
     assert response(c, rid)["result"] == []
 
 
@@ -829,7 +830,7 @@ def test_alu_unsaved_document_and_selection(clients, fake, tmp_path, encoding):
     c = clients(root, {"path": str(fake.path)},
                 {**CAPABILITIES, "general": {"positionEncodings": [encoding]}},
                 initialize_index=True, filelists=[str(root / "alu_tb.f")], useBundledUvm=True)
-    doc = Doc(c, str(root / "agent" / "alu_agent.svh"))
+    doc = Doc(c, str(root / "agent" / "alu_agent.svh"), newline="")
     disk = Path(doc.path).read_bytes()
     line = next(line for line in doc.text.splitlines() if "m_driver    =" in line)
     wanted = "/*😀*/" + line
@@ -890,7 +891,7 @@ def alu_agent(clients, tmp_path, formatter=None):
     root = tmp_path / "alu_tb"
     shutil.copytree(EXAMPLE, root)
     c = clients(root, formatter, initialize_index=True, filelists=[str(root / "alu_tb.f")], useBundledUvm=True)
-    return c, Doc(c, str(root / "agent" / "alu_agent.svh"))
+    return c, Doc(c, str(root / "agent" / "alu_agent.svh"), newline="")
 
 
 def test_alu_path_lookup_then_configured_executable(clients, fake, tmp_path, monkeypatch):
@@ -997,7 +998,7 @@ def test_alu_failures_then_recovery_without_reindexing(clients, fake, tmp_path):
     fake.set(exit=1, stderr="formatter failure", output="// would delete the source\n")
     configure(c, formatter={"path": str(fake.path)})
     message = fails("status 1")
-    assert str(fake.path) in message and "formatter failure" in message
+    assert repr(str(fake.path)) in message and "formatter failure" in message
     fake.record.unlink()
     fake.set(delay=30)
     fails("5 s")

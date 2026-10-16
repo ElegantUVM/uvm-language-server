@@ -9,7 +9,7 @@ from pygls.workspace import Workspace as LspWorkspace
 
 from test_fixes import index, offered, slang_findings
 from uvmls import fixes
-from uvmls.server import UvmLanguageServer, did_change_watched
+from uvmls.server import UvmLanguageServer, did_change_watched, path_to_uri
 
 
 def test_include_candidates_reuse_the_walk(tmp_path):
@@ -33,7 +33,7 @@ def test_include_cache_tracks_created_deleted_and_full_index(tmp_path):
         [d] = slang_findings(ws, 'CouldNotOpenIncludeFile')
         ls = UvmLanguageServer()
         ls.ws = ws
-        ls.protocol._workspace = LspWorkspace(tmp_path.as_uri())
+        ls.protocol._workspace = LspWorkspace(path_to_uri(str(tmp_path)))
         ls.workspace_roots = [str(tmp_path)]
         ls.settings = {'elaboration': 'off', 'useBundledUvm': False}
         ls.after_index = lambda: None
@@ -44,13 +44,13 @@ def test_include_cache_tracks_created_deleted_and_full_index(tmp_path):
         assert candidates() == ['inc']
         other = tmp_path / 'inc2' / 'sub' / 'hdr.svh'
         other.parent.mkdir(parents=True)
-        other.write_text('// another\n')
-        await did_change_watched(ls, T.DidChangeWatchedFilesParams([T.FileEvent(other.as_uri(), T.FileChangeType.Created)]))
+        other.write_text('// another\n', encoding="utf-8", newline="")
+        await did_change_watched(ls, T.DidChangeWatchedFilesParams([T.FileEvent(path_to_uri(str(other)), T.FileChangeType.Created)]))
         assert candidates() == ['inc', 'inc2']
         other.unlink()
-        await did_change_watched(ls, T.DidChangeWatchedFilesParams([T.FileEvent(other.as_uri(), T.FileChangeType.Deleted)]))
+        await did_change_watched(ls, T.DidChangeWatchedFilesParams([T.FileEvent(path_to_uri(str(other)), T.FileChangeType.Deleted)]))
         assert candidates() == ['inc']
-        other.write_text('// again\n')
+        other.write_text('// again\n', encoding="utf-8", newline="")
         await ls.full_index()
         assert candidates() == ['inc', 'inc2']
     asyncio.run(run())
@@ -86,10 +86,10 @@ def test_unwatched_header_move_over_stdio(tmp_path):
 
     text = '`include "defs.h"\n'
     path = tmp_path / 't.sv'
-    path.write_text('// before\n' + text)
-    (tmp_path / 'alu_tb.f').write_text('t.sv\n')
+    path.write_text('// before\n' + text, encoding="utf-8", newline="")
+    (tmp_path / 'alu_tb.f').write_text('t.sv\n', encoding="utf-8", newline="")
     (tmp_path / 'a').mkdir()
-    (tmp_path / 'a' / 'defs.h').write_text('// header\n')
+    (tmp_path / 'a' / 'defs.h').write_text('// header\n', encoding="utf-8", newline="")
     c = start(str(tmp_path), clientCommands=['uvm.addIncludeDir'], settings={
         'filelists': [str(tmp_path / 'alu_tb.f')], 'elaboration': 'off', 'useBundledUvm': False})
     try:
@@ -135,7 +135,7 @@ def test_include_cache_finds_new_unwatched_headers(tmp_path, suffix, existing, e
     with patch.object(fixes, 'discover_files', wraps=fixes.discover_files) as walk:
         assert candidates() == ([('a', True)] if existing else [])
         other.parent.mkdir(exist_ok=True)
-        other.write_text('// new\n')
+        other.write_text('// new\n', encoding="utf-8", newline="")
         ws.update_document(str(tmp_path / 't.sv'), '// edited\n' + text)
         expected = [('a', False), ('b', False)] if existing else [('b', True)]
         assert candidates() == expected
@@ -150,11 +150,11 @@ def test_new_unwatched_header_over_stdio(tmp_path, existing):
 
     text = '`include "defs.h"\n'
     path = tmp_path / 't.sv'
-    path.write_text(text)
-    (tmp_path / 'alu_tb.f').write_text('t.sv\n')
+    path.write_text(text, encoding="utf-8", newline="")
+    (tmp_path / 'alu_tb.f').write_text('t.sv\n', encoding="utf-8", newline="")
     if existing:
         (tmp_path / 'a').mkdir()
-        (tmp_path / 'a' / 'defs.h').write_text('// original\n')
+        (tmp_path / 'a' / 'defs.h').write_text('// original\n', encoding="utf-8", newline="")
     (tmp_path / 'b').mkdir()
     c = start(str(tmp_path), clientCommands=['uvm.addIncludeDir'], settings={
         'filelists': [str(tmp_path / 'alu_tb.f')], 'elaboration': 'off', 'useBundledUvm': False})
@@ -164,7 +164,7 @@ def test_new_unwatched_header_over_stdio(tmp_path, existing):
         [d] = doc.diagnostics(lambda ds: ds and ds[0]['range']['start']['line'] == 1)
         before = doc.actions([d])
         assert [a['command']['arguments'][0]['value'] for a in before] == (['a'] if existing else [])
-        (tmp_path / 'b' / 'defs.h').write_text('// new\n')
+        (tmp_path / 'b' / 'defs.h').write_text('// new\n', encoding="utf-8", newline="")
         doc.change('// edited\n// again\n' + text)
         [d] = doc.diagnostics(lambda ds: ds and ds[0]['range']['start']['line'] == 2)
         actions = doc.actions([d])

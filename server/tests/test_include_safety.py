@@ -15,5 +15,5 @@ def test_include_fix_never_edits_an_unsynced_filelist(tmp_path, suffix):
     assert actions and all(a.command and not a.changes for a in actions)
     assert offered(ws, d) == []
     # Saving the option before its watcher notification cannot produce a duplicate edit either.
-    (tmp_path / name).write_text(files[name] + '+incdir+inc\n')
+    (tmp_path / name).write_text(files[name] + '+incdir+inc\n', encoding="utf-8", newline="")
     assert all(not a.changes for a in offered(ws, d, commands=frozenset({'uvm.addIncludeDir'})))
