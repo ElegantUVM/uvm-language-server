@@ -438,7 +438,7 @@ def test_library_keywords_use_current_source(tmp_path):
     (src / "uvm_macros.svh").write_text("")
     path = src / "uvm_pkg.sv"
     text = "package uvm_pkg;\n/* 😀 */ class uvm_object;\n int value;\nendclass\nendpackage\n"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="")
     root = tmp_path / "tb"
     root.mkdir()
     (root / "t.sv").write_text("import uvm_pkg::*;\n")
@@ -473,16 +473,17 @@ def test_independent_provider_registration(tb, supported):
         c.close()
 
 
-def test_innermost_pair_at_shared_token():
+def test_innermost_pair_at_shared_token(tmp_path):
     from uvmls.model import Range, StructuralPair
     from uvmls.navigation import Navigator
     from uvmls.workspace import Workspace
 
     w = Workspace()
-    opening = Range("a.sv", 0, 0, 0, 5)
-    inner_end, outer_end = Range("a.sv", 3, 0, 3, 3), Range("a.sv", 6, 0, 6, 3)
-    w.structures_by_file["a.sv"] = [StructuralPair(opening, outer_end), StructuralPair(opening, inner_end)]
-    assert Navigator(w).document_highlights("a.sv", 0, 2) == [opening, inner_end]
+    path = str(tmp_path / "a.sv")
+    opening = Range(path, 0, 0, 0, 5)
+    inner_end, outer_end = Range(path, 3, 0, 3, 3), Range(path, 6, 0, 6, 3)
+    w.structures_by_file[path] = [StructuralPair(opening, outer_end), StructuralPair(opening, inner_end)]
+    assert Navigator(w).document_highlights(path, 0, 2) == [opening, inner_end]
 
 
 def test_comment_and_string_add_no_occurrences(doc):

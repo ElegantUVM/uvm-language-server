@@ -218,7 +218,7 @@ def test_uvm_descriptions_match_the_readme(tmp_path):
     from uvmls.sarif import build_log
 
     readme = Path(__file__).resolve().parents[2] / "README.md"
-    table = dict(re.findall(r"^\| `([^`]+)` \| ([^|]+) \|$", readme.read_text(), re.M))
+    table = dict(re.findall(r"^\| `([^`]+)` \| ([^|]+) \|$", readme.read_text(encoding="utf-8"), re.M))
     assert len(table) == 11
     span = Range(str(tmp_path / "t.sv"), 0, 0, 0, 1)
     run = build_log(tmp_path, [Diag(span, "finding", "warning", code, "uvm") for code in table])["runs"][0]
@@ -299,3 +299,24 @@ def test_global_failures_get_distinct_fingerprints(tmp_path):
     diags = [Diag(Range("", 0, 0, 0, 0), msg, "error", "NoTopModules", "slang-elab") for msg in ("a", "b")]
     results = build_log(tmp_path, diags, fallback=str(filelist))["runs"][0]["results"]
     assert results[0]["partialFingerprints"] != results[1]["partialFingerprints"]
+
+
+def test_cross_drive_location_uses_absolute_file_uri(tmp_path, monkeypatch):
+    from uvmls import project
+    from uvmls.sarif import build_log
+
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    external = tmp_path / 'external é.sv'
+    external.write_text('module top; endmodule\n', encoding='utf-8')
+
+    def cross_drive(path, start=None):
+        raise ValueError("path is on mount 'C:', start on mount 'D:'")
+
+    monkeypatch.setattr(project.os.path, 'relpath', cross_drive)
+    diag = Diag(Range(str(external), 0, 0, 0, 6), 'external', 'warning', 'test')
+    result = check_log(build_log(root, [diag]))['results'][0]
+    assert result['locations'][0]['physicalLocation']['artifactLocation'] == {'uri': external.as_uri()}
+    expected = hashlib.sha256(json.dumps([external.as_posix(), 'test', 'module top; endmodule'],
+                                        ensure_ascii=False).encode('utf-8')).hexdigest()
+    assert result['partialFingerprints'] == {'primaryLocationLineHash': expected}

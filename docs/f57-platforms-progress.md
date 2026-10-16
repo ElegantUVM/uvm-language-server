@@ -146,3 +146,124 @@ The final implementation, build logs, validation helpers, lock hash snapshot and
 are preserved in `.local-backups/f57-platforms/`. This is an untracked
 backup directory; the original Linux checkout's tracked files remain unchanged. No commits, pushes,
 merges or publishing have occurred.
+
+## 2026-10-16 18:50 UTC: first native CI run (reviewer) — instructions for the next turn
+
+The tree was committed as `5fda3c4` on `f57-platforms` and pushed; draft PR #1 ran the CI
+(run 38947869275). Results: ubuntu 3.11–3.14, macos-latest 3.12, macos-15-intel 3.12 server jobs **pass**;
+client-and-packages and setup-linux-x64 **pass**. Four jobs **fail**. Logs are saved under
+`.local-backups/f57-platforms/ci/` (the Windows server log is `windows-server-py312-run38947869275.log`,
+20,801 lines; read it with grep, not whole). Fix in this order; do not touch the locks.
+
+1. **server (windows-latest, 3.12): 444 failed, 1081 passed.** Most share one root cause: `project.norm`
+   lower-cases the drive letter, but `str(tmp_path)`, `os.getcwd()`, `relpath` roots and every path the tests
+   build keep `C:`. Index keys are then `c:\...` while lookups and expectations use `C:\...`
+   (`test_bindings`: `bound_member_hints` returns nothing; `test_project`: `assert ['c:\\Users\\...\\z\\inc'] ==
+   ['z/inc', ...]`; the `substring not found`, `assert None`, `[None, None]` families). **Decision:** fold the
+   drive letter to **upper** case instead (what Windows itself and `pathlib` show), keep everything else as is,
+   and make sure every lookup into the index goes through `norm`. Keep `test_platform_paths` aligned.
+2. **`os.path.relpath` across drives raises** `ValueError: path is on mount 'C:', start on mount 'D:'` (22 tests:
+   `cli.py:87`, `cli.py:177`, `sarif.py:68`, `fixes.py:830`, `mcp.py:686/690`, `project.py:226`). Add one helper
+   (for example `project.relative_or_absolute(path, start)`) that returns the absolute path when `relpath`
+   raises, and use it at every site. SARIF must then emit an absolute `file:///` URI for such a path (the
+   README already promises that for files outside the workspace).
+3. **`tests/test_action.py` (29):** the composite action is bash; on the Windows runner `bash` is the WSL
+   launcher. Skip the whole module on win32 with a reason (the action runs on Linux runners), do not port it.
+4. **`tests/test_formatting.py` (19):** `'// good\r\n' == '// good\n'` (6) and the `.EXE`-vs-`.exe` announce
+   line: decide per case whether it is the fixture (a Python-written fake formatter printing CRLF) or production
+   (the formatter output must be normalised to the document's EOL). The `.EXE` case is `shutil.which` returning
+   PATHEXT's case; compare case-insensitively on win32 or normalise the announced path.
+5. **Timeouts `textDocument/publishDiagnostics` (14) and the remaining families:** re-run after 1 and 2; most
+   should disappear. List what is left with the exact assertion, test by test.
+6. **client tests on all three native hosts** (`platform-package.yml` "Check client on the native host"):
+   - `tests/mcp.test.cjs:55` on Windows: the expectations hard-code `project/sim/tb.f` and `/opt/uvm`; the
+     actual values (`...\project\sim\tb.f`, `D:\opt\uvm`) are correct. Build the expected values with
+     `path.resolve` / `path.join` from the same inputs, and use a platform-absolute `uvmHome` fixture.
+   - `tests/packaging.test.cjs:93` on both macOS runners: `ENOENT ... cache/verible/fixture/win32-x64/
+     verible-verilog-format.exe` — the fixture writes a file into a directory it never creates; it passes on
+     Linux and Windows only by ordering. `mkdirSync(..., {recursive: true})` before every fixture write.
+7. Run `node --test client/tests/*.test.cjs` and the focused server tests locally, update this note, checkpoint.
+   The reviewer commits and pushes; the next CI run will show the rest.
+
+## 2026-10-16 19:08 UTC: first native CI follow-up (items 1–7)
+
+Worked through the reviewer's items in order. Changes are uncommitted; no commit, push, merge,
+publication, network fetch or lock resolution was performed. All four wheel locks and the Verible
+lock were compared byte-for-byte with `HEAD` and are unchanged. Checkpoints were taken after each
+substantial step and again after this note.
+
+1. **Index paths:** `project.norm` now uppercases only a drive letter, preserving directory/file
+   case and UNC names. Indexer source-manager paths use the same normalization. Workspace per-file
+   lookups, navigation/signature caches and current/indexed quick-fix texts normalize their incoming
+   paths. URI tests expect uppercase drives; a real temporary workspace regression checks aliased
+   lookups, including a lowercase drive on Windows.
+2. **Cross-drive paths:** added `project.relative_or_absolute`, returning an absolute normalized path
+   when `relpath` raises `ValueError`. All former `relpath` call sites in project discovery, CLI lint
+   and elaboration, SARIF, include-directory fixes and MCP use it. SARIF retains its absolute file URI
+   for external files and can now construct their fingerprints across drives. Regressions cover
+   Windows same-drive, different-drive and UNC paths on every host, plus SARIF when `relpath` raises
+   exactly `ValueError: path is on mount 'C:', start on mount 'D:'`.
+3. **Composite action:** the whole action test module skips on win32 with reason
+   `the bash composite action runs on Linux runners`. Its Linux tests still execute.
+4. **Formatter tests:** production already normalizes formatter output to the document's EOL, and
+   the recording executable already writes bytes. The six CRLF mismatches came from LF fixtures
+   written with Windows newline translation; these fixtures now write explicit bytes. The shared
+   open-document fixture reads UTF-8 explicitly while preserving EOLs, fixing the emoji positions.
+   ALU EOL variants first remove existing CRLF to avoid creating `\r\r\n` from Windows checkouts.
+   PATH lookup/announcement expectations compare with Windows case normalization; quoted log paths
+   are asserted using `repr`, matching production escaping. Only the POSIX non-executable-permission
+   case skips on Windows. Six new tests check LF/CRLF formatter output against all supported document
+   EOL/final-newline variants.
+5. **Remaining server families:** reran the original diagnostic timeout families and related
+   navigation, highlight, signature and elaboration tests with the existing validation wrapper.
+   The log also showed three explicit UTF-8 omissions, now fixed in the README/SARIF,
+   selected-library signature and library-highlight fixtures, and three project expectations now
+   compare `/`-separated relative paths on every host. The local rerun found one additional fixture:
+   `tests/test_document_highlight.py::test_innermost_pair_at_shared_token` injected the relative index
+   key `a.sv`. Its exact failing assertion was
+   `assert Navigator(w).document_highlights("a.sv", 0, 2) == [opening, inner_end]`
+   (`AssertionError: assert [] == [Range(path='a.sv', ...)]`). It now uses an absolute temporary path,
+   matching the index contract; the entire highlight module passes after correction.
+   No local diagnostic timeout or unresolved assertion remains in the selected tests. The original
+   14 `TimeoutError: textDocument/publishDiagnostics` cases and
+   `test_lsp.py::test_open_file_changed_by_another_program_is_elaborated`
+   (`TimeoutError: uvm/elaborationStatus`) all passed locally with the wrapper. This does not establish
+   which of the 444 original Windows failures remain on Windows; that requires the next native run.
+6. **Client fixtures:** MCP expected paths use `path.join`/`path.resolve`, with a platform-absolute
+   `uvmHome`. Every packaging fixture write ensures its parent directory exists. Investigation also
+   reproduced the macOS `ENOENT` exactly on Linux by using a symlinked temp directory: the standalone
+   fetch script's entry-point check silently skipped execution because its module path was resolved
+   while its argv path was not. The fixture now resolves its temporary root with `realpathSync`.
+   The corrupt-cache test failed before this fix at `packaging.test.cjs:93` with
+   `ENOENT: no such file or directory, open '.../cache/verible/fixture/win32-x64/verible-verilog-format.exe'`;
+   the packaging/MCP tests all pass with that same symlinked-temp setup after the fix.
+7. **Local validation:** Node 24.21.0, Python 3.14.4 on Linux, offline:
+   - `node --test client/tests/*.test.cjs` from the repository root: exit 0 (five test-file entries).
+     Also ran `node --test --test-isolation=none tests/*.test.cjs` from `client/`: **41 passed**.
+   - `npm run typecheck` from `client/`: passed.
+   - Path/project/SARIF focused tests with `.venv/bin/python`: **87 passed**.
+   - Binding/path/project tests at item 1: **57 passed**; formatter EOL regressions: **6 passed**.
+   - Fixes/MCP tests with `/tmp/f57-validation/python`: **311 passed**.
+   - Action tests with `.venv/bin/python`: **51 passed** on Linux.
+   - Formatting/code-action tests with the wrapper: **168 passed, 13 skipped** (real-Verible/platform
+     skips). Final focused lookup/announcement/EOL check after assertion cleanup: **8 passed**.
+   - Code-action, config-type-scope, config-navigation, document-highlight, signature-help, LSP and
+     elaboration modules with the wrapper: **478 passed, 1 skipped, 1 failed** in the initial rerun;
+     the sole failure was the relative-key fixture described in item 5. After correction, the entire
+     document-highlight module passed: **65 passed**. A direct focused highlight/SARIF run also
+     passed: **36 passed**. No other failures appeared in the broader run.
+   - Server freshness tests with the wrapper: **11 passed**.
+   - Packaging/MCP client tests with `TMPDIR=/tmp/f57-linked-tmp` (a directory symlink), isolation
+     disabled: **11 passed**, including all five packaging tests.
+   - `git diff --check`: passed. Lock bytes equal `HEAD`.
+
+The direct asyncio/stdio runs still stall in this sandbox and were interrupted where necessary;
+protocol/freshness results above use the pre-existing `/tmp/f57-validation/python` selector workaround.
+No production workaround was added. Validation logs are saved under the durable backup's
+`evidence/first-native-followup/` directory, including the initial fixture failure and its passing rerun.
+Only the Windows server CI log was present in the supplied `ci/` directory; it was searched with `rg`.
+
+**Still unverified:** actual Windows/macOS server and client runs, native packaging and offline
+first-run setup after these changes, and the launch corpus comparison (corpus unavailable here).
+No native failures can be declared eliminated from Linux evidence alone. F57/F27 remain partial;
+the reviewer should commit and push for the next native CI run.

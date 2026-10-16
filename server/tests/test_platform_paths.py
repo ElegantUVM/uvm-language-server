@@ -29,7 +29,7 @@ def test_windows_uri_round_trip_on_every_host(monkeypatch, path):
     assert uri_to_path(path_to_uri(path)) == key
     assert key.endswith(ntpath.basename(path))
     if path[1] == ":":
-        assert key[0] == path[0].lower()
+        assert key[0] == path[0].upper()
     else:
         assert key.startswith(r"\\Server\Share")
 
@@ -74,3 +74,54 @@ def test_intel_macos_never_uses_bundled_arm_formatter(tmp_path, monkeypatch):
     monkeypatch.setattr(formatting, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(formatting.platform, "machine", lambda: "x86_64")
     assert formatting.bundled() is None
+
+
+def test_index_lookups_normalize_aliases(tmp_path):
+    from uvmls.fixes import FileTexts
+    from uvmls.model import Range
+    from uvmls.navigation import Navigator
+    from uvmls.signatures import call_at
+    from uvmls.workspace import Workspace
+
+    text = 'module top;\n  function void go(int n); endfunction\n  initial go(1);\nendmodule\n'
+    file = tmp_path / 'MixedCase.sv'
+    file.write_text(text, encoding='utf-8')
+    ws = Workspace()
+    ws.configure(project.ProjectConfig(workspace_roots=[str(tmp_path)], bundled_uvm=False))
+    key = project.norm(str(file))
+    alias = os.path.join(str(tmp_path), '.', file.name)
+    if os.name == 'nt':
+        alias = alias[0].lower() + alias[1:]
+    assert key in ws.indices
+    assert ws.indices[key].files == {key}
+    assert ws.roots_for(alias) == [key]
+    assert ws.lines_of(alias) == ws.lines_of(key)
+    assert ws.symbols_in(alias) == ws.symbols_in(key)
+    assert ws.enclosing(alias, 2, 12) == ws.enclosing(key, 2, 12)
+    assert ws.units_at(Range(alias, 2, 12, 2, 12)) == ws.units_at(Range(key, 2, 12, 2, 12))
+    assert ws.structures_in(alias) == ws.structures_in(key)
+    assert ws.folds_in(alias) == ws.folds_in(key)
+    assert ws.directives_in(alias) == ws.directives_in(key)
+    assert ws.invocations_by_file.get(alias) == ws.invocations_by_file.get(key)
+    assert call_at(ws, alias, 2, 13) == call_at(ws, key, 2, 13)
+    nav = Navigator(ws)
+    assert nav.definition(alias, 2, 11, text) == nav.definition(key, 2, 11, text)
+    assert nav.bound_member_hints(alias) == nav.bound_member_hints(key)
+    current = FileTexts({alias: (text + '// unsaved\n', 2)})
+    assert current.get(key).text == text + '// unsaved\n'
+    assert current.get(alias) is current.get(key)
+
+
+@pytest.mark.parametrize('path,start,expected', [
+    (r'C:\Design\Top.sv', r'C:\Design', 'Top.sv'),
+    (r'c:\Design\Top.sv', r'D:\Workspace', r'C:\Design\Top.sv'),
+    (r'\\Server\Share\Top.sv', r'C:\Design', r'\\Server\Share\Top.sv'),
+])
+def test_relative_or_absolute_across_windows_drives(monkeypatch, path, start, expected):
+    monkeypatch.setattr(project, 'os', SimpleNamespace(path=ntpath))
+    assert project.relative_or_absolute(path, start) == expected
+
+
+def test_relative_or_absolute_defaults_to_working_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert project.relative_or_absolute(str(tmp_path / 'Top.sv')) == 'Top.sv'

@@ -19,6 +19,8 @@ from uvmls.sarif import build_log
 from conftest import EXAMPLE
 from test_sarif import check_log
 
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the bash composite action runs on Linux runners")
+
 REPO = Path(__file__).resolve().parents[2]
 MERGE = REPO / "tools" / "merge_sarif.py"
 

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 
 from . import naturaldocs
 from .indexer import SHIM_FILE
+from .project import norm
 from .model import ClassInfo, DesignUnit, MacroDef, Method, Range, Typedef, Variable, utf8_prefix
 from .uvm import builtin_params
 from .views import config_db_report, mismatched, norm_type
@@ -142,6 +143,7 @@ class Navigator:
         return self.resolve_expr(path, line, col, ce)
 
     def resolve_expr(self, path: str, line: int, col: int, ce: CursorExpr | None, strict: bool = False) -> list[Target]:
+        path = norm(path)
         if ce is None:
             return []
         ws = self.ws
@@ -299,6 +301,7 @@ class Navigator:
     def bound_member_hints(self, path: str, start_line: int = 0,
                            end_line: int | None = None) -> list[tuple[Range, str, str]]:
         ws = self.ws
+        path = norm(path)
         identifiers = ws.identifiers_by_file.get(path, ())
         first = bisect_left(identifiers, start_line, key=lambda pair: pair[1].line)
         last = bisect_right(identifiers, end_line, key=lambda pair: pair[1].line) \

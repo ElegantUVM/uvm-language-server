@@ -29,7 +29,7 @@ from .elab import ELAB_TIMEOUT, PACKAGE_PARENT, displayed, request_for, skip_rea
 from .indexer import SHIM_FILE
 from .model import ClassInfo, CreateCall, Range, SeqStart, Variable, utf8_prefix
 from .navigation import Navigator, expr_at
-from .project import DEFAULT_EXCLUDES, ProjectConfig, _exclusion, discover_files, is_bundled, is_sv_file, norm
+from .project import DEFAULT_EXCLUDES, ProjectConfig, _exclusion, discover_files, is_bundled, is_sv_file, norm, relative_or_absolute
 from .uvm import ROLE_ORDER
 from .views import config_db_report, effective_type, list_tests, topology
 from .workspace import Spec, Workspace
@@ -683,11 +683,11 @@ class McpServer:
         component, is matched once resolved."""
         for root in self.real_roots + self.roots:
             if path == root or path.startswith(root + os.sep):
-                return os.path.relpath(path, root)
+                return relative_or_absolute(path, root)
         real = os.path.realpath(path)
         for root in self.real_roots:
             if real == root or real.startswith(root + os.sep):
-                return os.path.relpath(real, root)
+                return relative_or_absolute(real, root)
         return path
 
     def location(self, path: str, line: int, col: int, end_line: int, end_col: int) -> dict:

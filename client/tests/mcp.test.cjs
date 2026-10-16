@@ -49,15 +49,15 @@ function mock({ root = path.resolve("project"), settings = {} } = {}) {
 
 const SETTINGS = {
   filelists: ["alu_tb.f", "${workspaceFolder}/sim/tb.f"], includeDirs: ["~/inc"], defines: { SIM: "1", GATE: "" },
-  uvmHome: "/opt/uvm", useBundledUvm: false, exclude: ["legacy/**"],
+  uvmHome: path.resolve("opt", "uvm"), useBundledUvm: false, exclude: ["legacy/**"],
 };
 
 test("the uvm settings become the CLI's flags, with every path absolute", () => {
   const m = mock({ settings: SETTINGS });
   const { mcpArguments } = load("mcp.ts", m.vscode);
   assert.deepEqual(plain(mcpArguments(m.root, m.vscode.workspace.getConfiguration("uvm"))), [
-    "-m", "uvmls", "mcp", m.root, "-f", path.join(m.root, "alu_tb.f"), "-f", `${m.root}/sim/tb.f`,
-    "-I", path.join(os.homedir(), "inc"), "-D", "SIM=1", "-D", "GATE", "--uvm-home", "/opt/uvm", "--no-bundled-uvm",
+    "-m", "uvmls", "mcp", m.root, "-f", path.join(m.root, "alu_tb.f"), "-f", path.resolve(m.root, "sim", "tb.f"),
+    "-I", path.join(os.homedir(), "inc"), "-D", "SIM=1", "-D", "GATE", "--uvm-home", SETTINGS.uvmHome, "--no-bundled-uvm",
     "--exclude", "legacy/**",
   ]);
   const bare = mock({ settings: {} });

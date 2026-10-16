@@ -26,14 +26,14 @@ def fake_uvm(home, rev: str) -> str:
 def test_filelist_mode_uses_listed_files_as_roots():
     ss = build_source_set(ProjectConfig(workspace_roots=[EXAMPLE], filelists=[FILELIST], bundled_uvm=False))
     assert ss.mode == "filelist"
-    assert [os.path.relpath(r, EXAMPLE) for r in ss.roots][:2] == ["rtl/alu.sv", "agent/alu_if.sv"]
+    assert [os.path.relpath(r, EXAMPLE).replace(os.sep, "/") for r in ss.roots][:2] == ["rtl/alu.sv", "agent/alu_if.sv"]
     assert os.path.join(EXAMPLE, "agent") in ss.include_dirs
     assert not ss.has_real_uvm_macros
 
 
 def test_discovery_mode_skips_included_files():
     ss = build_source_set(ProjectConfig(workspace_roots=[EXAMPLE]))
-    rel = {os.path.relpath(r, EXAMPLE) for r in ss.roots}
+    rel = {os.path.relpath(r, EXAMPLE).replace(os.sep, "/") for r in ss.roots}
     assert ss.mode == "discovery"
     assert "agent/alu_pkg.sv" in rel
     assert "agent/alu_driver.svh" not in rel  # included by alu_pkg.sv
@@ -244,7 +244,7 @@ def test_exclude_patterns_are_globs_below_each_root_unless_absolute(tmp_path):
 
     def left_out(*exclude):
         kept = discover_files([str(r) for r in roots], list(exclude))
-        return [os.path.relpath(f, tmp_path) for f in every if f not in kept]
+        return [os.path.relpath(f, tmp_path).replace(os.sep, "/") for f in every if f not in kept]
 
     def in_both(*files):
         return sorted(f"{r}/{f}" for r in ("b", "work/a") for f in files)

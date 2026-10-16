@@ -249,7 +249,8 @@ def test_explicit_path_is_one_executable_and_wins(clients, fake, tmp_path, monke
     assert not fake.record.exists() and not (tmp_path / "INJECTED").exists()
 
 
-@pytest.mark.parametrize("kind", ["missing", "not_executable", "relative_without_root", "command"])
+@pytest.mark.parametrize("kind", ["missing", pytest.param("not_executable", marks=pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX execute permission bits")), "relative_without_root", "command"])
 def test_bad_explicit_path_does_not_fall_back(clients, fake, tmp_path, monkeypatch, kind):
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     path = tmp_path / "other"
@@ -274,7 +275,7 @@ def test_failure_discards_stdout(clients, fake, tmp_path, cfg, reason):
     doc = document(c, tmp_path)
     assert format_doc(doc) == []
     msg = c.wait_for("window/logMessage", lambda m: reason in m["params"]["message"])
-    assert str(fake.path) in msg["params"]["message"]
+    assert repr(str(fake.path)) in msg["params"]["message"]
     assert Path(doc.path).read_text() == doc.text
 
 
@@ -441,7 +442,7 @@ def test_lookup_order(bundled, fake, tmp_path, monkeypatch):
     roots = [str(tmp_path)]
     assert formatting.executable("", roots) == norm(str(bundled.path))
     monkeypatch.setenv("PATH", str(tmp_path))  # fake is verible-verilog-format in tmp_path
-    assert formatting.executable("", roots) == norm(str(fake.path))
+    assert os.path.normcase(formatting.executable("", roots)) == os.path.normcase(norm(str(fake.path)))
     (tmp_path / "elsewhere").mkdir()
     explicit = Formatter(tmp_path / "elsewhere", "mine")
     assert formatting.executable(str(explicit.path), roots) == str(explicit.path)
@@ -497,7 +498,8 @@ def test_bundled_copy_runs_and_is_announced_once(bundled, fake, tmp_path, monkey
     assert logs == [f"formatter: using {norm(str(bundled.path))!r} (the bundled copy)"]
     monkeypatch.setenv("PATH", str(tmp_path))
     assert run() == "// good\n"
-    assert logs[1:] == [f"formatter: using {norm(str(fake.path))!r} (PATH)"]
+    assert [os.path.normcase(line) for line in logs[1:]] == [
+        os.path.normcase(f"formatter: using {norm(str(fake.path))!r} (PATH)")]
     assert asyncio.run(formatter.run("// BAD\n", str(tmp_path / "t.sv"), 2, formatting.Settings(path="/missing"),
                                      [str(tmp_path)])) is None
     assert len(logs) == 3 and "uvm.formatter.path" in logs[2]
@@ -628,7 +630,7 @@ def test_library_files_through_links(clients, fake, tmp_path, ranged, indexed):
 def test_lone_uvm_pkg_ancestor_is_not_a_library(clients, fake, tmp_path, indexed, layout):
     proj = tmp_path / "work" / "proj"
     (proj / "tb").mkdir(parents=True)
-    (proj / "tb" / "t.sv").write_text("// BAD\n")
+    (proj / "tb" / "t.sv").write_bytes(b"// BAD\n")
     settings = {"useBundledUvm": True}
     if layout == "above_workspace":
         (tmp_path / "uvm_pkg.sv").write_text("package uvm_pkg; endpackage\n")
@@ -766,7 +768,7 @@ def configure(c, **settings):
 
 @pytest.mark.parametrize("mode", ["off", "onSave"])
 def test_formatter_settings_do_not_index_or_elaborate(clients, fake, tmp_path, mode):
-    (tmp_path / "t.sv").write_text("// BAD\n")
+    (tmp_path / "t.sv").write_bytes(b"// BAD\n")
     c = clients(tmp_path, {"path": str(fake.path)}, initialize_index=True, elaboration=mode)
     if mode != "off":
         c.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] != "running")
@@ -925,7 +927,7 @@ def lines_of(text, n, ending):
 def test_alu_driver_line_range(clients, fake, tmp_path, ending, empty):
     c, doc = alu_agent(clients, tmp_path, {"path": str(fake.path)})
     disk = Path(doc.path).read_bytes()
-    fixture = doc.text.replace("\n", ending)
+    fixture = doc.text.replace("\r\n", "\n").replace("\n", ending)
     doc.change(fixture.replace(DRIVER, SPACED))
     buffer = doc.text
     n = buffer[:buffer.index(SPACED)].count("\n")
@@ -957,7 +959,7 @@ def test_real_verible_on_alu_agent(clients, tmp_path, ending, lines):
         pytest.skip("real verible-verilog-format is unavailable; recording fixtures do not prove Verible parity")
     c, doc = alu_agent(clients, tmp_path, {"path": binary})
     disk = Path(doc.path).read_bytes()
-    doc.change(doc.text.replace(DRIVER, SPACED).replace("\n", ending))
+    doc.change(doc.text.replace(DRIVER, SPACED).replace("\r\n", "\n").replace("\n", ending))
     buffer = doc.text
     n = buffer[:buffer.index(SPACED)].count("\n")
     column = buffer.split(ending)[n].index("=")
@@ -991,7 +993,7 @@ def test_alu_failures_then_recovery_without_reindexing(clients, fake, tmp_path):
         assert Path(doc.path).read_bytes() == disk
         return message
 
-    assert str(missing) in fails("uvm.formatter.path")
+    assert repr(str(missing)) in fails("uvm.formatter.path")
     fake.set(exit=1, stderr="formatter failure", output="// would delete the source\n")
     configure(c, formatter={"path": str(fake.path)})
     message = fails("status 1")
@@ -1024,3 +1026,11 @@ def test_alu_failures_then_recovery_without_reindexing(clients, fake, tmp_path):
     doc.change(doc.text.replace(SPACED, SPACED + " // typed meanwhile"))
     assert response(c, rid)["result"] == []
     assert Path(doc.path).read_bytes() == disk
+
+
+@pytest.mark.parametrize('ending', ['', '\n', '\r\n'])
+@pytest.mark.parametrize('output_ending', ['\n', '\r\n'])
+def test_normalize_preserves_document_eol(ending, output_ending):
+    source = '// 😀 BAD' + ending
+    output = ('// 😀 good' + output_ending).encode('utf-8')
+    assert formatting.normalize(source, output) == '// 😀 good' + ending

@@ -193,6 +193,8 @@ class _PerFile(dict):
     def collect(self, path: str, roots_of: str | None = None) -> list:
         """The records for `path`, merged; `roots_of` names the file as the roots know it when
         that differs (a root given through a link, whose records name it resolved)."""
+        path = norm(path)
+        roots_of = norm(roots_of) if roots_of else None
         out, seen = [], None
         for root in self.ws._recording_roots(roots_of or path):  # the same roots the lazy walk collects from
             records = self.ws._records(self.ws.indices[root], self.kind, self.path_of).get(path, ())
@@ -209,7 +211,7 @@ class _PerFile(dict):
         return out
 
     def get(self, path: str, default=None):
-        found = self[path]
+        found = self[norm(path)]
         return found if found or default is None else default
 
 
@@ -328,11 +330,13 @@ class Workspace:
 
     def lines_of(self, path: str) -> list[str]:
         """The indexed text of `path` split as slang counts lines (cached until the next rebuild)."""
+        path = norm(path)
         if path not in self.lines:
             self.lines[path] = EOL_RE.split(self.texts.get(path, ""))
         return self.lines[path]
 
     def roots_for(self, path: str) -> list[str]:
+        path = norm(path)
         return [r for r, idx in self.indices.items() if path in idx.files]
 
     def update_documents(self, paths: list[str]) -> list[str]:
@@ -507,15 +511,18 @@ class Workspace:
 
     def structures_in(self, path: str) -> list:
         """A file's structural pairs."""
+        path = norm(path)
         self._collect_structures(path)
         return self.structures_by_file.get(path, [])
 
     def folds_in(self, path: str) -> list:
+        path = norm(path)
         self._collect_structures(path)
         return self.folds_by_file.get(path, [])
 
     def directives_in(self, path: str) -> list:
         """A file's directive ranges, with the text they disable."""
+        path = norm(path)
         self._collect_structures(path)
         return self.directives_by_file.get(path, [])
 
@@ -544,6 +551,7 @@ class Workspace:
         left to the library's own roots: a request for a UVM header must not walk every user root
         that includes the macros. A header under the library directory that the library's roots
         do not reach (a project's extra file beside it) is still a user root's to record."""
+        path = norm(path)
         if path not in self.library_files:
             return self.roots_for(path)
         return [root for root in self.roots_for(path) if self.indices[root].library or root == path]
@@ -599,11 +607,12 @@ class Workspace:
     def units_at(self, rng: Range, packages: bool = False) -> tuple[DesignUnit | None, ...]:
         """Each unit a position is compiled in: the one around it in its file, or else those
         around every `include that brings the file in, None for $unit."""
-        unit = next((u for u in self.by_path.get(rng.path, ()) if isinstance(u, DesignUnit)
+        unit = next((u for u in self.by_path.get(norm(rng.path), ()) if isinstance(u, DesignUnit)
                      and (packages or u.kind != "package") and u.decl_range.contains(rng.line, rng.col)), None)
         return (unit,) if unit is not None else self._units_including(rng.path, packages)
 
     def _units_including(self, path: str, packages: bool) -> tuple[DesignUnit | None, ...]:
+        path = norm(path)
         if self._include_sites is None:
             self._include_sites = {}
             for idx in self.indices.values():
@@ -1065,10 +1074,11 @@ class Workspace:
         return out
 
     def symbols_in(self, path: str) -> list:
-        return self.by_path.get(path, [])
+        return self.by_path.get(norm(path), [])
 
     def enclosing(self, path: str, line: int, col: int):
         """(class, method, unit) enclosing a position."""
+        path = norm(path)
         cls_hit, meth_hit, unit_hit = None, None, None
         for sym in self.symbols_in(path):
             if isinstance(sym, ClassInfo) and sym.decl_range.contains(line, col):

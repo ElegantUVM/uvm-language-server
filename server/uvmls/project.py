@@ -106,7 +106,15 @@ class SourceSet:
 def norm(p: str) -> str:
     p = os.path.normpath(os.path.abspath(p))
     drive, tail = os.path.splitdrive(p)
-    return drive.lower() + tail if len(drive) == 2 and drive[1] == ":" else p
+    return drive.upper() + tail if len(drive) == 2 and drive[1] == ":" else p
+
+
+def relative_or_absolute(path: str, start: str | None = None) -> str:
+    """Relative to start (the working directory by default), or absolute across drives."""
+    try:
+        return os.path.relpath(path, start)
+    except ValueError:
+        return norm(path)
 
 
 def is_sv_file(path: str) -> bool:
@@ -223,7 +231,7 @@ def discover_files(roots: list[str], exclude: list[str], match=is_sv_file, *,
         if directory_stamps is not None:
             directory_stamps[root] = directory_stamp(root)
         for dirpath, dirnames, filenames in os.walk(root):
-            rel = os.path.relpath(dirpath, root).replace(os.sep, "/")
+            rel = relative_or_absolute(dirpath, root).replace(os.sep, "/")
             prefix = "" if rel == "." else rel + "/"
             dirnames[:] = sorted(d for d in dirnames if not excluded(prefix + d, os.path.join(dirpath, d)))
             if directory_stamps is not None:

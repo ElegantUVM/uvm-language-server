@@ -12,19 +12,24 @@ const client = path.resolve(__dirname, "..");
 const targets = ["linux-x64", "win32-x64", "darwin-arm64", "darwin-x64"];
 const hash = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
+function writeFixture(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, data);
+}
+
 // Synthetic release assets exercise verified extraction and packaging without a network.
 async function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "uvmls packages # $-"));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "uvmls packages # $-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const dir = path.join(root, "client");
   fs.mkdirSync(dir);
   for (const name of ["scripts", "third_party"]) fs.cpSync(path.join(client, name), path.join(dir, name), { recursive: true });
   fs.mkdirSync(path.join(root, "server", "uvmls"), { recursive: true });
-  fs.writeFileSync(path.join(root, "server", "uvmls", "__init__.py"), "# fixture\n");
+  writeFixture(path.join(root, "server", "uvmls", "__init__.py"), "# fixture\n");
   fs.mkdirSync(path.join(dir, "dist"));
-  fs.writeFileSync(path.join(dir, "dist", "webview.js"), "/* Copyright (c) 2017 Kiel University */");
-  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0", dependencies: {} }));
-  for (const file of ["LICENSE", "NOTICE", "CHANGELOG.md"]) fs.writeFileSync(path.join(root, file), file);
+  writeFixture(path.join(dir, "dist", "webview.js"), "/* Copyright (c) 2017 Kiel University */");
+  writeFixture(path.join(dir, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0", dependencies: {} }));
+  for (const file of ["LICENSE", "NOTICE", "CHANGELOG.md"]) writeFixture(path.join(root, file), file);
   const { python } = await import(pathToFileURL(path.join(client, "scripts", "python.mjs")));
   const env = { ...process.env, UVMLS_PYTHON: python(), UVMLS_CACHE_DIR: path.join(root, "cache") };
   const run = (script, args = []) => execute(process.execPath, [path.join(dir, "scripts", script), ...args], { env });
@@ -48,13 +53,13 @@ async function fixture(t) {
     const file = path.join(cache, name);
     await py("import sys,zipfile\nwith zipfile.ZipFile(sys.argv[1],'w') as z:\n z.writestr('demo-1.0.dist-info/METADATA','License-Expression: MIT\\n')\n z.writestr('demo-1.0.dist-info/licenses/LICENSE','MIT licence fixture')", [file]);
     const lock = { platform: target, files: [{ name, size: fs.statSync(file).size, sha256: hash(fs.readFileSync(file)) }] };
-    fs.writeFileSync(path.join(dir, target === "linux-x64" ? "wheels.lock.json" : `wheels.lock.${target}.json`), JSON.stringify(lock));
+    writeFixture(path.join(dir, target === "linux-x64" ? "wheels.lock.json" : `wheels.lock.${target}.json`), JSON.stringify(lock));
   }
-  fs.writeFileSync(path.join(dir, "verible.lock.json"), JSON.stringify(manifest));
+  writeFixture(path.join(dir, "verible.lock.json"), JSON.stringify(manifest));
   async function pack(target) {
     const uvm = path.join(dir, "server", "uvmls", "third_party", "uvm-1.2");
     fs.mkdirSync(uvm, { recursive: true });
-    for (const name of ["LICENSE.txt", "NOTICE.txt"]) fs.writeFileSync(path.join(uvm, name), name);
+    for (const name of ["LICENSE.txt", "NOTICE.txt"]) writeFixture(path.join(uvm, name), name);
     const module = pathToFileURL(path.join(dir, "scripts", "notices.mjs")).href;
     await execute(process.execPath, ["--input-type=module", "-e",
       `import { writeNotices } from ${JSON.stringify(module)}; await writeNotices([], 'THIRD_PARTY_NOTICES.txt');`], { env });
@@ -90,11 +95,11 @@ test("corrupt archives and cached binaries never bypass their pins", async (t) =
   const target = "win32-x64";
   await f.run("fetch-verible.mjs", ["--target", target]);
   const cached = path.join(f.env.UVMLS_CACHE_DIR, "verible", "fixture", target, "verible-verilog-format.exe");
-  fs.writeFileSync(cached, "tampered cache");
+  writeFixture(cached, "tampered cache");
   await f.run("fetch-verible.mjs", ["--target", target]);
   assert.equal(fs.readFileSync(cached, "utf8"), "fixture formatter win32-x64");
-  fs.writeFileSync(cached, "tampered again");
-  fs.writeFileSync(f.env.UVMLS_VERIBLE_TARBALL_WIN32_X64, "corrupt archive");
+  writeFixture(cached, "tampered again");
+  writeFixture(f.env.UVMLS_VERIBLE_TARBALL_WIN32_X64, "corrupt archive");
   await assert.rejects(f.run("fetch-verible.mjs", ["--target", target]), { code: 1 });
 });
 
@@ -127,7 +132,7 @@ test("Intel macOS rejects a leaked arm64 formatter", async (t) => {
   await f.run("bundle-server.mjs", ["--target", "darwin-x64"]);
   const foreign = path.join(f.dir, "server", "uvmls", "third_party", "verible", "darwin-arm64");
   fs.mkdirSync(foreign, { recursive: true });
-  fs.writeFileSync(path.join(foreign, "verible-verilog-format"), "arm64 binary");
+  writeFixture(path.join(foreign, "verible-verilog-format"), "arm64 binary");
   await f.pack("darwin-x64");
   await assert.rejects(f.run("check-notices.mjs", ["--target", "darwin-x64"]), { code: 1 });
 });

@@ -8,6 +8,7 @@ from .fixes import FileText
 from .indexer import MASK_RE, NOT_EOL_RE, argument_spans, mask
 from .model import ClassInfo, Method
 from .navigation import CursorExpr
+from .project import norm
 from .workspace import substitute_params
 
 
@@ -17,6 +18,7 @@ GAP_RE = re.compile(r"(?:\s+|//[^\r\n]*|/\*.*?\*/|`(?![A-Za-z_]))*", re.S)
 
 
 def call_at(ws, path, line, col):
+    path = norm(path)
     if path not in ws._signature_texts:
         ft = FileText(path, ws.texts.get(path, ""))
         directives = sorted(span for r in ws.directives_in(path) if (span := ft.span(r)) is not None)

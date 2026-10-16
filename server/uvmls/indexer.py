@@ -18,6 +18,7 @@ from pyslang import parsing as P
 from pyslang import syntax as S
 
 from . import naturaldocs
+from .project import norm
 from .model import (
     CallSite, ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex, FoldRegion,
     Instance, MacroDef, Method, OutOfBlockMethod, OverrideCall, Param, Range,
@@ -693,10 +694,10 @@ class Extractor:
             p = self.sm.getFullPath(buffer)
             p = str(p) if p else ""
             if not p or p.startswith("<") or p.endswith(SHIM_BUFFER_NAME) or \
-                    os.path.normpath(os.path.abspath(p)) == SHIM_FILE:
+                    norm(p) == norm(SHIM_FILE):
                 self._paths[bid] = None
             else:
-                self._paths[bid] = os.path.normpath(os.path.abspath(p))
+                self._paths[bid] = norm(p)
         return self._paths[bid]
 
     def file_loc(self, loc):

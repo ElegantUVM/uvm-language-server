@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sys
 from pathlib import Path
 from urllib.parse import quote
 
 from . import __version__
 from .model import Diag, Range, utf8_prefix
+from .project import relative_or_absolute
 
 
 INFORMATION_URI = "https://example.invalid/uvmls"
@@ -65,7 +65,7 @@ def build_log(root: str | Path, diagnostics: list[Diag], fallback: str | None = 
         located = span.path or fallback
         if located:
             path = Path(located).resolve()
-            relative = Path(os.path.relpath(path, root)).as_posix()
+            relative = Path(relative_or_absolute(path, root)).as_posix()
             if path.is_relative_to(root):
                 artifact = {"uri": quote(relative), "uriBaseId": "SRCROOT"}
             else:

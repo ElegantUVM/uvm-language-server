@@ -445,7 +445,7 @@ class registry #(type T = uvm_object);
  static function T create(string name = "selected,😀", int mode = 4); endfunction
 endclass
 endpackage
-''')
+''', encoding='utf-8')
     root = tmp_path / 'tb'
     root.mkdir()
     path = root / 't.sv'

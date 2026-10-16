@@ -22,7 +22,7 @@ from .lints import (
 from .elab import SOURCE as ELAB_SOURCE
 from .indexer import EOL_RE, FIX_DATA, IGNORE_RE, MASK_RE, NOT_EOL_RE, argument_spans, ignore_codes, ignore_directives, mask
 from .model import ClassInfo, Method, Range, Variable
-from .project import directory_stamp, discover_files, is_bundled
+from .project import directory_stamp, discover_files, is_bundled, norm, relative_or_absolute
 from .views import canonical_type, config_db_report, mismatched
 from .workspace import BUILTIN_TYPES
 
@@ -124,10 +124,11 @@ class FileTexts:
     """Current file texts for one request: open editors' (with their version), else the disk's."""
 
     def __init__(self, open_docs: dict[str, tuple[str, int | None]] | None = None):
-        self.open = open_docs or {}
+        self.open = {norm(p): doc for p, doc in (open_docs or {}).items()}
         self._cache: dict[str, FileText | None] = {}
 
     def get(self, path: str) -> FileText | None:
+        path = norm(path)
         if path not in self._cache:
             doc = self.open.get(path)
             self._cache[path] = FileText(path, doc[0], doc[1]) if doc else FileText.from_disk(path)
@@ -175,6 +176,7 @@ class Context:
     _indexed: dict[str, FileText] = field(default_factory=dict, init=False)
 
     def indexed_text(self, path: str) -> FileText | None:
+        path = norm(path)
         if path not in self._indexed and path in self.ws.texts:
             self._indexed[path] = FileText(path, self.ws.texts[path])
         return self._indexed.get(path)
@@ -827,7 +829,7 @@ def setting_value(ws, path: str) -> str:
     paths in it are read against) when inside it, else absolute."""
     roots = ws.config.workspace_roots
     if roots and (path == roots[0] or path.startswith(os.path.join(roots[0], ""))):
-        return os.path.relpath(path, roots[0]).replace(os.sep, "/")
+        return relative_or_absolute(path, roots[0]).replace(os.sep, "/")
     return path
 
 
