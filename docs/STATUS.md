@@ -67,7 +67,7 @@ Last updated: 2026-10-16 (evening); see the Release rows F71–F77.
 | F54 | Views | Sequence → sequencer → driver flow view + REQ-type lint | 🔵 Planned | ~8 days. |
 | F55 | Views | Knob explorer: which config_db set reaches which get, by instance path | 🔵 Planned | ~9 days; overlaps I20. |
 | F56 | Performance | Incremental re-extraction for include-heavy packages | 🔵 Planned | ~7 days. |
-| F57 | Formatting | Bundled Verible for macOS and Windows (per-platform builds) | 🔵 Planned | Optional; only if those platforms matter. |
+| F57 | Platforms | Windows and macOS packages: per-target wheels and Verible, path handling, CI on windows/macos runners | 🔵 Planned | Plan for Codex: `docs/specs/f57-platforms.md` (2026-10-16). Remote-SSH users already get the Linux package on the remote (`extensionKind: workspace`). |
 | F58 | Project | Remote-first: extensionKind, devcontainer | 🔵 Planned | ~2 days. |
 | F59 | Editing | Scaffolding wired into an existing env and filelist | 🔵 Planned | ~5 days. |
 | F60 | Views | Register-model view | 🔵 Planned | |
