@@ -86,7 +86,8 @@ def test_action_and_workflow_contract():
     manifest = action()
     assert manifest["name"] == "UVM lint" and manifest["runs"]["using"] == "composite"
     inputs = manifest["inputs"]
-    assert set(inputs) == {"filelist", "uvm-home", "python-version", "elab", "fail-on"}
+    assert set(inputs) == {"filelist", "uvm-home", "python-version", "elab", "fail-on", "upload"}
+    assert inputs["upload"]["default"] == "true"
     assert inputs["filelist"]["required"] is True
     assert inputs["uvm-home"].get("required", False) is False
     assert {k: inputs[k]["default"] for k in ("python-version", "elab", "fail-on")} == {
