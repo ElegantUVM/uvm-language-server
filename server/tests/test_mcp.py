@@ -14,7 +14,7 @@ from conftest import EXAMPLE
 from uvmls import mcp
 from uvmls.cli import main as cli
 from uvmls.indexer import Indexer
-from uvmls.project import ProjectConfig
+from uvmls.project import ProjectConfig, norm
 from uvmls.workspace import Workspace
 
 SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -267,7 +267,7 @@ def test_config_db_matches_the_cli_and_filters(server, tb, capsys, monkeypatch):
                 assert (entry["type"], entry["inst"], entry["owner"], entry["method"]) == \
                     (ref_entry["type"], ref_entry["inst"], ref_entry["owner"], ref_entry["method"])
                 assert entry["location"]["line"] == ref_entry["line"] + 1 and entry["location"]["col"] == ref_entry["col"] + 1
-                assert os.path.join(tb, entry["location"]["file"]) == ref_entry["file"]
+                assert norm(os.path.join(tb, entry["location"]["file"])) == norm(ref_entry["file"])
     [row] = server.data("config_db", {"field": "alu_agent_config"})["items"]
     assert row["status"] == "ok" and len(row["sets"]) == 1 and len(row["gets"]) == 3
     assert row["sets"][0]["location"] == {"file": "env/alu_env.svh", "line": 16, "col": 5, "endLine": 16, "endCol": 100}
@@ -290,7 +290,8 @@ def test_config_db_matches_the_cli_and_filters(server, tb, capsys, monkeypatch):
 # -- 6. lint and the ignore directive ------------------------------------------------------------
 
 
-def test_lint_lists_the_planted_finding_until_an_ignore_directive_lands_on_disk(server, tb):
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_lint_lists_the_planted_finding_until_an_ignore_directive_lands_on_disk(server, tb, newline):
     get = at(tb, "agent/alu_monitor.svh", 'uvm_config_db #(bit)::get(this, "", "checks_enable"')
     [finding] = server.data("lint")["items"]
     assert finding["code"] == "config-db-no-set" and finding["severity"] == "info"
@@ -301,10 +302,12 @@ def test_lint_lists_the_planted_finding_until_an_ignore_directive_lands_on_disk(
     assert server.data("lint", {"file": "agent/alu_monitor.svh"})["total"] == 1
     assert json.loads(server.read_resource("uvm://lint")["contents"][0]["text"])["total"] == 1
     monitor = read(tb, "agent/alu_monitor.svh")
-    lines = monitor.split("\n")
-    lines[get["line"] - 1] += "  // uvm-lint: ignore config-db-no-set"
+    lines = monitor.replace("\r\n", "\n").replace("\n", newline).splitlines(keepends=True)
+    line = lines[get["line"] - 1]
+    body = line.rstrip("\r\n")
+    lines[get["line"] - 1] = body + "  // uvm-lint: ignore config-db-no-set" + line[len(body):]
     try:
-        write(tb, "agent/alu_monitor.svh", "\n".join(lines))
+        write(tb, "agent/alu_monitor.svh", "".join(lines))
         time.sleep(1.1)  # the refresh looks at the files at most once a second
         assert server.data("lint")["items"] == []
     finally:
@@ -854,6 +857,25 @@ def test_a_source_landing_right_after_a_new_directory_is_listed_is_indexed(tmp_p
     monkeypatch.setattr(mcp, "_stamp", stamped)
     server.refresh(force=True)  # in the listing: rebuilt at once
     assert class_names(server) == ["arrived", "between", "top"]
+
+
+def test_directory_race_with_lagging_windows_times(tmp_path, monkeypatch, windows_directory_times):
+    test_a_source_landing_right_after_a_new_directory_is_listed_is_indexed(tmp_path, monkeypatch)
+
+
+def test_rewrite_with_unchanged_mtime_is_detected(tmp_path):
+    root = tmp_path / "ws"
+    root.mkdir()
+    path = root / "top.sv"
+    path.write_bytes(b"class c; endclass\r\n")
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(root)], bundled_uvm=False))
+    server = mcp.McpServer(ws)
+    before = path.stat()
+    path.write_bytes(b"class rewritten; endclass\r\n")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    server.refresh(force=True)
+    assert class_names(server) == ["rewritten"]
 
 
 def test_retargeting_an_included_link_of_any_name_is_noticed(tmp_path, monkeypatch):

@@ -443,3 +443,171 @@ elaboration fails before producing findings; Linux elaboration of the same Unico
 fixture succeeds. The directory-cache races likewise did not reproduce locally. They have not
 been masked with skips or timing sleeps. F57/F27 remain partial pending native CI and corpus
 acceptance. Final checkpoint taken after this note.
+
+## 2026-10-16 20:25 UTC: third native CI run (reviewer) — instructions for the next turn
+
+Commit `a6e3ce6`, run 38958674834. **Every job passes except `server (windows-latest, 3.12)`: 22 failed,
+1493 passed, 86 skipped.** Log: `.local-backups/f57-platforms/ci/windows-server-py312-run38958674834.log`.
+Background fact for several items: Git for Windows checks the repository out with `core.autocrlf=true`, so on
+that runner `examples/alu_tb` and every tracked `.sv/.svh` fixture have **CRLF** line endings. Do not add a
+`.gitattributes` to avoid that; Windows users have CRLF files and the code must cope. Items, in order:
+
+1. **In-process elaboration fails the second time (`test_sarif.py::test_stdout_is_only_sarif_and_file_can_accompany_json[*-elab]`):**
+   in the `False-elab` case the first `elab` in the process prints `0 error(s), 0 warning(s) in 0.016s (top:
+   none; bundled Accellera UVM 1.2)` and the second, with `--sarif -`, prints `elaboration failed: slang did not
+   accept the elaboration options` (`elab.py:361`). Same request, same process, Windows only. Find the state
+   that survives one in-process `elaborate()`: a module-level pyslang `Driver`/`SourceManager`, a `chdir`, a
+   replaced `sys.stdout`/fd, files still open (Windows locks them), temporary files not removed. Make the
+   `_failed(...)` message carry slang's own diagnostic text for the option failure (capture the driver's
+   output), and add a test that runs `elaborate()` twice in one process on the ALU example with `--sarif -`
+   in between (it will pass on Linux; it is for the next Windows run).
+2. **`test_fixes.py::*_fix_compiles` (8): `unchanged(tmp_path)` is False.** `unchanged` uses `filecmp.dircmp`,
+   whose file comparison is shallow (size + mtime): a `copytree`'d file on Windows can differ in mtime
+   resolution, and CRLF checkouts differ in size from nothing (both sides are checkouts). Make `unchanged`
+   compare contents (`filecmp.cmpfiles(..., shallow=False)` or explicit reads) and make its failure message
+   name the differing or extra files, so a real leftover (an elaboration temp file, a `.bak`) shows up.
+3. **`test_document_highlight.py::test_keyword_encoding_crlf_and_duplicate_includes[*]` (4): `highlight_at(...)`
+   returns `None`** for utf-8 and utf-16 CRLF documents. `None` means the request answered `null` or errored.
+   Make the `Doc`/`Client` helpers raise with the server's stderr tail when a request returns an error, and
+   look at how a utf-16 (BOM) + CRLF file is read from disk and matched against the editor buffer on Windows
+   (`FileText.from_disk`, `newline` handling, BOM stripping). Reproduce on Linux with the exact bytes.
+4. **Directory and file change detection on Windows** (`test_include_cache.py::test_include_cache_finds_new_unwatched_headers[True-False-*]`,
+   `test_mcp.py::test_lint_lists_the_planted_finding_until_an_ignore_directive_lands_on_disk`, and in run 2
+   `test_a_source_landing_right_after_a_new_directory_is_listed_is_indexed`): `project.directory_stamp` is
+   `(st_ino, st_mtime_ns, st_ctime_ns)`; on Windows `st_ctime` is the *creation* time and never changes, and a
+   directory's mtime can lag. **Decision:** on win32 the stamp also includes a fingerprint of the sorted entry
+   names from `os.scandir` (cheap for include directories), and rewritten files are recognised by
+   `(st_size, st_mtime_ns)`. Tests on every OS; one that monkeypatches `os.stat` to Windows-like values.
+5. **`test_mcp.py::test_config_db_matches_the_cli_and_filters`:** the test joins the MCP `file` (`env/alu_env.svh`,
+   by decision `/`-separated) onto a native root and compares with a native path. Normalise both sides with
+   `norm` in the test. Production is right.
+6. **`test_config_navigation.py::test_config_multi_macro_navigation_after_unsaved_edit[*]` (2):** after an unsaved
+   edit the definition comes back one line earlier and at another column (`line 32, character 25` instead of
+   `line 33, character 23–34`) under a `café` directory. With CRLF example sources (see above) the fixture's
+   edit positions, computed from LF text, are wrong, or production maps positions incorrectly after a
+   `didChange` in a CRLF document. Reproduce on Linux with a CRLF copy of the example; fix the fixture if it is
+   the fixture, production if it is production, and say which.
+7. **`test_lsp.py::test_elaboration_off_results_do_not_outlive_a_fix` (`'running' == 'off'`) and
+   `test_an_edit_in_on_change_mode_supersedes_a_run_in_progress` (`errors == 0`, expected 1):** both read a
+   status notification that on Windows arrives in a different order or later. With the stderr now captured,
+   read the sequence and wait with a predicate for the specific state (`off`, or the run that includes the edit)
+   instead of the next notification. No sleeps.
+8. Verification as before, a dated section in this note, checkpoint. Keep the 86 skips as they are.
+
+
+## 2026-10-16 20:33 UTC: third native CI follow-up (items 1–8)
+
+Worked through the reviewer's items in order on `f57-platforms`, at `a6e3ce6`. Changes
+remain uncommitted. The pre-existing reviewer handoff in this note was preserved. No
+commit, push, merge, publication, network access or lock change was performed. All five
+wheel/Verible lock files match `HEAD` byte-for-byte. No skip conditions were changed;
+the native run's existing 86 skips remain as configured. Checkpoints were taken after
+each substantial step and after this note.
+
+1. **Repeated in-process elaboration and option diagnostics:** every `_compile` constructs
+   its own driver/source manager; the CLI does not change cwd or replace stdout while
+   writing stdout SARIF. No surviving Python driver, open temporary result file or cwd
+   change was identified. Slang's command-line errors bypass `textDiagClient`; `_compile`
+   now captures native stderr only while parsing/processing options, restores the descriptor
+   in `finally`, and includes the captured text in the failure returned by `elaborate`.
+   Successful option warnings still go to stderr. A regression checks the actual unknown-option
+   diagnostic, stderr restoration and a subsequent successful compile. Another calls
+   `elaborate` twice on the same Unicode-path ALU copy with CLI `--sarif -` between them,
+   checks matching results, and checks that the source tree's bytes/names stay unchanged.
+   All pass on Linux. **The native cause is unresolved:** the existing log also reports
+   Unicode-path failures on a first call (`True-elab`), so it does not establish that the
+   cause is state left by the preceding call. No speculative driver/path rewrite was made.
+2. **Compile-proof fixture comparisons:** `unchanged` reads common files' bytes, rather
+   than relying on `dircmp`'s shallow comparison, and asserts with the differing/extra
+   filenames. Regressions cover unchanged bytes with different mtimes, different bytes
+   with identical size/mtime, and a leftover `.bak`. Inspection also found a real CRLF
+   fixture defect: `example` read source files with universal-newline conversion and
+   rewrote them as LF while planting a problem. It now retains the original endings and
+   translates multiline replacement snippets to those endings. A byte-level regression
+   and the compile-proof tests on a temporary CRLF example copy pass.
+3. **Highlight errors, disk bytes and BOMs:** `Client.request` failures now include the
+   stderr tail plus recent log/status/diagnostic notifications; highlight assertions also
+   include that context for valid JSON null responses. The `Doc` fixture strips a UTF-8
+   BOM when loading editor text. The failing fixture's `utf-16` parameter negotiates LSP
+   position units; its disk bytes are UTF-8, not UTF-16. Its exact CRLF-byte cases pass on
+   Linux. Adding UTF-8 BOM coverage reproduced `assert None == [...]` after closing a
+   document: slang counts the three BOM bytes in first-line columns, while the indexed
+   text/editor omits them. Production now adjusts first-line conversions in both directions
+   for disk BOMs, caching the BOM length until the next index rebuild. The permanent test
+   checks BOM/no-BOM, both position encodings, directives, duplicate includes, open/change/close
+   and unchanged raw file bytes. The two new BOM cases failed before this conversion fix;
+   all eight pass afterwards. **The original four Windows no-BOM failures are unresolved**
+   locally; the BOM fix is not claimed to explain them.
+4. **Windows change detection:** `project.directory_stamp` includes sorted `os.scandir`
+   entry names on win32. Include-candidate discovery and MCP directory watches use that
+   stamp; link watches retain their link identity. File watches already used size and
+   nanosecond mtime, and a regression verifies that a size-changing rewrite is detected
+   even when its mtime is restored. Shared tests freeze both stat/lstat directory metadata
+   to simulate lagging Windows times and verify creation, rename, removal, include candidates,
+   and files arriving during MCP directory listing/stamping. These pass on every local host
+   through the simulated win32 branch. The MCP ignore failure also had a CRLF fixture bug:
+   splitting at LF and appending left the ignore comment after a CR, on another logical
+   line. The test now inserts before the EOL and explicitly covers LF and CRLF. Both pass.
+5. **MCP config paths:** the assertion now applies `project.norm` to both the joined MCP
+   display path and the CLI's native path. Production display paths are unchanged. The
+   focused MCP/CLI comparison passes, including on the temporary CRLF example copy.
+6. **Macro navigation after edits:** the exact failing tests passed on Linux with a copy
+   of the whole ALU example converted to CRLF. The permanent multi-macro fixture now
+   explicitly makes that CRLF checkout on every OS; the edit regression tests both LF
+   and CRLF editor buffers, closes each document, and includes diagnostic context on
+   mismatches. All four edited-buffer cases pass. **The Windows mismatch is unresolved:**
+   neither a fixture position error nor a production mapping error could be reproduced
+   for the reported line 32/column 25 versus line 33/columns 23–34. No production mapping
+   change for this item was justified by local evidence.
+7. **Status ordering:** the native excerpts show the tests consuming `running` instead of
+   `off`, and a clean completed run instead of the run containing the edit; they do not
+   contain a complete notification sequence. The off test now waits for `off` and the
+   specific invalidation message. The superseded-run test waits for elaboration diagnostics
+   at the edited location, discards preceding queued statuses, then waits for that run's
+   `done`/one-error status (production sends diagnostics before status). Its 1.5-second
+   sleep was removed. Both tests pass normally and on the temporary CRLF copy. No sleeps
+   were added and production scheduling was not changed.
+8. **Local verification (Linux, offline):**
+   - `cd client && node --test tests/*.test.cjs`: all **5 test-file entries passed**.
+   - `cd client && npm run typecheck`: passed.
+   - Direct `.venv/bin/python`, fixes module: **281 passed**.
+   - Direct project/elaboration/SARIF modules, final production edits: **108 passed**.
+   - With `/tmp/f57-validation/python`, project/folding/inlay-hints/SARIF/highlights/
+     code-actions/include-cache/MCP modules: **321 passed, 1 existing performance skip**.
+   - With that wrapper, config-navigation module: **72 passed**; LSP module: **28 passed**.
+     After final cleanup/predicate edits, the affected navigation/LSP cases were rerun:
+     **6 passed, 94 deselected**. Final request-error/timeout diagnostic checks directly:
+     **2 passed, 26 deselected**.
+   - Temporary CRLF example copy, compile-proof/MCP/two LSP status cases:
+     **13 passed, 331 deselected**. The earlier exact macro-navigation reproduction
+     on a separate CRLF example copy passed **2 tests** before the fixture changes.
+   - `git diff --check`: passed. All five lock-byte comparisons: passed.
+
+The protocol wrapper is the pre-existing selector workaround; its results establish Linux
+behavior only. Temporary verification scripts are `/tmp/f57-crlf-navigation-check.py` and
+`/tmp/f57-crlf-followup-check.py`; each creates/removes its own CRLF example copy. No tracked
+example or bundled-library source was converted. The full server suite, native Windows/macOS
+runs, package/first-run checks and launch corpus baseline were not run in this turn. F57/F27
+remain partial pending those acceptance checks; the reviewer runs the corpus baseline.
+
+**Unresolved native assertions, copied verbatim by grep from run 38958674834:**
+
+```text
+FAILED tests/test_config_navigation.py::test_config_multi_macro_navigation_after_unsaved_edit[uvm_config_db] - AssertionError: assert [{'uri': 'fil...acter': 25}}}] == [{'uri': 'fil...acter': 34}}}]
+FAILED tests/test_config_navigation.py::test_config_multi_macro_navigation_after_unsaved_edit[uvm_resource_db] - AssertionError: assert [{'uri': 'fil...acter': 25}}}] == [{'uri': 'fil...acter': 34}}}]
+FAILED tests/test_document_highlight.py::test_keyword_encoding_crlf_and_duplicate_includes[False-utf-16] - AssertionError: assert None == [{'range': {'start': {'line': 0, 'character': 9}, 'end': {'line': 0, 'character': 14}}, 'kind': 1}, {'range': {'start': {'line': 9, 'character': 0}, 'end': {'line': 9, 'character': 8}}, 'kind': 1}]
+FAILED tests/test_document_highlight.py::test_keyword_encoding_crlf_and_duplicate_includes[False-utf-8] - AssertionError: assert None == [{'range': {'start': {'line': 0, 'character': 11}, 'end': {'line': 0, 'character': 16}}, 'kind': 1}, {'range': {'start': {'line': 9, 'character': 0}, 'end': {'line': 9, 'character': 8}}, 'kind': 1}]
+FAILED tests/test_document_highlight.py::test_keyword_encoding_crlf_and_duplicate_includes[True-utf-16] - AssertionError: assert None == [{'range': {'start': {'line': 1, 'character': 9}, 'end': {'line': 1, 'character': 14}}, 'kind': 1}, {'range': {'start': {'line': 12, 'character': 0}, 'end': {'line': 12, 'character': 8}}, 'kind': 1}]
+FAILED tests/test_document_highlight.py::test_keyword_encoding_crlf_and_duplicate_includes[True-utf-8] - AssertionError: assert None == [{'range': {'start': {'line': 1, 'character': 11}, 'end': {'line': 1, 'character': 16}}, 'kind': 1}, {'range': {'start': {'line': 12, 'character': 0}, 'end': {'line': 12, 'character': 8}}, 'kind': 1}]
+FAILED tests/test_sarif.py::test_stdout_is_only_sarif_and_file_can_accompany_json[False-elab] - AssertionError: ('0 error(s), 0 warning(s) in 0.016s (top: none; bundled Accellera UVM 1.2)
+FAILED tests/test_sarif.py::test_stdout_is_only_sarif_and_file_can_accompany_json[True-elab] - AssertionError: ('elaboration failed: slang did not accept the elaboration options
+```
+
+Both SARIF cases end with the exact assertion `assert 2 == 1`; the worker/CLI reason is
+`elaboration failed: slang did not accept the elaboration options`. Native stderr includes
+`The system cannot find the path specified.` for sources below `alu tb é` (the saved log
+renders the accented character as a replacement character). The config-navigation diff's
+actual range is `{'start': {'line': 32, 'character': 25}, 'end': {'line': 32, 'character': 25}}`;
+its expected range is `{'start': {'line': 33, 'character': 23}, 'end': {'line': 33, 'character': 34}}`.
+The next native run must confirm the local fixes and provide the newly captured diagnostic
+context for items 1, 3 and 6. Final checkpoint taken after this note.

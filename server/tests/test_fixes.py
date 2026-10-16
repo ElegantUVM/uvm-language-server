@@ -1,6 +1,7 @@
 """Quick fixes (fixes.py): the text helpers, then each fix as a round trip."""
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -1907,7 +1908,9 @@ def example(tmp_path, plants: dict[str, tuple[str, str]]) -> Workspace:
     root = tmp_path / "alu_tb"
     shutil.copytree(EXAMPLE, root)
     for rel, (old, new) in plants.items():
-        text = (root / rel).read_text(encoding="utf-8")
+        ft = FileText.from_disk(str(root / rel))
+        text = ft.text
+        old, new = (s.replace("\n", ft.eol()) for s in (old, new))
         assert old in text, rel
         (root / rel).write_text(text.replace(old, new, 1), encoding="utf-8", newline="")
     w = Workspace()
@@ -1925,12 +1928,48 @@ def user_errors(w: Workspace) -> list:
 def unchanged(tmp_path) -> bool:
     import filecmp
     cmp = filecmp.dircmp(EXAMPLE, tmp_path / "alu_tb")
-    stack, same = [cmp], True
+    stack, differences = [cmp], []
     while stack:
         c = stack.pop()
-        same &= not (c.diff_files or c.left_only or c.right_only)
+        differences += [str(Path(c.left) / p) for p in c.left_only]
+        differences += [str(Path(c.right) / p) for p in c.right_only + c.common_funny]
+        differences += [str(Path(c.right) / p) for p in c.common_files
+                        if (Path(c.left) / p).read_bytes() != (Path(c.right) / p).read_bytes()]
         stack += c.subdirs.values()
-    return same
+    assert not differences, "differing or extra files: " + ", ".join(sorted(differences))
+    return True
+
+
+def test_unchanged_compares_bytes_and_names(tmp_path, monkeypatch):
+    import shutil
+    source = tmp_path / "original"
+    source.mkdir()
+    (source / "t.sv").write_bytes(b"class c;\r\nendclass\r\n")
+    monkeypatch.setitem(globals(), "EXAMPLE", str(source))
+    root = tmp_path / "alu_tb"
+    shutil.copytree(source, root)
+    path = root / "t.sv"
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    assert unchanged(tmp_path)
+    path.write_bytes(path.read_bytes().replace(b"class c", b"class d"))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    with pytest.raises(AssertionError, match=r"differing or extra files: .*t\.sv"):
+        unchanged(tmp_path)
+    shutil.copyfile(source / "t.sv", path)
+    (root / "leftover.bak").write_bytes(b"backup")
+    with pytest.raises(AssertionError, match=r"leftover\.bak"):
+        unchanged(tmp_path)
+
+
+def test_example_plants_preserve_crlf(tmp_path, monkeypatch):
+    source = tmp_path / "original"
+    source.mkdir()
+    (source / "t.sv").write_bytes(b"class c;\r\n  int i;\r\nendclass\r\n")
+    (source / "alu_tb.f").write_bytes(b"t.sv\r\n")
+    monkeypatch.setitem(globals(), "EXAMPLE", str(source))
+    example(tmp_path, {"t.sv": ("  int i;\n", "  int j;\n")})
+    assert (tmp_path / "alu_tb" / "t.sv").read_bytes() == b"class c;\r\n  int j;\r\nendclass\r\n"
 
 
 def test_create_no_parent_fix_compiles(tmp_path):

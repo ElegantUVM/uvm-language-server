@@ -29,7 +29,7 @@ from .elab import ELAB_TIMEOUT, PACKAGE_PARENT, displayed, request_for, skip_rea
 from .indexer import SHIM_FILE
 from .model import ClassInfo, CreateCall, Range, SeqStart, Variable, utf8_prefix
 from .navigation import Navigator, expr_at
-from .project import DEFAULT_EXCLUDES, ProjectConfig, _exclusion, discover_files, display_path, is_bundled, is_sv_file, norm
+from .project import DEFAULT_EXCLUDES, ProjectConfig, _exclusion, directory_stamp, discover_files, display_path, is_bundled, is_sv_file, norm
 from .uvm import ROLE_ORDER
 from .views import config_db_report, effective_type, list_tests, topology
 from .workspace import Spec, Workspace
@@ -100,16 +100,21 @@ def workspace_for(args) -> Workspace:
     return _workspace(args, config=ProjectConfig.from_settings([root], settings))
 
 
-def _stamp(path: str) -> tuple[int, ...] | None:
+def _stamp(path: str) -> tuple | None:
     """What a change to a file or directory alters; for a link, its own identity too, so a
     retarget (a new link renamed over it) counts; a dangling link is as good as gone."""
     try:
         st = os.lstat(path)
         if not stat.S_ISLNK(st.st_mode):
+            if stat.S_ISDIR(st.st_mode):
+                return directory_stamp(path)
             return st.st_mtime_ns, st.st_size
         target = os.stat(path)
     except OSError:
         return None
+    if stat.S_ISDIR(target.st_mode):
+        stamp = directory_stamp(path)
+        return (*stamp, st.st_ino, st.st_mtime_ns) if stamp is not None else None
     return target.st_mtime_ns, target.st_size, st.st_ino, st.st_mtime_ns
 
 
@@ -334,7 +339,7 @@ class McpServer:
         self.nav = Navigator(ws)
         self.roots = [norm(r) for r in ws.config.workspace_roots]
         self.real_roots = [os.path.realpath(r) for r in self.roots]
-        self.stamps: dict[str, tuple[int, ...] | None] = {}
+        self.stamps: dict[str, tuple | None] = {}
         self.listings: dict[str, Listing] = {}  # per watched directory
         self.filelists: set[str] = set()
         self.header_names: set[str] = set()  # of every header included or missing, whatever the extension

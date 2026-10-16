@@ -470,6 +470,9 @@ def test_config_definition_through_macro_arguments(macro_tb, occurrence):
 def multi_macro_tb(tmp_path_factory, request):
     root = tmp_path_factory.mktemp("config-multi-macros") / "café"
     shutil.copytree(EXAMPLE, root)
+    for source in root.rglob("*"):
+        if source.suffix in (".sv", ".svh", ".f"):
+            source.write_bytes(source.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
     db = request.param
     context = 'this, ' if db == "uvm_config_db" else ''
     get = "get" if db == "uvm_config_db" else "read_by_name"
@@ -538,19 +541,21 @@ def test_config_multi_macro_lenses_keep_expansion_order(multi_macro_tb):
     assert [lens["command"]["arguments"] for lens in pair] == [[{"field": "literal"}], [{}]]
 
 
-def test_config_multi_macro_navigation_after_unsaved_edit(multi_macro_tb):
+@pytest.mark.parametrize("editor_newline", ["\n", "\r\n"])
+def test_config_multi_macro_navigation_after_unsaved_edit(multi_macro_tb, editor_newline):
     c, path = multi_macro_tb
-    doc = Doc(c, str(path))
+    text = path.read_text(encoding="utf-8").replace("\n", editor_newline)
+    doc = Doc(c, str(path), text=text, newline="")
     c.wait_for("uvm/indexChanged")
     try:
         original = doc.text
-        doc.change("// moved\n" + original)
+        doc.change("// moved" + editor_newline + original)
         expected = literal_location(path, "z_first😀")
         for pos in expected["range"].values():
             pos["line"] += 1
         params = at(path, '"z_first😀"', 2, 1)
         params["position"]["line"] += 1
-        assert c.request("textDocument/definition", params) == [expected]
+        assert c.request("textDocument/definition", params) == [expected], c.diagnostic_tail()
         params = at(path, '"z_first😀"', 2)
         params["position"]["line"] += 1
         result = c.request("textDocument/hover", params)
@@ -558,4 +563,5 @@ def test_config_multi_macro_navigation_after_unsaved_edit(multi_macro_tb):
         assert result["contents"]["value"].startswith("**config_db 'z_first😀'**")
     finally:
         doc.change(original)
+        doc.close()
         c.request("uvm/stats", {})

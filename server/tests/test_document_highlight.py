@@ -398,7 +398,8 @@ def test_unmatched_keywords(doc, source, needle):
 
 @pytest.mark.parametrize("encoding", ["utf-16", "utf-8"])
 @pytest.mark.parametrize("line_directives", [False, True])
-def test_keyword_encoding_crlf_and_duplicate_includes(tmp_path, encoding, line_directives):
+@pytest.mark.parametrize("bom", [False, True])
+def test_keyword_encoding_crlf_and_duplicate_includes(tmp_path, encoding, line_directives, bom):
     text = ('/* 😀 */ class c;\r\n  function new();\r\n    /* 😀 */ begin : label\r\n'
             '      int x;\r\n    end : label\r\n  endfunction\r\n'
             '  task run();\r\n    int y;\r\n  endtask\r\nendclass')
@@ -406,21 +407,25 @@ def test_keyword_encoding_crlf_and_duplicate_includes(tmp_path, encoding, line_d
         text = '`line 100 "virtual.sv" 0\r\n' + text.replace(
             "    end : label", '`line 1 "nested.sv" 1\r\n    end : label\r\n`line 200 "virtual.sv" 2')
     path = tmp_path / "café.svh"
-    path.write_bytes(text.encode())
+    raw = (b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8")
+    path.write_bytes(raw)
+    from uvmls.fixes import FileText
+    assert FileText.from_disk(str(path)).text == text
     for name in ("first", "second"):
         (tmp_path / (name + ".sv")).write_text('`include "café.svh"\n', encoding="utf-8", newline="")
     c = start(str(tmp_path), capabilities={**CAPS, "general": {"positionEncodings": [encoding]}},
               settings={"useBundledUvm": False, "elaboration": "off"})
     try:
         d = Doc(c, str(path), newline="")
+        assert d.text == text
         codec = "utf-16-le" if encoding == "utf-16" else "utf-8"
 
         def check_pairs():
             for opening, closing in [("class c", "endclass"), ("function new", "endfunction"),
                                      ("begin : label", "end : label"), ("task run", "endtask")]:
                 expected = pair_highlights(d.text, opening, closing, codec)
-                assert highlight_at(d, opening, 1, codec) == expected
-                assert highlight_at(d, closing, 1, codec) == expected
+                assert highlight_at(d, opening, 1, codec) == expected, c.diagnostic_tail()
+                assert highlight_at(d, closing, 1, codec) == expected, c.diagnostic_tail()
 
         check_pairs()
         d.change("\r\n" + text)
@@ -428,6 +433,7 @@ def test_keyword_encoding_crlf_and_duplicate_includes(tmp_path, encoding, line_d
         d.close()
         d.text = text
         check_pairs()
+        assert path.read_bytes() == raw
     finally:
         c.close()
 

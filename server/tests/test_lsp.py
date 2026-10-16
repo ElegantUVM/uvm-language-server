@@ -75,7 +75,7 @@ class Client:
         while True:
             msg = self.read()
             if msg.get("id") == rid and "method" not in msg:
-                assert "error" not in msg, msg
+                assert "error" not in msg, f"{method}: {msg}\n{self.diagnostic_tail()}"
                 return msg["result"]
             if "method" in msg and "id" in msg:  # server -> client request
                 self.send({"jsonrpc": "2.0", "id": msg["id"], "result": None})
@@ -88,6 +88,13 @@ class Client:
     def forget(self, *methods):
         """Drop queued notifications, so a later wait_for sees only what happens next."""
         self.notifications = [m for m in self.notifications if m["method"] not in methods]
+
+    def diagnostic_tail(self):
+        stderr = b"".join(self.stderr_tail)[-4000:].decode("utf-8", errors="replace")
+        recent = [m for m in self.notifications if m.get("method") in (
+            "window/logMessage", "uvm/elaborationStatus", "textDocument/publishDiagnostics")]
+        return (f"server stderr tail:\n{stderr}\nrecent server notifications:\n"
+                f"{json.dumps(recent[-5:], ensure_ascii=False)[-4000:]}")
 
     def wait_for(self, method, pred=lambda m: True, timeout=20):
         deadline = time.time() + timeout
@@ -105,10 +112,7 @@ class Client:
                 return msg
             elif "method" in msg:
                 self.notifications.append(msg)
-        stderr = b"".join(self.stderr_tail)[-4000:].decode("utf-8", errors="replace")
-        recent = [m for m in self.notifications if m.get("method") in ("window/logMessage", "uvm/elaborationStatus")]
-        raise TimeoutError(f"{method}\nserver stderr tail:\n{stderr}\nrecent server notifications:\n"
-                           f"{json.dumps(recent[-5:], ensure_ascii=False)[-4000:]}")
+        raise TimeoutError(f"{method}\n{self.diagnostic_tail()}")
 
     def close(self):
         try:
@@ -558,7 +562,7 @@ def test_elaboration_off_results_do_not_outlive_a_fix(client):
     client.forget("uvm/elaborationStatus", "textDocument/publishDiagnostics")
     client.notify("workspace/didChangeConfiguration",
                   {"settings": {"uvm": {"filelists": [FILELIST], "elaboration": "off"}}})
-    assert client.wait_for("uvm/elaborationStatus")["params"]["state"] == "off"
+    client.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "off")
     client.notify("textDocument/didOpen", {"textDocument": {
         "uri": u, "languageId": "systemverilog", "version": 1, "text": text.replace("m_cfg.vif", "m_cfg.vfi")}})
     assert client.request("uvm/elaborate", {})["errors"] == 1
@@ -567,7 +571,8 @@ def test_elaboration_off_results_do_not_outlive_a_fix(client):
     client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 2},
                                              "contentChanges": [{"text": text}]})
     client.notify("textDocument/didSave", {"textDocument": {"uri": u}})
-    status = client.wait_for("uvm/elaborationStatus", timeout=10)["params"]
+    status = client.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "off"
+                             and m["params"]["message"] == "files changed since Elaborate Now", timeout=10)["params"]
     assert (status["state"], status["message"]) == ("off", "files changed since Elaborate Now")
     client.wait_for("textDocument/publishDiagnostics", lambda m: m["params"]["uri"] == u and not elab_diags(m))
     client.notify("textDocument/didClose", {"textDocument": {"uri": u}})
@@ -597,13 +602,15 @@ def test_an_edit_in_on_change_mode_supersedes_a_run_in_progress(client):
     client.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "running")
     client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 3},
                                              "contentChanges": [{"text": "//\n//\n//\n" + v2}]})
-    assert client.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 1
-    time.sleep(1.5)
+    msg = client.wait_for("textDocument/publishDiagnostics", lambda m: m["params"]["uri"] == u
+                          and [d["range"]["start"]["line"] for d in elab_diags(m)] == [line + 3])
+    # Diagnostics precede their run's status; queued statuses can describe earlier text.
+    client.forget("uvm/elaborationStatus")
+    client.wait_for("uvm/elaborationStatus", lambda m: m["params"]["state"] == "done"
+                    and m["params"]["errors"] == 1)
     client.request("uvm/stats", {})  # collects whatever else the server sent
     # The run on the older text was stopped: one result, for the text the editor has.
     assert not [m for m in client.notifications if m["method"] == "uvm/elaborationStatus" and finished(m)]
-    *_, msg = [m for m in client.notifications
-               if m["method"] == "textDocument/publishDiagnostics" and m["params"]["uri"] == u]
     assert [d["range"]["start"]["line"] for d in elab_diags(msg)] == [line + 3]
     client.forget("uvm/elaborationStatus")
     client.notify("textDocument/didChange", {"textDocument": {"uri": u, "version": 4},
@@ -757,3 +764,19 @@ def test_wait_for_timeout_includes_stderr_and_worker_status():
     assert "textDocument/publishDiagnostics" in str(exc.value)
     assert "worker failed: café😀" in str(exc.value)
     assert "worker exited 2" in str(exc.value)
+
+
+def test_request_error_includes_stderr():
+    client = Client.__new__(Client)
+    client.next_id = 0
+    client.notifications = [{"method": "textDocument/publishDiagnostics", "params": {
+        "uri": "file:///missing.sv", "diagnostics": [{"message": "could not open include"}]}}]
+    client.stderr_tail = deque(["cannot read café.svh\n".encode("utf-8")])
+    client.send = lambda msg: None
+    client.read = lambda: {"id": 1, "error": {"code": -32603, "message": "request failed"}}
+    with pytest.raises(AssertionError) as exc:
+        client.request("textDocument/documentHighlight", {})
+    assert "textDocument/documentHighlight" in str(exc.value)
+    assert "request failed" in str(exc.value)
+    assert "cannot read café.svh" in str(exc.value)
+    assert "could not open include" in str(exc.value)

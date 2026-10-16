@@ -10,6 +10,22 @@ from uvmls.project import (
 from conftest import EXAMPLE, FILELIST
 
 
+def test_directory_stamp_with_lagging_windows_times(tmp_path, windows_directory_times):
+    from uvmls.project import directory_stamp
+
+    first = directory_stamp(str(tmp_path))
+    assert first == directory_stamp(str(tmp_path))
+    path = tmp_path / "a.svh"
+    path.write_bytes(b"// header\r\n")
+    second = directory_stamp(str(tmp_path))
+    assert first[:3] == second[:3] and first != second
+    path.rename(tmp_path / "b.svh")
+    assert directory_stamp(str(tmp_path)) != second
+    (tmp_path / "b.svh").unlink()
+    assert directory_stamp(str(tmp_path)) == first
+    assert directory_stamp(str(tmp_path / "missing")) is None
+
+
 def fake_uvm(home, rev: str) -> str:
     """A minimal UVM kit at `home`; returns its src directory."""
     src = home / "src"

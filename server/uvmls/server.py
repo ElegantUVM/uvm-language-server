@@ -824,13 +824,27 @@ def _indexed_lines(ls: UvmLanguageServer, path: str) -> list[str]:
     return ls.ws.lines_of(path)
 
 
+def _indexed_bom(ls: UvmLanguageServer, path: str, line: int) -> int:
+    # slang counts a disk BOM in first-line columns; an editor buffer omits it.
+    if line != 0 or path in ls.ws.overrides:
+        return 0
+    if path not in ls.ws.indexed_boms:
+        try:
+            with open(path, "rb") as f:
+                bom = 3 if f.read(3) == b"\xef\xbb\xbf" else 0
+        except OSError:
+            bom = 0
+        ls.ws.indexed_boms[path] = bom
+    return ls.ws.indexed_boms[path]
+
+
 def _indexed_column(ls: UvmLanguageServer, path: str, pos: T.Position) -> int:
     lines = _indexed_lines(ls, path)
     decoded = ls.workspace.position_codec.position_from_client_units(lines, pos)
     if pos.line >= len(lines):
         return 0
     # An open buffer slang could not read can hold a lone surrogate the client sent as an escape.
-    return len(lines[pos.line][:decoded.character].encode("utf-8", "surrogatepass"))
+    return len(lines[pos.line][:decoded.character].encode("utf-8", "surrogatepass")) + _indexed_bom(ls, path, pos.line)
 
 
 def _indexed_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
@@ -838,6 +852,7 @@ def _indexed_range(ls: UvmLanguageServer, rng: Range) -> T.Range:
     lines = _indexed_lines(ls, rng.path)
 
     def position(line, col):
+        col = max(0, col - _indexed_bom(ls, rng.path, line))
         prefix = utf8_prefix(lines[line], col) if line < len(lines) else ""
         return T.Position(line, ls.workspace.position_codec.client_num_units(prefix))
 

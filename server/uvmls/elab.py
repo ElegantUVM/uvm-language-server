@@ -16,6 +16,7 @@ import os
 import re
 import signal
 import sys
+import tempfile
 import time
 from collections import Counter
 
@@ -267,7 +268,7 @@ def _diag(path: str | None, severity: str, code: str, message: str) -> dict:
 
 
 def _compile(req: dict):
-    """(driver, compilation, locator, missing roots) for a request; None if slang rejects its options."""
+    """(driver, compilation, locator, missing roots), or slang's option failure text."""
     overrides = req.get("overrides") or {}
     roots = list(dict.fromkeys(req["roots"]))
     missing = [r for r in roots if not os.path.isfile(r)]  # slang's loader needs the file on disk
@@ -281,8 +282,22 @@ def _compile(req: dict):
     for top in req.get("tops") or []:
         args += ["--top", top]
     args += list(req.get("args") or []) + [r for r in roots if r not in missing]
-    if not d.parseCommandLine(" ".join(_quote(a) for a in args)) or not d.processOptions():
-        return None
+    # The driver prints command-line errors directly to native stderr, not its diagnostic client.
+    with tempfile.TemporaryFile() as output:
+        saved = os.dup(2)
+        try:
+            sys.stderr.flush()
+            os.dup2(output.fileno(), 2)
+            accepted = d.parseCommandLine(" ".join(_quote(a) for a in args)) and d.processOptions()
+        finally:
+            os.dup2(saved, 2)
+            os.close(saved)
+        output.seek(0)
+        detail = output.read().decode("utf-8", "replace").strip()
+    if not accepted:
+        return "slang did not accept the elaboration options" + (f":\n{detail}" if detail else "")
+    if detail:
+        print(detail, file=sys.stderr)
     sm = d.sourceManager
     assigned = set()
     for path, text in overrides.items():
@@ -323,7 +338,7 @@ def _library_errors(req: dict, loc: _Locator) -> set[tuple[str, int, str]]:
     """(file, line, code) of each error the UVM library reports compiled on its own, with the
     same include directories, defines and unsaved text."""
     compiled = _compile(dict(req, roots=[r for r in req["roots"] if loc.is_library(r)], tops=[]))
-    if compiled is None:
+    if isinstance(compiled, str):
         return set()
     d, comp, own, _ = compiled
     out = set()
@@ -357,8 +372,8 @@ def _given_types(diag, loc: _Locator) -> list[dict]:
 
 def _elaborate(req: dict) -> dict:
     compiled = _compile(req)
-    if compiled is None:
-        return _failed("slang did not accept the elaboration options")
+    if isinstance(compiled, str):
+        return _failed(compiled)
     d, comp, loc, missing = compiled
     eng = d.diagEngine
     notes = _Notes(eng, loc)

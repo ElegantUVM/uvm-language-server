@@ -53,7 +53,7 @@ class Doc:
 
     def __init__(self, client: Client, path: str, text: str | None = None, *, newline=None):
         self.client, self.path, self.uri = client, path, path_to_uri(str(path))
-        with open(path, encoding="utf-8", newline=newline) as f:
+        with open(path, encoding="utf-8-sig", newline=newline) as f:
             self.text = f.read() if text is None else text
         self.version = 1
         client.forget("textDocument/publishDiagnostics")  # only what this document's text gets

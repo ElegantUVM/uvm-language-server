@@ -44,6 +44,16 @@ def test_example_elaborates_cleanly(bundled_ws):
     assert 0 < r["seconds"] < 10
 
 
+def test_option_failure_includes_slangs_diagnostic_and_restores_stderr(bundled_ws, capfd):
+    req = request_for(bundled_ws, args=["--not-an-elaboration-option"])
+    result = elaborate(req)
+    assert "slang did not accept the elaboration options" in result["error"]
+    assert "unknown command line argument '--not-an-elaboration-option'" in result["error"]
+    os.write(2, b"stderr restored\n")
+    assert capfd.readouterr().err == "stderr restored\n"
+    assert elaborate(request_for(bundled_ws))["error"] is None
+
+
 def test_unknown_member_and_argument_count_in_an_unsaved_include(bundled_ws):
     # alu_driver.svh is included by alu_pkg.sv; its unsaved text is what gets compiled.
     text = edited(DRIVER, "vif = m_cfg.vif;", "vif = m_cfg.vfi;")

@@ -11,8 +11,11 @@ import pytest
 
 from uvmls import __version__
 from uvmls.cli import main as cli
+from uvmls.elab import elaborate, request_for
 from uvmls.model import Diag, Range
 from uvmls.server import path_to_uri, uri_to_path
+from uvmls.project import ProjectConfig
+from uvmls.workspace import Workspace
 
 from conftest import EXAMPLE
 
@@ -111,6 +114,24 @@ def test_stdout_is_only_sarif_and_file_can_accompany_json(tb, tmp_path, capsys, 
     else:
         assert out.out == plain.out
     assert json.loads(output.read_text(encoding="utf-8"))["runs"][0]["results"] == run["results"]
+
+
+def test_repeated_elaboration_around_stdout_sarif(tb, capsys):
+    ws = Workspace()
+    ws.configure(ProjectConfig(workspace_roots=[str(tb)], filelists=[str(tb / "alu_tb.f")]))
+    req = request_for(ws)
+    before = {p.relative_to(tb): p.read_bytes() for p in tb.rglob("*") if p.is_file()}
+    first = elaborate(req)
+    assert first["error"] is None and first["tops"] == ["tb_top"], first
+    capsys.readouterr()
+    code, out = invoke(capsys, ["elab", str(tb), "-f", str(tb / "alu_tb.f"), "--sarif", "-"])
+    assert code == 1, out.err
+    check_log(json.loads(out.out))
+    second = elaborate(req)
+    assert second["error"] is None, second
+    assert {k: v for k, v in first.items() if k != "seconds"} == {
+        k: v for k, v in second.items() if k != "seconds"}
+    assert {p.relative_to(tb): p.read_bytes() for p in tb.rglob("*") if p.is_file()} == before
 
 
 def test_info_crlf_and_non_ascii_path(tmp_path, capsys):

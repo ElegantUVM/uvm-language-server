@@ -22,7 +22,7 @@ from .lints import (
 from .elab import SOURCE as ELAB_SOURCE
 from .indexer import EOL_RE, FIX_DATA, IGNORE_RE, MASK_RE, NOT_EOL_RE, argument_spans, ignore_codes, ignore_directives, mask
 from .model import ClassInfo, Method, Range, Variable
-from .project import directory_stamp, discover_files, display_path, is_bundled, norm
+from .project import DirectoryStamp, directory_stamp, discover_files, display_path, is_bundled, norm
 from .views import canonical_type, config_db_report, mismatched
 from .workspace import BUILTIN_TYPES
 
@@ -812,7 +812,7 @@ def include_dirs_for(ws, name: str, near: str) -> list[str]:
         # Includes may use extensions the client does not watch. Directory changes catch
         # new candidates too, without enumerating every file again on unchanged requests.
         by_name: dict[str, list[str]] = {}
-        stamps: dict[str, tuple[int, int, int] | None] = {}
+        stamps: dict[str, DirectoryStamp | None] = {}
         for path in discover_files(ws.config.workspace_roots, ws.config.exclude, match=lambda fn: True,
                                    directory_stamps=stamps):
             by_name.setdefault(os.path.basename(path), []).append(path)

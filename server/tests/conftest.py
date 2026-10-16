@@ -13,6 +13,30 @@ EXAMPLE = os.path.normpath(os.path.join(HERE, "..", "..", "examples", "alu_tb"))
 FILELIST = os.path.join(EXAMPLE, "alu_tb.f")
 
 
+@pytest.fixture
+def windows_directory_times(monkeypatch):
+    import stat
+    from types import SimpleNamespace
+    from uvmls import project
+
+    monkeypatch.setattr(project, "sys", SimpleNamespace(platform="win32"))
+    frozen = {}
+
+    def wrap(original):
+        def stamp(path, *args, **kwargs):
+            st = original(path, *args, **kwargs)
+            if stat.S_ISDIR(st.st_mode):
+                key = os.fspath(path)
+                if key not in frozen:
+                    frozen[key] = SimpleNamespace(**{k: getattr(st, k) for k in dir(st) if k.startswith("st_")})
+                return frozen[key]
+            return st
+        return stamp
+
+    monkeypatch.setattr(os, "stat", wrap(os.stat))
+    monkeypatch.setattr(os, "lstat", wrap(os.lstat))
+
+
 @pytest.fixture(scope="session")
 def ws():
     """The example on the built-in UVM model (macro shim + class table)."""

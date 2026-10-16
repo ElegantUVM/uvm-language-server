@@ -18,6 +18,7 @@ import functools
 import os
 import re
 import shlex
+import sys
 from dataclasses import dataclass, field
 
 SV_EXTENSIONS = (".sv", ".svh", ".v", ".vh", ".svi", ".svp", ".sva")
@@ -218,16 +219,23 @@ def _exclusion(patterns: list[str]):
     return excluded
 
 
-def directory_stamp(path: str) -> tuple[int, int, int] | None:
+DirectoryStamp = tuple[int, int, int] | tuple[int, int, int, tuple[str, ...]]
+
+
+def directory_stamp(path: str) -> DirectoryStamp | None:
     try:
         st = os.stat(path)
+        if sys.platform == "win32":
+            with os.scandir(path) as entries:
+                names = tuple(sorted(e.name for e in entries))
+            return st.st_ino, st.st_mtime_ns, st.st_ctime_ns, names
         return st.st_ino, st.st_mtime_ns, st.st_ctime_ns
     except OSError:
         return None
 
 
 def discover_files(roots: list[str], exclude: list[str], match=is_sv_file, *,
-                   directory_stamps: dict[str, tuple[int, int, int] | None] | None = None) -> list[str]:
+                   directory_stamps: dict[str, DirectoryStamp | None] | None = None) -> list[str]:
     """The SystemVerilog files (or the files whose name `match`es) below the roots that neither
     DEFAULT_EXCLUDES nor `exclude` (VS Code globs, as in files.exclude) leave out."""
     excluded = _exclusion(DEFAULT_EXCLUDES + exclude)

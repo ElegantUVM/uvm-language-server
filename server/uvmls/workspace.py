@@ -13,7 +13,7 @@ from .model import (
     ClassInfo, ConfigDbCall, ConnectCall, CreateCall, DesignUnit, Diag, FileIndex, MacroDef,
     Method, OverrideCall, Range, SeqStart, Typedef, TypeRef, Variable,
 )
-from .project import ProjectConfig, SourceSet, build_source_set, is_bundled, is_sv_file, norm
+from .project import DirectoryStamp, ProjectConfig, SourceSet, build_source_set, is_bundled, is_sv_file, norm
 # An edit keeps the parse of the roots it re-parsed for their first request, unless it was to
 # a header that more roots than this share: their trees would hold the project's text, and the
 # UVM headers each includes, many times over.
@@ -252,7 +252,7 @@ class Workspace:
         self._trees: dict[str, tuple] = {}  # what the last edit parsed, by root: its first request walks it
         self.last_index_seconds = 0.0
         self._include_candidates: tuple[tuple, dict[str, list[str]],
-                                         dict[str, tuple[int, int, int] | None]] | None = None
+                                         dict[str, DirectoryStamp | None]] | None = None
         self._chaining: set[int] = set()  # classes whose ancestors are being found
         # library_files by resolved path, for formatting outside the lock: replaced, never updated.
         self.library_real: frozenset[str] = frozenset()
@@ -279,6 +279,7 @@ class Workspace:
         self.identifiers_by_file: dict[str, list[tuple[str, Range]]] = {}
         self.texts: dict[str, str] = {}
         self.lines: dict[str, list[str]] = {}
+        self.indexed_boms: dict[str, int] = {}
         self.classes: list[ClassInfo] = []
         self.classes_by_name: dict[str, list[ClassInfo]] = {}
         self.class_by_qual: dict[str, ClassInfo] = {}

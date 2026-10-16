@@ -144,6 +144,10 @@ def test_include_cache_finds_new_unwatched_headers(tmp_path, suffix, existing, e
         assert walk.call_count == 2
 
 
+def test_new_header_with_lagging_directory_times(tmp_path, windows_directory_times):
+    test_include_cache_finds_new_unwatched_headers(tmp_path, 'h', True, False)
+
+
 @pytest.mark.parametrize('existing', [False, True])
 def test_new_unwatched_header_over_stdio(tmp_path, existing):
     from test_code_actions import Doc, start
