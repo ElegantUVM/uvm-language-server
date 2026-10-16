@@ -1,5 +1,5 @@
 # A release is a tag v<version> matching client/package.json and server/pyproject.toml. The workflow
-# builds both .vsix packages and the wheel, attaches them to a GitHub release, publishes the wheel to
+# builds the generic and four platform .vsix packages and the wheel, attaches them to a GitHub release, publishes the wheel to
 # PyPI through trusted publishing (configure the publisher on PyPI: owner ElegantUVM, repository
 # uvm-language-server, workflow release.yml, environment pypi) and the extension to Open VSX (secret
 # OVSX_PAT). The Visual Studio Marketplace is published by hand with Entra ID sign-in
@@ -41,7 +41,7 @@ jobs:
         env:
           UVMLS_PYTHON: python
         run: |
-          (cd client && npm run package:all)
+          (cd client && npm run package)
           python -m build server
       - uses: actions/upload-artifact@v4
         with:
@@ -50,13 +50,35 @@ jobs:
             client/*.vsix
             server/dist/*
           if-no-files-found: error
+  platform-packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: windows-latest
+            target: win32-x64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    uses: ./.github/workflows/platform-package.yml
+    with:
+      os: ${{ matrix.os }}
+      target: ${{ matrix.target }}
   github-release:
-    needs: build
+    needs: [build, platform-packages]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: release
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: platform-*
+          path: client
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -75,7 +97,7 @@ jobs:
         with:
           packages-dir: server/dist
   open-vsx:
-    needs: build
+    needs: [build, platform-packages]
     runs-on: ubuntu-latest
     if: ${{ vars.PUBLISH_OPEN_VSX == 'true' }}
     steps:
@@ -85,7 +107,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Publish both packages
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: platform-*
+          path: client
+          merge-multiple: true
+      - name: Publish all packages
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |

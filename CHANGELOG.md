@@ -6,6 +6,10 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0 is reached.
 ## [Unreleased]
 
 ### Added
+- Windows x64 and macOS arm64/x64 package builds with pinned offline wheels, per-target caches,
+  archive checks and native setup smoke jobs. Native CI acceptance remains pending.
+- Bundled Verible on Windows x64 and macOS arm64. Intel macOS ships wheels only; use an external
+  formatter through `uvm.formatter.path` (for example Homebrew Verible).
 - Apache License 2.0; NOTICE, THIRD_PARTY_NOTICES, AI-USE, CONTRIBUTING and SECURITY documents.
 - Marketplace identity: publisher `elegantuvm`, extension `elegantuvm`.
 - A `linux-x64` package that carries the server's Python wheels, so first-run setup needs no network;
@@ -15,10 +19,12 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0 is reached.
   `uvm_config_wrapper`, and a project's `typedef uvm_config_db #(T) t_db;`.
 
 ### Changed
+- The generic VSIX ships no formatter or wheels; the Linux x64 package retains both.
 - The server requires Python 3.11 or newer (pyslang 12 dropped 3.10).
 - First-run setup no longer upgrades pip.
 
 ### Fixed
+- Windows setup probes explicit `py` launcher versions; index keys normalize drive letters and editor URIs.
 - The topology follows an env (or any component) created through a class type parameter of a base test
   (OpenTitan's `ENV_T`, UVMF): trees that stopped at the test now expand (OpenTitan uart 1 → 42 nodes).
 - `unknown-base` no longer fires on `extends T` when `T` is a type parameter of the class.

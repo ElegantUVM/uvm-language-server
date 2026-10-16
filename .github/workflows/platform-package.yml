@@ -1,0 +1,46 @@
+# Reused by CI and releases: build and smoke-test each offline package on its native OS.
+name: Platform package
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    name: setup-${{ inputs.target }}
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+      - name: Check client on the native host
+        working-directory: client
+        run: npm run typecheck && npm test
+      - name: Package with pinned payload and notices checks
+        working-directory: client
+        env:
+          UVMLS_PYTHON: python
+        run: npm run package:${{ inputs.target }}
+      - name: First-run install without a package index
+        run: python tools/platform_smoke.py --target ${{ inputs.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-${{ inputs.target }}
+          path: client/*-${{ inputs.target }}-*.vsix
+          if-no-files-found: error

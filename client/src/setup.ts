@@ -15,6 +15,17 @@ export function basePythonNames(platform: string = process.platform): string[] {
   return ["python3", "python3.14", "python3.13", "python3.12", "python3.11", "python"];
 }
 
+/** The launcher needs a version switch; carry it through both probing and venv creation. */
+export function basePythonCommands(platform: string = process.platform): { command: string; args: string[] }[] {
+  return basePythonNames(platform).flatMap((command) => command === "py"
+    ? ["3.14", "3.13", "3.12", "3.11"].map((version) => ({ command, args: [`-${version}`] }))
+    : [{ command, args: [] }]);
+}
+
+export function venvBinary(platform: string = process.platform): string {
+  return platform === "win32" ? "Scripts\\python.exe" : "bin/python";
+}
+
 /**
  * The pip commands to run, in order, until one succeeds: from the wheels a platform package ships
  * (no network at all), then from the index pip is configured for, with the user's extra arguments

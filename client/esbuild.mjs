@@ -45,5 +45,5 @@ if (watch) {
 } else {
   const results = await Promise.all(contexts.map((c) => c.rebuild()));
   await Promise.all(contexts.map((c) => c.dispose()));
-  writeNotices(results.map((r) => r.metafile), "THIRD_PARTY_NOTICES.txt");
+  await writeNotices(results.map((r) => r.metafile), "THIRD_PARTY_NOTICES.txt");
 }

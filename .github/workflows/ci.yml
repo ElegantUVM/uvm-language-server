@@ -7,13 +7,21 @@ permissions:
   contents: read
 jobs:
   server:
-    name: server (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    name: server (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python: "3.12"
+          - os: macos-latest
+            python: "3.12"
+          - os: macos-15-intel
+            python: "3.12"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -44,7 +52,7 @@ jobs:
       - name: Package (generic and linux-x64, with the notices checks)
         env:
           UVMLS_PYTHON: python
-        run: cd client && npm run package:all
+        run: cd client && npm run package && npm run package:linux-x64
       - name: Wheel and sdist
         run: python -m pip install build && python -m build server
       - uses: actions/upload-artifact@v4
@@ -54,3 +62,20 @@ jobs:
             client/*.vsix
             server/dist/*
           if-no-files-found: error
+  platform-packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: windows-latest
+            target: win32-x64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    uses: ./.github/workflows/platform-package.yml
+    with:
+      os: ${{ matrix.os }}
+      target: ${{ matrix.target }}

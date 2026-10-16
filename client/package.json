@@ -303,9 +303,12 @@
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit -p .",
     "test": "node --test tests/*.test.cjs",
-    "package": "node scripts/fetch-verible.mjs && node scripts/bundle-server.mjs && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies && node scripts/check-notices.mjs",
-    "package:linux-x64": "node scripts/fetch-verible.mjs && node scripts/fetch-wheels.mjs && node scripts/bundle-server.mjs --target linux-x64 && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies --target linux-x64 && node scripts/check-notices.mjs --target linux-x64",
-    "package:all": "npm run package && npm run package:linux-x64"
+    "package": "node scripts/bundle-server.mjs && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies && node scripts/check-notices.mjs",
+    "package:linux-x64": "node scripts/bundle-server.mjs --target linux-x64 && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies --target linux-x64 && node scripts/check-notices.mjs --target linux-x64",
+    "package:all": "npm run package && npm run package:linux-x64 && npm run package:win32-x64 && npm run package:darwin-arm64 && npm run package:darwin-x64",
+    "package:win32-x64": "node scripts/bundle-server.mjs --target win32-x64 && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies --target win32-x64 && node scripts/check-notices.mjs --target win32-x64",
+    "package:darwin-arm64": "node scripts/bundle-server.mjs --target darwin-arm64 && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies --target darwin-arm64 && node scripts/check-notices.mjs --target darwin-arm64",
+    "package:darwin-x64": "node scripts/bundle-server.mjs --target darwin-x64 && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies --target darwin-x64 && node scripts/check-notices.mjs --target darwin-x64"
   },
   "dependencies": {
     "elkjs": "^0.12.0",

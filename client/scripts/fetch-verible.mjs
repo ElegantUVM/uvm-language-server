@@ -1,95 +1,89 @@
-// Fetch the pinned Verible release once into ~/.cache/uvmls, keeping only verible-verilog-format, so
-// that `npm run package` bundles it offline from then on. The binary never enters git:
-// bundle-server.mjs copies it from the cache into client/server/ at package time. Its licence text is
-// vendored in client/third_party/verible-LICENSE. The cached binary is checked against its own pinned
-// digest on every use, so a tampered or corrupt cache is re-fetched rather than shipped.
-import { execFileSync } from "child_process";
+// Each target pins both the release archive and the extracted formatter. Only verified binaries
+// enter the cache; UVMLS_VERIBLE_TARBALL[_<TARGET>] supports builds from local release archives.
 import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import { extractMember } from "./archive.mjs";
+import { targetFromArgs } from "./fetch-wheels.mjs";
 
-export const VERIBLE_VERSION = "v0.0-4296-g0f262651";
-export const VERIBLE_PLATFORM = "linux-static-x86_64";
-export const VERIBLE_TARBALL_URL = "https://github.com/chipsalliance/verible/releases/download/" +
-  `${VERIBLE_VERSION}/verible-${VERIBLE_VERSION}-${VERIBLE_PLATFORM}.tar.gz`;
-export const VERIBLE_TARBALL_SHA256 = "8569defb891d2316067613ea00442af28a7a09d405d95b54c0c91f9942d26635";
-// sha256 of the extracted verible-verilog-format inside that tarball.
-export const VERIBLE_BINARY_SHA256 = "daf292645c850a64a320a3a13edd8a3521f80151fd049326da8887a9bba753f8";
-const MEMBER = `verible-${VERIBLE_VERSION}/bin/verible-verilog-format`;
+const client = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const lock = JSON.parse(fs.readFileSync(path.join(client, "verible.lock.json"), "utf8"));
+export const VERIBLE_VERSION = lock.version;
+export const LICENSE = path.join(client, "third_party", "verible-LICENSE");
 
-export const CACHE = path.join(os.homedir(), ".cache", "uvmls", "verible", VERIBLE_VERSION);
-export const CACHED_BINARY = path.join(CACHE, "verible-verilog-format");
-export const LICENSE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "third_party", "verible-LICENSE");
+export function veribleTarget(target = "linux-x64") {
+  targetFromArgs([], target);
+  // This release has no Intel macOS binary; its package deliberately ships wheels only.
+  if (target === "darwin-x64") return undefined;
+  const entry = lock.targets[target];
+  if (!entry) throw new Error(`Verible ${target} has no verified entry in client/verible.lock.json; pin its archive and binary before packaging`);
+  if (![entry.archiveSha256, entry.binarySha256].every((hash) => /^[a-f0-9]{64}$/.test(hash))) {
+    throw new Error(`Verible ${target} has invalid SHA-256 pins`);
+  }
+  const binary = target === "win32-x64" ? "verible-verilog-format.exe" : "verible-verilog-format";
+  return { ...entry, binary, url: `https://github.com/chipsalliance/verible/releases/download/${VERIBLE_VERSION}/${entry.asset}` };
+}
+
+export function cachePath(target = "linux-x64") {
+  targetFromArgs([], target);
+  return path.join(process.env.UVMLS_CACHE_DIR || path.join(os.homedir(), ".cache", "uvmls"),
+    "verible", VERIBLE_VERSION, target);
+}
 
 function sha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
-async function download(url, to) {
-  console.log(`fetching ${url}`);
-  const response = await fetch(url, { redirect: "follow" });
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-  fs.writeFileSync(to, Buffer.from(await response.arrayBuffer()));
-}
-
-/** Verified tarball: a local copy from UVMLS_VERIBLE_TARBALL (offline use), else the release asset. */
-async function tarball(work) {
-  const file = path.join(work, "verible.tar.gz");
-  const local = process.env.UVMLS_VERIBLE_TARBALL;
-  if (local) {
-    console.log(`using tarball ${local}`);
-    fs.copyFileSync(local, file);
-  } else {
-    await download(VERIBLE_TARBALL_URL, file);
-  }
-  const digest = sha256(file);
-  if (digest !== VERIBLE_TARBALL_SHA256) {
-    throw new Error(`${local || VERIBLE_TARBALL_URL}: sha256 ${digest} is not the pinned ${VERIBLE_TARBALL_SHA256}`);
-  }
-  return file;
-}
-
-function cachedBinaryIsGood() {
-  return fs.existsSync(CACHED_BINARY) && sha256(CACHED_BINARY) === VERIBLE_BINARY_SHA256;
-}
-
-/** Make sure the cache holds the pinned formatter; returns its path and the vendored licence's. */
-export async function fetchVerible() {
+export async function fetchVerible(target = "linux-x64") {
+  const config = veribleTarget(target);
+  if (!config) throw new Error(`${target} ships no bundled formatter; set uvm.formatter.path to a local Verible`);
+  const cache = cachePath(target);
+  const cached = path.join(cache, config.binary);
   if (!/Apache License\s+Version 2\.0/.test(fs.readFileSync(LICENSE, "utf8"))) {
     throw new Error(`${LICENSE} is not the Apache License 2.0 text`);
   }
-  if (cachedBinaryIsGood()) {
-    console.log(`verible ${VERIBLE_VERSION}: cached in ${CACHE}`);
-    return { binary: CACHED_BINARY, license: LICENSE };
+  if (fs.existsSync(cached) && sha256(cached) === config.binarySha256) {
+    console.log(`verible ${VERIBLE_VERSION} (${target}): cached in ${cache}`);
+    return { binary: cached, license: LICENSE };
   }
-  if (fs.existsSync(CACHED_BINARY)) {
-    console.log(`verible ${VERIBLE_VERSION}: the cached binary does not match its pinned digest; fetching again`);
-    fs.rmSync(CACHED_BINARY, { force: true });
-  }
-  fs.mkdirSync(CACHE, { recursive: true });
-  const work = fs.mkdtempSync(path.join(CACHE, "fetch-"));
+  fs.mkdirSync(cache, { recursive: true });
+  const work = fs.mkdtempSync(path.join(cache, "fetch-"));
   try {
-    const file = await tarball(work);
-    execFileSync("tar", ["-xzf", file, "-C", work, "--strip-components=2", MEMBER], { stdio: "inherit" });
-    const binary = path.join(work, "verible-verilog-format");
-    const digest = sha256(binary);
-    if (digest !== VERIBLE_BINARY_SHA256) {
-      throw new Error(`extracted verible-verilog-format: sha256 ${digest} is not the pinned ${VERIBLE_BINARY_SHA256}`);
+    const archive = path.join(work, config.asset);
+    const local = process.env[`UVMLS_VERIBLE_TARBALL_${target.replace(/-/g, "_").toUpperCase()}`]
+      || process.env.UVMLS_VERIBLE_TARBALL;
+    if (local) {
+      fs.copyFileSync(local, archive);
+    } else {
+      console.log(`fetching ${config.url}`);
+      const response = await fetch(config.url, { redirect: "follow" });
+      if (!response.ok) throw new Error(`${config.url}: HTTP ${response.status}`);
+      fs.writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
     }
-    fs.chmodSync(binary, 0o755);
-    fs.renameSync(binary, CACHED_BINARY);
+    const digest = sha256(archive);
+    if (digest !== config.archiveSha256) {
+      throw new Error(`${local || config.url}: sha256 ${digest} is not the pinned ${config.archiveSha256}`);
+    }
+    const binary = path.join(work, config.binary);
+    await extractMember(archive, config.member, binary);
+    const binaryDigest = sha256(binary);
+    if (binaryDigest !== config.binarySha256) {
+      throw new Error(`extracted ${config.binary}: sha256 ${binaryDigest} is not the pinned ${config.binarySha256}`);
+    }
+    if (process.platform !== "win32") fs.chmodSync(binary, 0o755);
+    fs.copyFileSync(binary, cached);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
-  console.log(`verible ${VERIBLE_VERSION}: ${CACHED_BINARY} (sha256 ${VERIBLE_BINARY_SHA256})`);
-  return { binary: CACHED_BINARY, license: LICENSE };
+  console.log(`verible ${VERIBLE_VERSION} (${target}): ${cached}`);
+  return { binary: cached, license: LICENSE };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  fetchVerible().catch((error) => {
+  Promise.resolve().then(() => fetchVerible(targetFromArgs(undefined, "linux-x64"))).catch((error) => {
     console.error(`fetch-verible: ${error.message}`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

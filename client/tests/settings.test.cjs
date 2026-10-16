@@ -30,7 +30,7 @@ function client({ root = path.resolve("project"), workspaceValue, globalValue, f
   };
   const context = { exports: {}, require: (name) => name === "vscode" ? vscode : require(name) };
   vm.runInNewContext(compiled, context);
-  return { add: context.exports.addIncludeDir, calls, root };
+  return { add: context.exports.addIncludeDir, expand: context.exports.expandPath, calls, root };
 }
 
 test("adding an include preserves effective entries and confirms the completed write", async () => {
@@ -166,4 +166,13 @@ test("formatter path and switch are forwarded unchanged after configuration chan
   assert.equal(c.settings().formatter.path, "~/another formatter");
   c.values.formatter.enabled = true;
   assert.equal(c.settings().formatter.enabled, true);
+});
+
+
+test("workspace expansion preserves Windows separators, spaces and replacement metacharacters", () => {
+  const root = "C:\\Users\\Test $& User\\Design";
+  const c = client({ root });
+  assert.equal(c.expand("${workspaceFolder}\\tools\\python.exe"), root + "\\tools\\python.exe");
+  assert.equal(c.expand("~\\tools\\python.exe"), os.homedir() + "\\tools\\python.exe");
+  assert.equal(c.expand("~other\\python.exe"), "~other\\python.exe");
 });

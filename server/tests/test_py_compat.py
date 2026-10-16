@@ -62,7 +62,8 @@ def _pep701(source: str) -> set[tuple[int, str]]:
 
 
 def test_sources_parse_on_the_oldest_python():
-    found = {os.path.relpath(p, SERVER): newer_syntax(p.read_text(encoding="utf-8")) for p in SOURCES}
+    found = {Path(os.path.relpath(p, SERVER)).as_posix(): newer_syntax(p.read_text(encoding="utf-8"))
+             for p in SOURCES}
     assert "uvmls/server.py" in found and {path: what for path, what in found.items() if what} == {}
 
 

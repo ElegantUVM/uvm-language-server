@@ -1,0 +1,66 @@
+{
+  "generated": "2026-10-16",
+  "python": [
+    "3.11",
+    "3.12",
+    "3.13",
+    "3.14"
+  ],
+  "platform": "win32-x64",
+  "requirements": [
+    "pyslang>=12",
+    "pygls>=2,<3"
+  ],
+  "files": [
+    {
+      "name": "attrs-26.1.0-py3-none-any.whl",
+      "size": 67548,
+      "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309"
+    },
+    {
+      "name": "cattrs-26.2.1-py3-none-any.whl",
+      "size": 74843,
+      "sha256": "a12aaa3453dc8f633a815293179f08b7421ed18d2575c459c3c736f840beac24"
+    },
+    {
+      "name": "lsprotocol-2025.0.0-py3-none-any.whl",
+      "size": 76250,
+      "sha256": "f9d78f25221f2a60eaa4a96d3b4ffae011b107537facee61d3da3313880995c7"
+    },
+    {
+      "name": "nanobind_backend-1.0.0-cp311-cp311-win_amd64.whl",
+      "size": 264783,
+      "sha256": "691be892dcd6b4b1317d628b49bf3e688470f4f927ac316dca233ee19fab7ecd"
+    },
+    {
+      "name": "nanobind_backend-1.0.0-cp312-cp312-win_amd64.whl",
+      "size": 264454,
+      "sha256": "9b1502e3f160358feff92f60a634e198c76754f50a60fdacd9a8b5dccbe5d9d0"
+    },
+    {
+      "name": "nanobind_backend-1.0.0-cp313-cp313-win_amd64.whl",
+      "size": 264501,
+      "sha256": "915c6ff4ce92584cdde18a24cc5d730f04a70c2f26bc0bc4db903ca54043eb86"
+    },
+    {
+      "name": "nanobind_backend-1.0.0-cp314-cp314-win_amd64.whl",
+      "size": 273371,
+      "sha256": "b0eabf671c91fdcd6a61d2177aa434731680442aa2317de54acfabeac4a4cc06"
+    },
+    {
+      "name": "pygls-2.1.1-py3-none-any.whl",
+      "size": 68975,
+      "sha256": "510a6dea2476177230c7d851125e5948efdf3fdb9ebfd8543fc434972f8faed4"
+    },
+    {
+      "name": "pyslang-12.0.0-cp311-abi3-win_amd64.whl",
+      "size": 3381618,
+      "sha256": "90848d0a3853f7f4ed7f021df4af83c8e2130d7a498449c26f27a4509934596e"
+    },
+    {
+      "name": "typing_extensions-4.16.0-py3-none-any.whl",
+      "size": 45571,
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+    }
+  ]
+}

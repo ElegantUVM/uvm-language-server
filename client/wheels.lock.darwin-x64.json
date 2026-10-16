@@ -1,0 +1,66 @@
+{
+  "generated": "2026-10-16",
+  "python": [
+    "3.11",
+    "3.12",
+    "3.13",
+    "3.14"
+  ],
+  "platform": "darwin-x64",
+  "requirements": [
+    "pyslang>=12",
+    "pygls>=2,<3"
+  ],
+  "files": [
+    {
+      "name": "attrs-26.1.0-py3-none-any.whl",
+      "size": 67548,
+      "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309"
+    },
+    {
+      "name": "cattrs-26.2.1-py3-none-any.whl",
+      "size": 74843,
+      "sha256": "a12aaa3453dc8f633a815293179f08b7421ed18d2575c459c3c736f840beac24"
+    },
+    {
+      "name": "lsprotocol-2025.0.0-py3-none-any.whl",
+      "size": 76250,
+      "sha256": "f9d78f25221f2a60eaa4a96d3b4ffae011b107537facee61d3da3313880995c7"
+    },
+    {
+      "name": "nanobind_backend-1.0.0-cp311-cp311-macosx_10_14_x86_64.whl",
+      "size": 80577,
+      "sha256": "b20b3e4bbb672987f9d65e52f1829299589c1ccf0502360879846a922e9cb1ed"
+    },
+    {
+      "name": "nanobind_backend-1.0.0-cp312-cp312-macosx_10_14_x86_64.whl",
+      "size": 80504,
+      "sha256": "9fd9145b1aa8e9b78029308a73e1ade94369d7250c826783655210d1800f1493"
+    },
+    {
+      "name": "nanobind_backend-1.0.0-cp313-cp313-macosx_10_14_x86_64.whl",
+      "size": 80547,
+      "sha256": "a6dd7a66fb7416d62be577d41d64478a187d9f36d089759555698bb08addc2c3"
+    },
+    {
+      "name": "nanobind_backend-1.0.0-cp314-cp314-macosx_10_15_x86_64.whl",
+      "size": 80613,
+      "sha256": "04a35c7395daeb9a33f6801ca3d1e11e0384702ae22b8e3e251ef9f6a4a54c10"
+    },
+    {
+      "name": "pygls-2.1.1-py3-none-any.whl",
+      "size": 68975,
+      "sha256": "510a6dea2476177230c7d851125e5948efdf3fdb9ebfd8543fc434972f8faed4"
+    },
+    {
+      "name": "pyslang-12.0.0-cp311-abi3-macosx_11_0_universal2.whl",
+      "size": 5971964,
+      "sha256": "e69f87128ae642303d397272326648f0778919ebda955128508997d12c096e91"
+    },
+    {
+      "name": "typing_extensions-4.16.0-py3-none-any.whl",
+      "size": 45571,
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+    }
+  ]
+}

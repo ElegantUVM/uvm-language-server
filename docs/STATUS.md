@@ -44,7 +44,7 @@ Last updated: 2026-10-16 (evening); see the Release rows F71–F77.
 | F24 | config_db | Lenses, hover and F12 between gets and sets (feature 3) | ✅ Done | |
 | F25 | Inlay hints | Factory override hints and bound member types (feature 3) | ✅ Done | `→ alu_error_driver` on creates; `req: alu_seq_item`; Ctrl+click opens the override. |
 | F26 | Formatting | Verible Format Document / Format Selection (f4) | ✅ Done | Unsaved buffers; library files never formatted. |
-| F27 | Formatting | Bundled Verible formatter | 🟡 Partial | Linux x86_64 only (v0.0-4296, digest-verified). macOS/Windows: F57. |
+| F27 | Formatting | Bundled Verible formatter | 🟡 Partial | Verified package contents for Linux x64, Windows x64 and macOS arm64 (v0.0-4296); Intel macOS uses an external formatter. Native Windows/macOS acceptance: F57. |
 | F28 | Editing | Signature help (f4) | 🟡 Partial | Methods, constructors, `type_id::create`, UVM docs, named args, chained calls, macro args (bundled UVM). Edge-case gaps: I01. |
 | F29 | Editing | Document highlights and matching keyword pairs (f4) | ✅ Done | Name-based in the file; `begin`/`end`-style pairs. |
 | F30 | Editing | Structural folding (f4) | ✅ Done | Classes, methods, modules, blocks, `case`, `fork`, covergroups, `ifdef` branches, comments, `uvm_*_begin`/`_end`, regions. |
@@ -67,7 +67,7 @@ Last updated: 2026-10-16 (evening); see the Release rows F71–F77.
 | F54 | Views | Sequence → sequencer → driver flow view + REQ-type lint | 🔵 Planned | ~8 days. |
 | F55 | Views | Knob explorer: which config_db set reaches which get, by instance path | 🔵 Planned | ~9 days; overlaps I20. |
 | F56 | Performance | Incremental re-extraction for include-heavy packages | 🔵 Planned | ~7 days. |
-| F57 | Platforms | Windows and macOS packages: per-target wheels and Verible, path handling, CI on windows/macos runners | 🔵 Planned | Plan for Codex: `docs/specs/f57-platforms.md` (2026-10-16). Remote-SSH users already get the Linux package on the remote (`extensionKind: workspace`). |
+| F57 | Platforms | Windows and macOS packages: per-target wheels and Verible, path handling, CI on windows/macos runners | 🟡 Partial | 2026-10-16: isolated `f57-platforms` implementation; packaging/path/CI infrastructure tested locally. All pins preserved and five VSIX builds verified; native acceptance and full corpus pending; see `docs/f57-platforms-progress.md`. Plan: `docs/specs/f57-platforms.md`. Remote-SSH users already get the Linux package on the remote (`extensionKind: workspace`). |
 | F58 | Project | Remote-first: extensionKind, devcontainer | 🔵 Planned | ~2 days. |
 | F59 | Editing | Scaffolding wired into an existing env and filelist | 🔵 Planned | ~5 days. |
 | F60 | Views | Register-model view | 🔵 Planned | |

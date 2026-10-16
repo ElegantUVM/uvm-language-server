@@ -164,7 +164,7 @@ def test_open_uvm_source_is_not_reparsed_or_taken_for_user_code():
 
 def test_open_uvm_source_under_another_name_is_not_taken_for_user_code(tmp_path):
     # The bundled file reached through a symlink: the editor's name and slang's resolved name differ.
-    (tmp_path / "uvm").symlink_to(os.path.dirname(BUNDLED_UVM))
+    (tmp_path / "uvm").symlink_to(os.path.dirname(BUNDLED_UVM), target_is_directory=True)
     alias = str(tmp_path / "uvm" / "src" / "comps" / "uvm_driver.svh")
     with open(UVM_DRIVER) as f:
         text = f.read()

@@ -42,3 +42,23 @@ test("without wheels there is one pip install, and no pip self-upgrade", () => {
   assert.ok(!plan.flat().includes("--upgrade"));
   assert.ok(REQUIREMENTS.some((r) => r.startsWith("pyslang>=12")), "the floor pyslang that needs Python 3.11");
 });
+
+
+test("Windows launcher probes use explicit versions and preserve the switch for venv creation", () => {
+  const { basePythonCommands } = load();
+  assert.deepEqual(plain(basePythonCommands("win32")), [
+    { command: "py", args: ["-3.14"] }, { command: "py", args: ["-3.13"] },
+    { command: "py", args: ["-3.12"] }, { command: "py", args: ["-3.11"] },
+    { command: "python", args: [] },
+  ]);
+  assert.deepEqual(plain(basePythonCommands("darwin")).map((c) => c.command), plain(load().basePythonNames("darwin")));
+  assert.ok(basePythonCommands("linux").every((c) => c.args.length === 0));
+});
+
+test("venv binaries use the host platform layout", () => {
+  const { venvBinary } = load();
+  assert.equal(path.win32.join("C:\\Users\\Test User\\venv", venvBinary("win32")),
+    "C:\\Users\\Test User\\venv\\Scripts\\python.exe");
+  assert.equal(venvBinary("linux"), "bin/python");
+  assert.equal(venvBinary("darwin"), "bin/python");
+});

@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+from uvmls.server import path_to_uri
+
 from conftest import EXAMPLE, FILELIST
 
 SERVER_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -109,7 +111,7 @@ class Client:
 
 
 def uri(rel):
-    return "file://" + os.path.join(EXAMPLE, rel)
+    return path_to_uri(os.path.join(EXAMPLE, rel))
 
 
 def finished(m):
@@ -119,7 +121,7 @@ def finished(m):
 def start(root, **settings) -> Client:
     """A server of its own on `root`, initialized."""
     c = Client()
-    c.request("initialize", {"processId": None, "rootUri": f"file://{root}", "capabilities": {},
+    c.request("initialize", {"processId": None, "rootUri": path_to_uri(str(root)), "capabilities": {},
                              "initializationOptions": {"settings": settings}})
     c.notify("initialized", {})
     return c
@@ -129,8 +131,8 @@ def start(root, **settings) -> Client:
 def client():
     c = Client()
     c.request("initialize", {
-        "processId": None, "rootUri": "file://" + EXAMPLE, "capabilities": {},
-        "workspaceFolders": [{"uri": "file://" + EXAMPLE, "name": "alu_tb"}],
+        "processId": None, "rootUri": path_to_uri(EXAMPLE), "capabilities": {},
+        "workspaceFolders": [{"uri": path_to_uri(EXAMPLE), "name": "alu_tb"}],
         "initializationOptions": {"settings": {"filelists": [FILELIST], "elaboration": "onSave"}},
     })
     c.notify("initialized", {})
@@ -514,7 +516,7 @@ def test_open_file_changed_by_another_program_is_elaborated(tmp_path):
     try:
         assert c.wait_for("uvm/elaborationStatus", finished)["params"]["errors"] == 0
         path = ex / "agent" / "alu_driver.svh"
-        u = f"file://{path}"
+        u = path_to_uri(str(path))
         text = path.read_text()
         c.notify("textDocument/didOpen", {"textDocument": {
             "uri": u, "languageId": "systemverilog", "version": 1, "text": text}})

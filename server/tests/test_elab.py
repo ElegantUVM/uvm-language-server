@@ -84,8 +84,8 @@ def test_workspace_and_library_behind_symlinks(tmp_path):
     # editor uses, and the UVM library is still recognised.
     (tmp_path / "real").mkdir()
     shutil.copytree(EXAMPLE, tmp_path / "real" / "alu_tb")
-    (tmp_path / "link").symlink_to(tmp_path / "real")
-    (tmp_path / "uvm").symlink_to(os.path.dirname(BUNDLED_UVM))
+    (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+    (tmp_path / "uvm").symlink_to(os.path.dirname(BUNDLED_UVM), target_is_directory=True)
     root = tmp_path / "link" / "alu_tb"
     w = Workspace()
     w.configure(ProjectConfig(workspace_roots=[str(root)], filelists=[str(root / "alu_tb.f")],

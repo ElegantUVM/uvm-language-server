@@ -5,6 +5,8 @@ import shutil
 
 import pytest
 
+from uvmls.server import path_to_uri
+
 from conftest import EXAMPLE
 from test_code_actions import Doc, start
 from test_lsp import Client
@@ -65,7 +67,7 @@ def agent_folds(text):
 def test_registration(tb, caps, present):
     c = Client()
     try:
-        result = c.request("initialize", {"processId": None, "rootUri": f"file://{tb}", "capabilities": caps})
+        result = c.request("initialize", {"processId": None, "rootUri": path_to_uri(str(tb)), "capabilities": caps})
         assert result["capabilities"].get("foldingRangeProvider", False) == present
     finally:
         c.close()
@@ -641,7 +643,7 @@ def test_refresh_after_index(tb, folding, refresh):
         caps["workspace"] = {"foldingRange": {"refreshSupport": refresh}}
     count = int(bool(folding and refresh))
     try:
-        c.request("initialize", {"processId": None, "rootUri": f"file://{tb}", "capabilities": caps,
+        c.request("initialize", {"processId": None, "rootUri": path_to_uri(str(tb)), "capabilities": caps,
                                 "initializationOptions": {"settings": {"filelists": [os.path.join(tb, "alu_tb.f")],
                                                                        "elaboration": "off"}}})
         c.notify("initialized", {})

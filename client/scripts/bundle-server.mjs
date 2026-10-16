@@ -1,49 +1,41 @@
-// Copy the Python language server into the extension so the .vsix is self-contained, with the
-// cached Verible formatter (scripts/fetch-verible.mjs) for Linux x86_64 next to it. With
-// `--target linux-x64`, also the pinned Python wheels (scripts/fetch-wheels.mjs) under server/wheels,
-// for a package that sets itself up without network access.
+// Rebuild server/ from source for every package, so wheels and binaries never leak between targets.
 import fs from "fs";
 import path from "path";
-import { CACHED_BINARY, LICENSE, VERIBLE_PLATFORM, VERIBLE_TARBALL_SHA256, VERIBLE_TARBALL_URL,
-  VERIBLE_VERSION } from "./fetch-verible.mjs";
-import { fetchWheels } from "./fetch-wheels.mjs";
+import { fileURLToPath } from "url";
+import { fetchVerible, veribleTarget, VERIBLE_VERSION } from "./fetch-verible.mjs";
+import { fetchWheels, targetFromArgs } from "./fetch-wheels.mjs";
 
-const here = path.dirname(new URL(import.meta.url).pathname);
-const target = process.argv[process.argv.indexOf("--target") + 1];
-if (process.argv.includes("--target") && target !== "linux-x64") {
-  console.error(`unsupported --target ${target}: only linux-x64 ships wheels`);
-  process.exit(1);
-}
+const here = path.dirname(fileURLToPath(import.meta.url));
+const target = targetFromArgs();
+// Fetch before replacing the previous bundle: a failed download leaves it available for inspection.
+const config = target ? veribleTarget(target) : undefined;
+const formatter = config ? await fetchVerible(target) : undefined;
+const files = target ? fetchWheels(target) : [];
 const src = path.resolve(here, "..", "..", "server", "uvmls");
 const dst = path.resolve(here, "..", "server", "uvmls");
 fs.rmSync(path.dirname(dst), { recursive: true, force: true });
-fs.cpSync(src, dst, { recursive: true, filter: (p) => !p.includes("__pycache__") });
+fs.cpSync(src, dst, { recursive: true, filter: (p) => !p.includes("__pycache__") &&
+  path.relative(src, p).split(path.sep).slice(0, 2).join("/") !== "third_party/verible" });
 console.log(`bundled ${src} -> ${dst}`);
 
-// The same layout formatting.py looks in (BUNDLED), on the one platform the binary is built for.
-for (const file of [CACHED_BINARY, LICENSE]) {
-  if (!fs.existsSync(file)) {
-    console.error(`${file} is missing: run node scripts/fetch-verible.mjs first`);
-    process.exit(1);
-  }
+if (config) {
+  const verible = path.join(dst, "third_party", "verible", target);
+  fs.mkdirSync(verible, { recursive: true });
+  const binary = path.join(verible, config.binary);
+  fs.copyFileSync(formatter.binary, binary);
+  if (process.platform !== "win32") fs.chmodSync(binary, 0o755);
+  fs.copyFileSync(formatter.license, path.join(verible, "LICENSE"));
+  fs.writeFileSync(path.join(verible, "VERSION"),
+    `Verible ${VERIBLE_VERSION} (${target}), unmodified ${config.binary} from\n` +
+    `${config.url}\nsha256 of that archive: ${config.archiveSha256}\n` +
+    "Source: https://github.com/chipsalliance/verible (Apache-2.0; see LICENSE here)\n");
 }
-const verible = path.join(dst, "third_party", "verible", "linux-x64");
-fs.mkdirSync(verible, { recursive: true });
-fs.copyFileSync(CACHED_BINARY, path.join(verible, "verible-verilog-format"));
-fs.chmodSync(path.join(verible, "verible-verilog-format"), 0o755);
-fs.copyFileSync(LICENSE, path.join(verible, "LICENSE"));
-fs.writeFileSync(path.join(verible, "VERSION"),
-  `Verible ${VERIBLE_VERSION} (${VERIBLE_PLATFORM}), unmodified verible-verilog-format from\n` +
-  `${VERIBLE_TARBALL_URL}\nsha256 of that tarball: ${VERIBLE_TARBALL_SHA256}\n` +
-  "Source: https://github.com/chipsalliance/verible (Apache-2.0; see LICENSE here)\n");
-console.log(`bundled verible-verilog-format ${VERIBLE_VERSION} -> ${verible}`);
 
-if (target === "linux-x64") {
-  const wheels = path.join(path.dirname(dst), "wheels");  // server/wheels, where extension.ts looks
+if (target) {
+  if (!config) fs.writeFileSync(path.join(path.dirname(dst), "FORMATTER.txt"),
+    `${target} ships Python wheels only. Install Verible separately (for example with Homebrew) and set uvm.formatter.path.\n`);
+  const wheels = path.join(path.dirname(dst), "wheels");
   fs.mkdirSync(wheels, { recursive: true });
-  const files = fetchWheels();
-  for (const f of files) {
-    fs.copyFileSync(f, path.join(wheels, path.basename(f)));
-  }
-  console.log(`bundled ${files.length} wheels -> ${wheels}`);
+  for (const file of files) fs.copyFileSync(file, path.join(wheels, path.basename(file)));
+  console.log(`bundled ${files.length} wheels for ${target}${config ? " with Verible" : "; formatter: uvm.formatter.path"}`);
 }

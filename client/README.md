@@ -13,10 +13,17 @@ Free, open-source, UVM-aware SystemVerilog support for VS Code, built on the [sl
 ## Install
 
 Python 3.11 or newer is needed; on first start the extension offers to create its own environment with `pyslang` and
-`pygls`, or set `uvm.pythonPath`. The Linux x86_64 package installs from the wheels it ships, with no network access;
-elsewhere `uvm.pipArgs` passes a mirror or proxy to pip. **No telemetry:** nothing is collected or sent. Free and open
+`pygls`, or set `uvm.pythonPath`. The Linux x64, Windows x64 and macOS arm64/x64 packages install from bundled wheels without network access;
+the generic package accepts a mirror or proxy through `uvm.pipArgs`. **No telemetry:** nothing is collected or sent. Free and open
 source under the Apache License 2.0; sources, issues and the CLI/MCP documentation are on
 [GitHub](https://github.com/ElegantUVM/uvm-language-server).
+
+Windows setup probes the `py` launcher with explicit Python 3.11–3.14 versions. With Remote-SSH, the
+package and Python environment belong to the remote host. Windows/macOS native validation remains pending. Linux x64, Windows x64 and macOS arm64 packages bundle
+Verible. The Intel macOS (`darwin-x64`) package ships wheels only: install Verible separately, for example
+with Homebrew, and set `uvm.formatter.path`. The generic package also requires an external formatter.
+The macOS arm64 binary is not notarised; if quarantined, remove its quarantine with
+`xattr -d com.apple.quarantine /path/to/verible-verilog-format`, or use a separately installed formatter.
 
 ## Quick fixes and UVM lint
 

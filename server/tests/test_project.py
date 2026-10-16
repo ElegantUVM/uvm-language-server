@@ -137,7 +137,7 @@ def test_configured_uvm_replaces_the_projects_own(tmp_path, monkeypatch, how, mo
 
 def test_the_configured_uvm_under_another_name_is_compiled_once(tmp_path):
     home = fake_uvm(tmp_path / "home", "1.2")
-    (tmp_path / "link").symlink_to(tmp_path / "home")
+    (tmp_path / "link").symlink_to(tmp_path / "home", target_is_directory=True)
     (tmp_path / "tb.sv").write_text("module tb; endmodule\n")
     (tmp_path / "tb.f").write_text(f"+incdir+{home}\n{home}/uvm_pkg.sv\ntb.sv\n")
     ss = build_source_set(ProjectConfig.from_settings(

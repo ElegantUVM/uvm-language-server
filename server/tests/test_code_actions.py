@@ -6,6 +6,8 @@ import shutil
 
 import pytest
 
+from uvmls.server import path_to_uri
+
 from conftest import EXAMPLE
 from test_lsp import Client
 
@@ -23,8 +25,8 @@ CAPABILITIES = {
 def start(root, capabilities=CAPABILITIES, **options) -> Client:
     c = Client()
     c.request("initialize", {
-        "processId": None, "rootUri": f"file://{root}", "capabilities": capabilities,
-        "workspaceFolders": [{"uri": f"file://{root}", "name": "tb"}],
+        "processId": None, "rootUri": path_to_uri(str(root)), "capabilities": capabilities,
+        "workspaceFolders": [{"uri": path_to_uri(str(root)), "name": "tb"}],
         "initializationOptions": {"settings": {"filelists": [os.path.join(root, "alu_tb.f")],
                                                "elaboration": "off"}, **options}})
     c.notify("initialized", {})
@@ -50,7 +52,7 @@ class Doc:
     """An open document: its text and version as the editor has them."""
 
     def __init__(self, client: Client, path: str, text: str | None = None):
-        self.client, self.path, self.uri = client, path, f"file://{path}"
+        self.client, self.path, self.uri = client, path, path_to_uri(str(path))
         with open(path, newline="") as f:
             self.text = f.read() if text is None else text
         self.version = 1
@@ -125,7 +127,7 @@ def own_fixes(actions: list) -> list:
 def test_capabilities(tb):
     c = Client()
     try:
-        r = c.request("initialize", {"processId": None, "rootUri": f"file://{tb}", "capabilities": CAPABILITIES})
+        r = c.request("initialize", {"processId": None, "rootUri": path_to_uri(str(tb)), "capabilities": CAPABILITIES})
         assert r["capabilities"]["codeActionProvider"] == {"codeActionKinds": ["quickfix", "source.fixAll.uvm"],
                                                            "resolveProvider": False}
     finally:
@@ -241,7 +243,7 @@ def test_a_client_without_data_support(tb):
 
 def published(client, path, pred=lambda ds: True, timeout=20):
     return client.wait_for("textDocument/publishDiagnostics",
-                           lambda m: m["params"]["uri"] == f"file://{path}" and pred(m["params"]["diagnostics"]),
+                           lambda m: m["params"]["uri"] == path_to_uri(str(path)) and pred(m["params"]["diagnostics"]),
                            timeout=timeout)["params"]["diagnostics"]
 
 

@@ -1,0 +1,23 @@
+{
+  "version": "v0.0-4296-g0f262651",
+  "targets": {
+    "linux-x64": {
+      "asset": "verible-v0.0-4296-g0f262651-linux-static-x86_64.tar.gz",
+      "archiveSha256": "8569defb891d2316067613ea00442af28a7a09d405d95b54c0c91f9942d26635",
+      "binarySha256": "daf292645c850a64a320a3a13edd8a3521f80151fd049326da8887a9bba753f8",
+      "member": "verible-v0.0-4296-g0f262651/bin/verible-verilog-format"
+    },
+    "win32-x64": {
+      "asset": "verible-v0.0-4296-g0f262651-win64.zip",
+      "archiveSha256": "4590841d91dadb108879aa261dbfd7081db06360484a7a21470174bf6fb3cf80",
+      "binarySha256": "8438d796713d00e0e346b484a2294ba592f6d99532e3c973a5f69e9d98026b05",
+      "member": "verible-v0.0-4296-g0f262651-win64/verible-verilog-format.exe"
+    },
+    "darwin-arm64": {
+      "asset": "verible-v0.0-4296-g0f262651-macOS.tar.gz",
+      "archiveSha256": "fc397ee02b144184a3cce6d26efb8b9d3e41528e63c95a57cd3bf37dec2b52a4",
+      "binarySha256": "e4afa7ed59ee16f0ab268119488da1d7ac338ed300da0747ab8576c9ca97bcd3",
+      "member": "verible-v0.0-4296-g0f262651-macOS/bin/verible-verilog-format"
+    }
+  }
+}

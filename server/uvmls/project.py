@@ -104,7 +104,9 @@ class SourceSet:
 
 
 def norm(p: str) -> str:
-    return os.path.normpath(os.path.abspath(p))
+    p = os.path.normpath(os.path.abspath(p))
+    drive, tail = os.path.splitdrive(p)
+    return drive.lower() + tail if len(drive) == 2 and drive[1] == ":" else p
 
 
 def is_sv_file(path: str) -> bool:

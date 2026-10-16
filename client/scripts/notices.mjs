@@ -1,13 +1,14 @@
 // THIRD_PARTY_NOTICES.txt: the licence texts of the npm packages esbuild bundles into dist/, and of
 // the Verible formatter when bundle-server.mjs has placed it under server/.
-import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
-import { VERIBLE_TARBALL_URL, VERIBLE_VERSION } from "./fetch-verible.mjs";
+import { VERIBLE_VERSION, veribleTarget } from "./fetch-verible.mjs";
+import { zipEntries, zipRead } from "./archive.mjs";
+import { fileURLToPath } from "url";
 
-const client = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const client = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LICENCE_FILE = /^(licen[cs]e|copying|notice|thirdpartynotices)/i;
-export const VERIBLE_DIR = path.join("server", "uvmls", "third_party", "verible", "linux-x64");
+export const veribleDir = (target) => `server/uvmls/third_party/verible/${target}`;
 
 // elkjs is offered under EPL-2.0 or GPL-3.0-or-later; we take EPL-2.0, which asks to say where its
 // source code is (section 3.1).
@@ -34,7 +35,7 @@ export function bundledPackages(metafiles) {
   return [...dirs].sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
 }
 
-export function writeNotices(metafiles, out) {
+export async function writeNotices(metafiles, out) {
   const parts = ["This extension's JavaScript bundles include the following npm packages; a platform package's " +
     "server directory may also ship Python wheels and the Verible formatter, listed after them. Each one's " +
     "licence and notice files follow its name, version and licence.\n"];
@@ -63,9 +64,9 @@ export function writeNotices(metafiles, out) {
   }
   for (const { name, version, files } of byDist.values()) {
     const first = path.join(wheels, files[0]);
-    const members = execFileSync("unzip", ["-Z1", first], { encoding: "utf8" }).split("\n");
+    const members = (await zipEntries(first)).map((entry) => entry.name);
     const meta = members.find((m) => /^[^/]+\.dist-info\/METADATA$/.test(m));
-    const metadata = meta ? execFileSync("unzip", ["-p", first, meta], { encoding: "utf8" }) : "";
+    const metadata = meta ? (await zipRead(first, meta)).toString("utf8") : "";
     // An SPDX expression when the metadata has one, else the classifier, else the free-text field.
     const expr = /^License-Expression:\s*(.+)$/m.exec(metadata)?.[1]
       ?? /^Classifier:\s*License :: (?:OSI Approved :: )?(.+)$/m.exec(metadata)?.[1]
@@ -79,7 +80,7 @@ export function writeNotices(metafiles, out) {
       !m.endsWith("/"));
     if (licences.length) {
       for (const m of licences) {
-        const text = execFileSync("unzip", ["-p", first, m], { encoding: "utf8" });
+        const text = (await zipRead(first, m)).toString("utf8");
         parts.push(`--- ${m.replace(/^[^/]+\.dist-info\//, "")}\n\n${text.trim()}\n`);
       }
     } else if (VENDORED_WHEEL_LICENCES[name]) {
@@ -90,12 +91,19 @@ export function writeNotices(metafiles, out) {
       throw new Error(`${files[0]} carries no licence file to ship in ${out}`);
     }
   }
-  const license = path.join(client, VERIBLE_DIR, "LICENSE");
-  if (fs.existsSync(license)) {
+  if (fs.existsSync(wheels) && fs.existsSync(path.join(client, "server", "FORMATTER.txt"))) {
+    parts.push(fs.readFileSync(path.join(client, "server", "FORMATTER.txt"), "utf8"));
+  }
+  const verible = path.join(client, "server", "uvmls", "third_party", "verible");
+  for (const target of fs.existsSync(verible) ? fs.readdirSync(verible).sort() : []) {
+    const license = path.join(verible, target, "LICENSE");
+    if (!fs.existsSync(license)) continue;
+    const config = veribleTarget(target);
+    if (!config) throw new Error(`${target} must not bundle Verible`);
     parts.push(`${"=".repeat(78)}\nVerible ${VERIBLE_VERSION} (Apache-2.0)\n${"=".repeat(78)}\n`);
-    parts.push(`${VERIBLE_DIR}/verible-verilog-format is the unmodified verible-verilog-format binary from ` +
-      `the Verible release ${VERIBLE_VERSION} for Linux x86_64 (${VERIBLE_TARBALL_URL}), by The Verible ` +
-      "Authors, used under the Apache License 2.0. Source code: https://github.com/chipsalliance/verible. " +
+    parts.push(`${veribleDir(target)}/${config.binary} is the unmodified formatter from ` +
+      `Verible ${VERIBLE_VERSION} for ${target} (${config.url}), by The Verible Authors, ` +
+      "used under the Apache License 2.0. Source code: https://github.com/chipsalliance/verible. " +
       "The same LICENSE text ships next to the binary.\n");
     parts.push(`--- LICENSE\n\n${fs.readFileSync(license, "utf8").trim()}\n`);
   }

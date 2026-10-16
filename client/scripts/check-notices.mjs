@@ -1,66 +1,81 @@
-// The last step of `npm run package`: fail unless the third-party notices, and the bundled Verible
-// with its licence, ship in the .vsix.
-import { execFileSync } from "child_process";
+// Inspect the actual VSIX, including its pinned wheel/binary digests and third-party licences.
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { VERIBLE_VERSION } from "./fetch-verible.mjs";
-import { VERIBLE_DIR } from "./notices.mjs";
+import { fileURLToPath } from "url";
+import { VERIBLE_VERSION, veribleTarget } from "./fetch-verible.mjs";
+import { readLock, targetFromArgs } from "./fetch-wheels.mjs";
+import { veribleDir } from "./notices.mjs";
+import { zipEntries, zipRead } from "./archive.mjs";
 
-const client = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const client = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(client, "package.json"), "utf8"));
-const target = process.argv.includes("--target") ? process.argv[process.argv.indexOf("--target") + 1] : undefined;
-const vsix = path.join(client, `${pkg.name}${target ? `-${target}` : ""}-${pkg.version}.vsix`);  // vsce's naming
+const target = targetFromArgs();
+const vsix = path.join(client, `${pkg.name}${target ? `-${target}` : ""}-${pkg.version}.vsix`);
 const problems = [];
-
-const noticesFile = path.join(client, "THIRD_PARTY_NOTICES.txt");
-const notices = fs.existsSync(noticesFile) ? fs.readFileSync(noticesFile, "utf8") : "";
+const entries = await zipEntries(vsix);
+const listed = entries.map((entry) => entry.name);
+const read = (member) => zipRead(vsix, member);
+const digest = async (member) => crypto.createHash("sha256").update(await read(member)).digest("hex");
+const notices = listed.includes("extension/THIRD_PARTY_NOTICES.txt")
+  ? (await read("extension/THIRD_PARTY_NOTICES.txt")).toString("utf8") : "";
 for (const name of Object.keys(pkg.dependencies)) {
   if (!notices.includes(`\n${name} `)) problems.push(`THIRD_PARTY_NOTICES.txt does not list ${name}`);
 }
-if (!notices.includes(`\nVerible ${VERIBLE_VERSION} `)) {
-  problems.push(`THIRD_PARTY_NOTICES.txt does not list Verible ${VERIBLE_VERSION}`);
-}
-const webview = fs.readFileSync(path.join(client, "dist", "webview.js"), "utf8");
-if (!webview.includes("Copyright (c) 2017 Kiel University")) {
+if (!(await read("extension/dist/webview.js")).toString("utf8").includes("Copyright (c) 2017 Kiel University")) {
   problems.push("dist/webview.js lost elkjs's copyright headers");
 }
-// The extension's own LICENSE, NOTICE and CHANGELOG are copies of the repository's; vsce packages
-// the copies (LICENSE as extension/LICENSE.txt, the changelog for the listing's Changelog tab).
-for (const name of ["LICENSE", "NOTICE", "CHANGELOG.md"]) {
-  const own = path.join(client, name);
-  const root = path.join(client, "..", name);
-  if (!fs.existsSync(own)) problems.push(`client/${name} is missing (copy it from the repository root)`);
-  else if (fs.readFileSync(own, "utf8") !== fs.readFileSync(root, "utf8")) {
-    problems.push(`client/${name} differs from ${name} at the repository root`);
-  }
+for (const [name, member] of [["LICENSE", "LICENSE.txt"], ["NOTICE", "NOTICE"], ["CHANGELOG.md", "changelog.md"]]) {
+  const root = fs.readFileSync(path.join(client, "..", name));
+  const archived = `extension/${member}`;
+  if (!listed.includes(archived)) problems.push(`${path.basename(vsix)} has no ${archived}`);
+  else if (!(await read(archived)).equals(root)) problems.push(`${archived} differs from ${name} at the repository root`);
 }
-const listed = execFileSync("unzip", ["-Z1", vsix], { encoding: "utf8" }).split("\n");
-const binary = `extension/${VERIBLE_DIR}/verible-verilog-format`;
-for (const file of ["extension/LICENSE.txt", "extension/NOTICE", "extension/changelog.md", "extension/THIRD_PARTY_NOTICES.txt",
+for (const file of ["extension/THIRD_PARTY_NOTICES.txt",
   "extension/server/uvmls/third_party/uvm-1.2/LICENSE.txt",
-  "extension/server/uvmls/third_party/uvm-1.2/NOTICE.txt", binary, `extension/${VERIBLE_DIR}/LICENSE`,
-  `extension/${VERIBLE_DIR}/VERSION`]) {
+  "extension/server/uvmls/third_party/uvm-1.2/NOTICE.txt"]) {
   if (!listed.includes(file)) problems.push(`${path.basename(vsix)} has no ${file}`);
 }
-// A platform package ships every pinned wheel, each listed in the notices; the generic one ships none.
-const wheels = listed.filter((f) => f.startsWith("extension/server/wheels/") && f.endsWith(".whl"));
-if (target === "linux-x64") {
-  const lock = JSON.parse(fs.readFileSync(path.join(client, "wheels.lock.json"), "utf8"));
+const wheels = listed.filter((file) => file.startsWith("extension/server/wheels/") && file.endsWith(".whl"));
+const formatters = listed.filter((file) => file.startsWith("extension/server/uvmls/third_party/verible/") && !file.endsWith("/"));
+if (target) {
+  const config = veribleTarget(target);
+  if (config) {
+    const dir = `extension/${veribleDir(target)}`;
+    const binary = `${dir}/${config.binary}`;
+    const expectedFormatter = [binary, `${dir}/LICENSE`, `${dir}/VERSION`];
+    for (const file of expectedFormatter) {
+      if (!listed.includes(file)) problems.push(`${path.basename(vsix)} has no ${file}`);
+    }
+    for (const file of formatters) {
+      if (!expectedFormatter.includes(file)) problems.push(`unexpected formatter file: ${file}`);
+    }
+    if (listed.includes(binary) && (await digest(binary)) !== config.binarySha256) problems.push(`${binary} differs from its pinned digest`);
+    if (!notices.includes(`\nVerible ${VERIBLE_VERSION} `)) problems.push(`THIRD_PARTY_NOTICES.txt does not list Verible ${VERIBLE_VERSION}`);
+    // Native Windows ZIP creation has no POSIX mode; the server repairs lost modes on POSIX.
+    const entry = entries.find((item) => item.name === binary);
+    if (target !== "win32-x64" && entry?.system === 3 && !(entry.mode & 0o111)) problems.push(`${binary} is not executable`);
+  } else {
+    if (formatters.length) problems.push(`${target} must not ship a formatter: ${formatters.join(", ")}`);
+    if (!notices.includes("uvm.formatter.path")) problems.push(`${target} notices must explain external formatter setup`);
+  }
+  const lock = readLock(target);
+  const expected = new Set(lock.files.map((entry) => `extension/server/wheels/${entry.name}`));
   for (const entry of lock.files) {
-    if (!listed.includes(`extension/server/wheels/${entry.name}`)) problems.push(`${path.basename(vsix)} has no ${entry.name}`);
+    const member = `extension/server/wheels/${entry.name}`;
+    if (!listed.includes(member)) problems.push(`${path.basename(vsix)} has no ${entry.name}`);
+    else if ((await digest(member)) !== entry.sha256) problems.push(`${entry.name} differs from its pinned digest`);
     const [name, version] = entry.name.split("-");
     if (!notices.includes(`\n${name} ${version} `)) problems.push(`THIRD_PARTY_NOTICES.txt does not list ${name} ${version}`);
   }
-} else if (wheels.length) {
-  problems.push(`${path.basename(vsix)} is the generic package but ships wheels: ${wheels.join(", ")}`);
+  for (const file of wheels) if (!expected.has(file)) problems.push(`unexpected wheel: ${file}`);
+} else {
+  if (wheels.length) problems.push(`generic package ships wheels: ${wheels.join(", ")}`);
+  if (formatters.length) problems.push(`generic package ships Verible: ${formatters.join(", ")}`);
 }
-// The installer keeps zip modes; the server also repairs a lost exec bit, but packaging should not lose it.
-const modes = execFileSync("unzip", ["-Z", vsix], { encoding: "utf8" }).split("\n");
-const mode = modes.find((line) => line.endsWith(` ${binary}`));
-if (mode && !/^-rwx/.test(mode)) problems.push(`${binary} is not executable in ${path.basename(vsix)}: ${mode}`);
 if (problems.length) {
   console.error(problems.join("\n"));
-  process.exit(1);
+  process.exitCode = 1;
+} else {
+  console.log(`notices: ${path.basename(vsix)} passes licence and pinned payload checks`);
 }
-console.log(`notices: ${path.basename(vsix)} ships THIRD_PARTY_NOTICES.txt, the UVM licence and ` +
-  `Verible ${VERIBLE_VERSION} with its licence`);

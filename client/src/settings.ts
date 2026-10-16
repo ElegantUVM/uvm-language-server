@@ -4,7 +4,7 @@ import * as vscode from "vscode";
 
 export function expandPath(p: string): string {
   const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-  return p.replace(/\$\{workspaceFolder\}/g, ws).replace(/^~(?=[\\/]|$)/, os.homedir());
+  return p.replace(/\$\{workspaceFolder\}/g, () => ws).replace(/^~(?=[\\/]|$)/, () => os.homedir());
 }
 
 export function serverSettings(): Record<string, unknown> {

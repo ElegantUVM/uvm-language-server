@@ -5,6 +5,8 @@ import shutil
 
 import pytest
 
+from uvmls.server import path_to_uri
+
 from conftest import EXAMPLE
 from test_code_actions import Doc, start
 from test_lsp import Client
@@ -65,7 +67,7 @@ def signature(result, formals, active=0, label=None):
 def test_registration(tb, caps, present):
     c = Client()
     try:
-        result = c.request("initialize", {"processId": None, "rootUri": f"file://{tb}", "capabilities": caps})
+        result = c.request("initialize", {"processId": None, "rootUri": path_to_uri(str(tb)), "capabilities": caps})
         provider = result["capabilities"].get("signatureHelpProvider")
         assert provider == ({"triggerCharacters": ["(", ","], "retriggerCharacters": [")"]} if present else None)
     finally:

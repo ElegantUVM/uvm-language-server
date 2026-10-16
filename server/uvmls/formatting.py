@@ -16,8 +16,13 @@ from .project import expand_path, norm
 TIMEOUT = 5.0
 CLEANUP_TIMEOUT = 1.0
 # The Verible the .vsix ships (client/scripts/bundle-server.mjs), absent from git and the pip package.
-BUNDLED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party", "verible", "linux-x64",
-                       "verible-verilog-format")
+BUNDLED_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party", "verible")
+BUNDLED = {
+    ("linux", "x86_64"): ("linux-x64", "verible-verilog-format"),
+    ("win32", "amd64"): ("win32-x64", "verible-verilog-format.exe"),
+    ("win32", "x86_64"): ("win32-x64", "verible-verilog-format.exe"),
+    ("darwin", "arm64"): ("darwin-arm64", "verible-verilog-format"),
+}
 
 
 @dataclass(frozen=True)
@@ -34,16 +39,19 @@ class Settings:
 
 
 def bundled() -> str | None:
-    """The bundled Verible, on the one platform it is built for, with its exec bit repaired if an
-    extension installer dropped it."""
-    if sys.platform != "linux" or platform.machine() != "x86_64" or not os.path.isfile(BUNDLED):
+    """The host's bundled Verible, repairing an exec bit lost by a POSIX extension installer."""
+    entry = BUNDLED.get((sys.platform, platform.machine().lower()))
+    if entry is None:
         return None
-    if not os.access(BUNDLED, os.X_OK):
+    binary = norm(os.path.join(BUNDLED_ROOT, *entry))
+    if not os.path.isfile(binary):
+        return None
+    if sys.platform != "win32" and not os.access(binary, os.X_OK):
         try:
-            os.chmod(BUNDLED, os.stat(BUNDLED).st_mode | 0o755)
+            os.chmod(binary, os.stat(binary).st_mode | 0o755)
         except OSError:
             return None
-    return BUNDLED if os.access(BUNDLED, os.X_OK) else None
+    return binary if sys.platform == "win32" or os.access(binary, os.X_OK) else None
 
 
 def executable(path: str, roots: list[str]) -> str | None:
@@ -162,7 +170,7 @@ class Formatter:
         if binary not in self.announced:
             self.announced.add(binary)
             origin = ("uvm.formatter.path" if settings.path else
-                      "the bundled copy" if binary == BUNDLED else "PATH")
+                      "the bundled copy" if binary == bundled() else "PATH")
             self.log(f"formatter: using {binary!r} ({origin})")
         argv = [binary, "--failsafe_success=false", f"--indentation_spaces={size}"]
         if lines is not None:

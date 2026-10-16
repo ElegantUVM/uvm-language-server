@@ -10,3 +10,5 @@ server/**/__pycache__/**
 server/tests/**
 server/.venv/**
 **/*.ts
+verible.lock.json
+wheels.lock*.json

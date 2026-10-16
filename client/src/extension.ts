@@ -11,7 +11,7 @@ import {
 import { GraphPanel, PanelTab } from "./panel";
 import { McpProvider, PROVIDER_ID } from "./mcp";
 import { addIncludeDir, expandPath, serverSettings } from "./settings";
-import { basePythonNames, installPlan } from "./setup";
+import { basePythonCommands, basePythonNames, installPlan, venvBinary } from "./setup";
 import { revealLocation } from "./navigation";
 
 let client: LanguageClient | undefined;
@@ -29,7 +29,7 @@ function serverDir(ctx: vscode.ExtensionContext): string {
   return fs.existsSync(path.join(dev, "uvmls", "server.py")) ? dev : bundled;
 }
 
-const VENV_BIN = process.platform === "win32" ? path.join("Scripts", "python.exe") : path.join("bin", "python");
+const VENV_BIN = venvBinary();
 
 /** A private virtual environment the extension can create for itself. */
 function managedVenv(ctx: vscode.ExtensionContext): string {
@@ -110,9 +110,9 @@ async function installDependencies(ctx: vscode.ExtensionContext): Promise<boolea
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "UVM: installing pyslang and pygls", cancellable: false },
     async (progress) => {
-      let base: string | undefined;
-      for (const cand of basePythonNames()) {
-        const r = await run(cand, ["-c", "import sys; assert sys.version_info >= (3, 11)"]);
+      let base: { command: string; args: string[] } | undefined;
+      for (const cand of basePythonCommands()) {
+        const r = await run(cand.command, [...cand.args, "-c", "import sys; assert sys.version_info >= (3, 11)"]);
         if (r.ok) {
           base = cand;
           break;
@@ -125,7 +125,7 @@ async function installDependencies(ctx: vscode.ExtensionContext): Promise<boolea
       }
       fs.mkdirSync(path.dirname(venv), { recursive: true });
       progress.report({ message: "creating virtual environment" });
-      let r = await run(base, ["-m", "venv", venv]);
+      let r = await run(base.command, [...base.args, "-m", "venv", venv]);
       if (!r.ok) {
         vscode.window.showErrorMessage(`UVM: could not create a virtual environment: ${r.out.trim().slice(-400)}`);
         return false;
@@ -213,7 +213,7 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
     options: { cwd, env: { ...process.env, PYTHONPATH: cwd } },
   };
   if (!watcher) {
-    watcher = vscode.workspace.createFileSystemWatcher("**/*.{sv,svh,svi,sva,v,vh,f}");
+    watcher = vscode.workspace.createFileSystemWatcher("**/*.{sv,svh,svi,sva,v,vh,f,F}");
     ctx.subscriptions.push(watcher);
   }
   const clientOptions: LanguageClientOptions = {

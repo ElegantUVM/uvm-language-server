@@ -17,7 +17,7 @@ from urllib.parse import quote, unquote, urlparse
 from lsprotocol import types as T
 from pygls.capabilities import get_capability
 from pygls.lsp.server import LanguageServer
-from pygls.uris import from_fs_path
+from pygls.uris import from_fs_path, to_fs_path
 
 from . import __version__, elab, fixes, formatting, indexer, naturaldocs, signatures
 from .documents import Workspace as LspWorkspace
@@ -58,8 +58,8 @@ RANK = {"hint": 0, "info": 1, "warning": 2, "error": 3}
 
 
 def uri_to_path(uri: str) -> str:
-    p = urlparse(uri)
-    return norm(unquote(p.path)) if p.scheme == "file" else uri
+    path = to_fs_path(uri)
+    return norm(path) if path is not None else uri
 
 
 def path_to_uri(path: str) -> str:

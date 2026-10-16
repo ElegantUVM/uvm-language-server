@@ -19,18 +19,18 @@ from test_lsp import Client
 from conftest import EXAMPLE
 from uvmls import formatting
 from uvmls.indexer import SHIM_FILE
-from uvmls.project import BUNDLED_UVM
+from uvmls.project import BUNDLED_UVM, norm
 
 CAPABILITIES = {"textDocument": {"formatting": {}, "rangeFormatting": {}}}
 
 
 class Formatter:
     def __init__(self, root, name="verible-verilog-format"):
-        self.path = root / name
+        self.path = root / (name + ".exe" if os.name == "nt" else name)
         self.record = root / (name + ".json")
         self.control = root / (name + ".control")
         self.set()
-        self.path.write_text(
+        script = (
             f"#!{sys._base_executable}\n"
             "import json, os, pathlib, subprocess, sys, time\n"
             f"cfg = json.loads(pathlib.Path({str(self.control)!r}).read_text())\n"
@@ -48,8 +48,19 @@ class Formatter:
             "out = cfg.get('output')\n"
             "sys.stdout.buffer.write(bytes(out) if isinstance(out, list) else\n"
             "    out.encode('utf-8') if out is not None else source.replace(b'BAD', b'good'))\n"
-            "sys.exit(cfg.get('exit', 0))\n", encoding="utf-8")
-        self.path.chmod(0o755)
+            "sys.exit(cfg.get('exit', 0))\n")
+        if os.name == "nt":
+            # pip's launcher runs the same recording script as a real executable, without a shell.
+            from pip._vendor.distlib.scripts import ScriptMaker
+            source = root / "formatter-source"
+            source.mkdir(exist_ok=True)
+            source.joinpath(name).write_text("#!python\n" + script.split("\n", 1)[1], encoding="utf-8")
+            maker = ScriptMaker(str(source), str(root))
+            maker.executable = sys.executable
+            maker.make(name)
+        else:
+            self.path.write_text(script, encoding="utf-8")
+            self.path.chmod(0o755)
 
     def set(self, **kwargs):
         self.control.write_text(json.dumps(kwargs))
@@ -128,6 +139,20 @@ def response(c, rid):
 def dead(pid, reaped=True):
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
+        if os.name == "nt":
+            # os.kill(pid, 0) terminates a process on Windows; query its wait handle instead.
+            import _winapi
+            try:
+                handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
+            except OSError:
+                return
+            try:
+                if _winapi.WaitForSingleObject(handle, 0) == _winapi.WAIT_OBJECT_0:
+                    return
+            finally:
+                _winapi.CloseHandle(handle)
+            time.sleep(0.01)
+            continue
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
@@ -163,7 +188,7 @@ def test_unsaved_buffer_and_actual_end(clients, fake, tmp_path, ending):
     record = fake.called()
     assert record["stdin"] == doc.text
     assert record["argv"] == ["--failsafe_success=false", "--indentation_spaces=4", "-"]
-    assert record["cwd"] == str(tmp_path)
+    assert norm(record["cwd"]) == norm(str(tmp_path))
     assert Path(doc.path).read_bytes() == original
 
 
@@ -200,7 +225,9 @@ def test_empty_or_unsupported_endings_do_not_spawn(clients, fake, tmp_path, text
 def test_discovery_and_expansion(clients, fake, tmp_path, monkeypatch, path_setting):
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("FORMATTER_BIN", str(fake.path))
-    monkeypatch.setenv("REL_FORMATTER_BIN", "./verible-verilog-format")
+    monkeypatch.setenv("REL_FORMATTER_BIN", "./" + fake.path.name)
+    if os.name == "nt":
+        path_setting = path_setting.replace("verible-verilog-format", fake.path.name)
     if path_setting == "$REL_FORMATTER_BIN":
         monkeypatch.setenv("PATH", "")
     if path_setting.startswith("~/"):
@@ -398,22 +425,23 @@ def test_missing_binary_is_retried_without_reindexing(clients, tmp_path, monkeyp
 
 @pytest.fixture
 def bundled(tmp_path, monkeypatch):
-    """A fake copy where the .vsix puts Verible, on a Linux x86_64 server with an empty PATH."""
-    (tmp_path / "bundle").mkdir()
-    copy = Formatter(tmp_path / "bundle")
+    """A runnable fake in the host's bundled layout, with an empty PATH."""
+    target = {"win32": "win32-x64", "darwin": "darwin-arm64"}.get(sys.platform, "linux-x64")
+    (tmp_path / "bundle" / target).mkdir(parents=True)
+    copy = Formatter(tmp_path / "bundle" / target)
     copy.set(output="// bundled\n")
-    monkeypatch.setattr(formatting, "BUNDLED", str(copy.path))
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(formatting, "BUNDLED_ROOT", str(tmp_path / "bundle"))
+    machine = {"win32-x64": "AMD64", "darwin-arm64": "arm64"}.get(target, "x86_64")
+    monkeypatch.setattr(platform, "machine", lambda: machine)
     monkeypatch.setenv("PATH", str(tmp_path / "nothing"))
     return copy
 
 
 def test_lookup_order(bundled, fake, tmp_path, monkeypatch):
     roots = [str(tmp_path)]
-    assert formatting.executable("", roots) == str(bundled.path)
+    assert formatting.executable("", roots) == norm(str(bundled.path))
     monkeypatch.setenv("PATH", str(tmp_path))  # fake is verible-verilog-format in tmp_path
-    assert formatting.executable("", roots) == str(fake.path)
+    assert formatting.executable("", roots) == norm(str(fake.path))
     (tmp_path / "elsewhere").mkdir()
     explicit = Formatter(tmp_path / "elsewhere", "mine")
     assert formatting.executable(str(explicit.path), roots) == str(explicit.path)
@@ -424,9 +452,9 @@ def test_lookup_order(bundled, fake, tmp_path, monkeypatch):
     assert formatting.executable("verible-verilog-format", roots) is None
 
 
-@pytest.mark.parametrize("system,machine", [("darwin", "x86_64"), ("win32", "AMD64"), ("linux", "aarch64"),
+@pytest.mark.parametrize("system,machine", [("darwin", "i686"), ("win32", "ARM64"), ("linux", "aarch64"),
                                             ("linux", "i686")])
-def test_bundled_copy_is_linux_x86_64_only(bundled, tmp_path, monkeypatch, system, machine):
+def test_bundled_copy_rejects_unsupported_platforms(bundled, tmp_path, monkeypatch, system, machine):
     monkeypatch.setattr(sys, "platform", system)
     monkeypatch.setattr(platform, "machine", lambda: machine)
     monkeypatch.setattr(shutil, "which", lambda *args, **kwargs: None)  # which() is platform-specific
@@ -440,6 +468,7 @@ def test_bundled_copy_must_exist(bundled, tmp_path):
     assert formatting.executable("", [str(tmp_path)]) is None
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX execute permission bits")
 def test_bundled_copy_exec_bit_is_repaired(bundled, tmp_path, monkeypatch):
     bundled.path.chmod(0o644)
     assert formatting.executable("", [str(tmp_path)]) == str(bundled.path)
@@ -465,10 +494,10 @@ def test_bundled_copy_runs_and_is_announced_once(bundled, fake, tmp_path, monkey
     assert run() == "// bundled\n"
     assert bundled.called()["argv"] == ["--failsafe_success=false", "--indentation_spaces=2", "-"]
     assert run("// BAD BAD\n") == "// bundled\n"
-    assert logs == [f"formatter: using {str(bundled.path)!r} (the bundled copy)"]
+    assert logs == [f"formatter: using {norm(str(bundled.path))!r} (the bundled copy)"]
     monkeypatch.setenv("PATH", str(tmp_path))
     assert run() == "// good\n"
-    assert logs[1:] == [f"formatter: using {str(fake.path)!r} (PATH)"]
+    assert logs[1:] == [f"formatter: using {norm(str(fake.path))!r} (PATH)"]
     assert asyncio.run(formatter.run("// BAD\n", str(tmp_path / "t.sv"), 2, formatting.Settings(path="/missing"),
                                      [str(tmp_path)])) is None
     assert len(logs) == 3 and "uvm.formatter.path" in logs[2]
@@ -482,7 +511,7 @@ def test_removed_directory_runs_in_nearest_existing_one(clients, fake, tmp_path)
     shutil.rmtree(proj / "sub")
     doc.change("// BAD unsaved\n")
     assert applied(doc.text, format_doc(doc)) == "// good unsaved\n"
-    assert fake.called()["cwd"] == str(proj)
+    assert norm(fake.called()["cwd"]) == norm(str(proj))
     assert not (proj / "sub").exists()
 
 
@@ -573,7 +602,7 @@ def test_library_files_through_links(clients, fake, tmp_path, ranged, indexed):
     for name in ("component", "base/object.svh", "shared.svh"):
         (store / name).write_text("// BAD\n")
     (uvm / "uvm_component.svh").symlink_to(store / "component")
-    (uvm / "base").symlink_to(store / "base")
+    (uvm / "base").symlink_to(store / "base", target_is_directory=True)
     (uvm / "uvm_macros.svh").write_text("// macros\n")
     (uvm / "uvm_pkg.sv").write_text('package uvm_pkg;\n`include "uvm_component.svh"\n'
                                     '`include "base/object.svh"\n`include "../../store/shared.svh"\nendpackage\n')
