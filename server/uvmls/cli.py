@@ -142,7 +142,9 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print JSON instead of text")
     ap.add_argument("--sarif", metavar="FILE", help="write lint or elab diagnostics as SARIF (use - for stdout)")
     ap.add_argument("-o", "--output", help="write JSON to this file")
-    args = ap.parse_args(argv)
+    # Intermixed: `lint --test t DIR -f x.f` has the positional after an option, which argparse before
+    # Python 3.12 would otherwise take as absent and reject DIR as unrecognized.
+    args = ap.parse_intermixed_args(argv)
     if args.sarif and args.command not in ("lint", "elab"):
         ap.error("--sarif is only available for lint and elab")
     if args.command == "mcp":
