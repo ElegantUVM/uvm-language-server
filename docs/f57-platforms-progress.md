@@ -758,3 +758,13 @@ The original MCP assertion is
 `assert set(server._real_of) == server.ws.files() == {str(root / "top.sv"), str(root / f"h{i}.inc")}`;
 the failure showed `h6.inc` versus `h7.inc`. Its replacement and deterministic
 unchanged-stamp regressions pass here; native scheduling still needs confirmation.
+
+## 2026-10-16 21:15 UTC: fifth run did not start (reviewer)
+
+Commit `b4c8648` pushed; run 38967313251 ended in 7 s with "The job was not started because recent account
+payments have failed or your spending limit needs to be increased" on every job: the private repository's
+included Actions minutes are used up (four full runs with Windows at 2× and macOS at 10× minute rates). Locally on
+`b4c8648`: typecheck, client tests, 239 focused server tests and the corpus baseline (changes: none) pass.
+Waiting on the owner: raise the Actions spending limit, or wait for the monthly reset, or make the repository
+public (free minutes), which needs D06 first. Once minutes exist, re-run the CI on PR #1 (`gh run rerun` or an
+empty push) and continue from the Windows log.
