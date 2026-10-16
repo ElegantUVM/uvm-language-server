@@ -291,6 +291,27 @@ UVM macros matter here. Without definitions, slang drops `` `uvm_fatal(...) `` a
 By default the real macros come from the bundled UVM 1.2. A file that uses them without `` `include "uvm_macros.svh" `` gets them predefined, because simulators usually have them in scope already.
 With the bundled copy turned off, the shim in `server/uvmls/shim/` keeps every UVM macro's name and arity with a minimal body. Factory registration is visible through the same `type_id` typedef the real macros produce, so the rest of the code does not care which one is in use.
 
+## Measured on real projects
+
+Public UVM testbenches with their own filelists, cold index with the bundled UVM 1.2, one process per command
+(2026-10-16, Python 3.14, pyslang 12; details, the zero-configuration runs and what the findings are in
+[docs/evidence.md](docs/evidence.md)):
+
+| Case | Files | Classes | Index | RSS | Lint findings | Elab errors / warnings | Topology | Graph nodes / edges |
+|---|---|---|---|---|---|---|---|---|
+| opentitan_uart | 370 | 156 | 1.76 s | 111 MB | 14 | 15 / 7 (0.36 s) | 42 nodes, depth 5, 22 connections | 202 / 338 |
+| opentitan_i2c | 407 | 203 | 2.15 s | 122 MB | 19 | 49 / 9 (0.38 s) | 55 nodes, depth 5, 34 connections | 249 / 449 |
+| opentitan_aes | 451 | 174 | 2.16 s | 126 MB | 13 | 45 / 9 (0.52 s) | 38 nodes, depth 5, 19 connections | 220 / 365 |
+| cv32e40p | 230 | 142 | 1.48 s | 99 MB | 4 | 12 / 5 (0.35 s) | 61 nodes, depth 5, 42 connections | 176 / 391 |
+| caliptra_sha512 | 229 | 65 | 0.84 s | 94 MB | 0 | 10 / 16 (0.22 s) | 14 nodes, depth 4, 11 connections | 87 / 131 |
+| tvip_axi | 97 | 104 | 0.74 s | 83 MB | 4 | 2 / 0 (0.18 s) | 26 nodes, depth 4, 33 connections | 153 / 231 |
+| yuu_ahb | 54 | 56 | 0.62 s | 82 MB | 1 | 37 / 0 (0.17 s) | 16 nodes, depth 4, 11 connections | 87 / 183 |
+| apb_ral | 19 | 15 | 0.37 s | 77 MB | 0 | 2 / 0 (0.12 s) | 8 nodes, depth 4, 4 connections | 43 / 71 |
+| uvm_examples_ahb2 | 34 | 49 | 0.43 s | 79 MB | 1 | 0 / 1 (0.15 s) | 15 nodes, depth 4, 8 connections | 69 / 193 |
+
+No crashes, tracebacks or timeouts; the nine benches produce 56 lint findings in total, none of which we would
+call a bug in ElegantUVM (docs/evidence.md says what they are).
+
 ## Measured performance
 
 On this machine (WSL2, Python 3.14, pyslang 12):
