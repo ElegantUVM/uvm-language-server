@@ -8,7 +8,8 @@ import { VERIBLE_DIR } from "./notices.mjs";
 
 const client = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(client, "package.json"), "utf8"));
-const vsix = path.join(client, `${pkg.name}-${pkg.version}.vsix`);
+const target = process.argv.includes("--target") ? process.argv[process.argv.indexOf("--target") + 1] : undefined;
+const vsix = path.join(client, `${pkg.name}${target ? `-${target}` : ""}-${pkg.version}.vsix`);  // vsce's naming
 const problems = [];
 
 const noticesFile = path.join(client, "THIRD_PARTY_NOTICES.txt");
@@ -40,6 +41,18 @@ for (const file of ["extension/LICENSE.txt", "extension/NOTICE", "extension/chan
   "extension/server/uvmls/third_party/uvm-1.2/NOTICE.txt", binary, `extension/${VERIBLE_DIR}/LICENSE`,
   `extension/${VERIBLE_DIR}/VERSION`]) {
   if (!listed.includes(file)) problems.push(`${path.basename(vsix)} has no ${file}`);
+}
+// A platform package ships every pinned wheel, each listed in the notices; the generic one ships none.
+const wheels = listed.filter((f) => f.startsWith("extension/server/wheels/") && f.endsWith(".whl"));
+if (target === "linux-x64") {
+  const lock = JSON.parse(fs.readFileSync(path.join(client, "wheels.lock.json"), "utf8"));
+  for (const entry of lock.files) {
+    if (!listed.includes(`extension/server/wheels/${entry.name}`)) problems.push(`${path.basename(vsix)} has no ${entry.name}`);
+    const [name, version] = entry.name.split("-");
+    if (!notices.includes(`\n${name} ${version} `)) problems.push(`THIRD_PARTY_NOTICES.txt does not list ${name} ${version}`);
+  }
+} else if (wheels.length) {
+  problems.push(`${path.basename(vsix)} is the generic package but ships wheels: ${wheels.join(", ")}`);
 }
 // The installer keeps zip modes; the server also repairs a lost exec bit, but packaging should not lose it.
 const modes = execFileSync("unzip", ["-Z", vsix], { encoding: "utf8" }).split("\n");

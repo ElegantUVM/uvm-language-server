@@ -237,6 +237,14 @@
           "default": "",
           "description": "Python interpreter with pyslang and pygls installed. Supports ${workspaceFolder} and ~. Empty: auto-detect (a .venv/venv in the workspace or its parent folders, then the extension's own environment, then python3)."
         },
+        "uvm.pipArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra arguments for `pip install` when the extension creates its own Python environment: a package mirror (`--index-url`, `--trusted-host`) or a proxy (`--proxy`). The Linux x86_64 package first installs the wheels it ships, without any network; these arguments apply to the fallback install from the index."
+        },
         "uvm.lint.enabled": {
           "type": "boolean",
           "default": true,
@@ -295,7 +303,9 @@
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit -p .",
     "test": "node --test tests/*.test.cjs",
-    "package": "node scripts/fetch-verible.mjs && node scripts/bundle-server.mjs && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies && node scripts/check-notices.mjs"
+    "package": "node scripts/fetch-verible.mjs && node scripts/bundle-server.mjs && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies && node scripts/check-notices.mjs",
+    "package:linux-x64": "node scripts/fetch-verible.mjs && node scripts/fetch-wheels.mjs && node scripts/bundle-server.mjs --target linux-x64 && node esbuild.mjs --production && npx --yes @vscode/vsce package --no-dependencies --target linux-x64 && node scripts/check-notices.mjs --target linux-x64",
+    "package:all": "npm run package && npm run package:linux-x64"
   },
   "dependencies": {
     "elkjs": "^0.12.0",

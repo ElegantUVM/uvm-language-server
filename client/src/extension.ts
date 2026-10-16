@@ -11,6 +11,7 @@ import {
 import { GraphPanel, PanelTab } from "./panel";
 import { McpProvider, PROVIDER_ID } from "./mcp";
 import { addIncludeDir, expandPath, serverSettings } from "./settings";
+import { basePythonNames, installPlan } from "./setup";
 import { revealLocation } from "./navigation";
 
 let client: LanguageClient | undefined;
@@ -93,6 +94,16 @@ function run(cmd: string, args: string[], cwd?: string): Promise<{ ok: boolean; 
   });
 }
 
+/** The wheels a platform package ships next to the server (none in the generic package). */
+function bundledWheels(ctx: vscode.ExtensionContext): string | undefined {
+  const dir = path.join(serverDir(ctx), "wheels");
+  try {
+    return fs.readdirSync(dir).some((f) => f.endsWith(".whl")) ? dir : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Create the private venv and install the server's Python dependencies into it. */
 async function installDependencies(ctx: vscode.ExtensionContext): Promise<boolean> {
   const venv = managedVenv(ctx);
@@ -100,7 +111,7 @@ async function installDependencies(ctx: vscode.ExtensionContext): Promise<boolea
     { location: vscode.ProgressLocation.Notification, title: "UVM: installing pyslang and pygls", cancellable: false },
     async (progress) => {
       let base: string | undefined;
-      for (const cand of process.platform === "win32" ? ["py", "python"] : ["python3", "python"]) {
+      for (const cand of basePythonNames()) {
         const r = await run(cand, ["-c", "import sys; assert sys.version_info >= (3, 11)"]);
         if (r.ok) {
           base = cand;
@@ -108,7 +119,8 @@ async function installDependencies(ctx: vscode.ExtensionContext): Promise<boolea
         }
       }
       if (!base) {
-        vscode.window.showErrorMessage("UVM: Python 3.11 or newer was not found on PATH.");
+        vscode.window.showErrorMessage("UVM: Python 3.11 or newer was not found on PATH (tried " +
+          `${basePythonNames().join(", ")}). Install it, or set uvm.pythonPath.`);
         return false;
       }
       fs.mkdirSync(path.dirname(venv), { recursive: true });
@@ -118,13 +130,19 @@ async function installDependencies(ctx: vscode.ExtensionContext): Promise<boolea
         vscode.window.showErrorMessage(`UVM: could not create a virtual environment: ${r.out.trim().slice(-400)}`);
         return false;
       }
-      progress.report({ message: "pip install pyslang pygls" });
-      r = await run(path.join(venv, VENV_BIN), ["-m", "pip", "install", "--upgrade", "pip", "pyslang>=9", "pygls>=2,<3"]);
-      if (!r.ok) {
-        vscode.window.showErrorMessage(`UVM: pip install failed: ${r.out.trim().slice(-400)}`);
-        return false;
+      const pipArgs = vscode.workspace.getConfiguration("uvm").get<string[]>("pipArgs") ?? [];
+      const python = path.join(venv, VENV_BIN);
+      let failed = "";
+      for (const args of installPlan(bundledWheels(ctx), pipArgs)) {
+        progress.report({ message: args.includes("--no-index") ? "installing the bundled wheels" : "pip install pyslang pygls" });
+        r = await run(python, args);
+        if (r.ok) {
+          return true;
+        }
+        failed += r.out;
       }
-      return true;
+      vscode.window.showErrorMessage(`UVM: pip install failed: ${failed.trim().slice(-400)}`);
+      return false;
     },
   );
 }
@@ -168,8 +186,10 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
       message,
       {
         modal: true,
-        detail: "Install automatically creates a private environment for the extension and runs " +
-          "pip install pyslang pygls (needs internet). Or point uvm.pythonPath at an interpreter that has them.",
+        detail: "Install automatically creates a private environment for the extension and installs pyslang " +
+          "and pygls " + (bundledWheels(ctx) ? "from the wheels shipped in this package (no internet needed)."
+            : "from PyPI (needs internet, or a mirror in uvm.pipArgs).") +
+          " Or point uvm.pythonPath at an interpreter that has them.",
       },
       "Install automatically",
       "Choose Python…",

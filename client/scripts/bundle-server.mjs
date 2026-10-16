@@ -1,11 +1,19 @@
 // Copy the Python language server into the extension so the .vsix is self-contained, with the
-// cached Verible formatter (scripts/fetch-verible.mjs) for Linux x86_64 next to it.
+// cached Verible formatter (scripts/fetch-verible.mjs) for Linux x86_64 next to it. With
+// `--target linux-x64`, also the pinned Python wheels (scripts/fetch-wheels.mjs) under server/wheels,
+// for a package that sets itself up without network access.
 import fs from "fs";
 import path from "path";
 import { CACHED_BINARY, LICENSE, VERIBLE_PLATFORM, VERIBLE_TARBALL_SHA256, VERIBLE_TARBALL_URL,
   VERIBLE_VERSION } from "./fetch-verible.mjs";
+import { fetchWheels } from "./fetch-wheels.mjs";
 
 const here = path.dirname(new URL(import.meta.url).pathname);
+const target = process.argv[process.argv.indexOf("--target") + 1];
+if (process.argv.includes("--target") && target !== "linux-x64") {
+  console.error(`unsupported --target ${target}: only linux-x64 ships wheels`);
+  process.exit(1);
+}
 const src = path.resolve(here, "..", "..", "server", "uvmls");
 const dst = path.resolve(here, "..", "server", "uvmls");
 fs.rmSync(path.dirname(dst), { recursive: true, force: true });
@@ -29,3 +37,13 @@ fs.writeFileSync(path.join(verible, "VERSION"),
   `${VERIBLE_TARBALL_URL}\nsha256 of that tarball: ${VERIBLE_TARBALL_SHA256}\n` +
   "Source: https://github.com/chipsalliance/verible (Apache-2.0; see LICENSE here)\n");
 console.log(`bundled verible-verilog-format ${VERIBLE_VERSION} -> ${verible}`);
+
+if (target === "linux-x64") {
+  const wheels = path.join(path.dirname(dst), "wheels");  // server/wheels, where extension.ts looks
+  fs.mkdirSync(wheels, { recursive: true });
+  const files = fetchWheels();
+  for (const f of files) {
+    fs.copyFileSync(f, path.join(wheels, path.basename(f)));
+  }
+  console.log(`bundled ${files.length} wheels -> ${wheels}`);
+}
