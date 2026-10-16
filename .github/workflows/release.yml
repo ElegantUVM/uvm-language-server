@@ -1,0 +1,92 @@
+# A release is a tag v<version> matching client/package.json and server/pyproject.toml. The workflow
+# builds both .vsix packages and the wheel, attaches them to a GitHub release, publishes the wheel to
+# PyPI through trusted publishing (configure the publisher on PyPI: owner ElegantUVM, repository
+# uvm-language-server, workflow release.yml, environment pypi) and the extension to Open VSX (secret
+# OVSX_PAT). The Visual Studio Marketplace is published by hand with Entra ID sign-in
+# (`npx @vscode/vsce publish --packagePath <vsix> --azure-credential` after `az login`), because
+# the global Azure DevOps tokens vsce needs in CI are retired from 1 December 2026.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the tag against the manifests
+        run: |
+          tag=${GITHUB_REF_NAME#v}
+          client=$(node -p "require('./client/package.json').version")
+          server=$(python -c "import tomllib;print(tomllib.load(open('server/pyproject.toml','rb'))['project']['version'])")
+          [ "$tag" = "$client" ] && [ "$tag" = "$server" ] || { echo "tag $tag, client $client, server $server"; exit 1; }
+      - name: Test
+        run: |
+          python -m pip install -e "./server[test]" build
+          (cd server && python -m pytest -q -p no:cacheprovider)
+          (cd client && npm ci && npm run typecheck && npm test)
+      - name: Package
+        env:
+          UVMLS_PYTHON: python
+        run: |
+          (cd client && npm run package:all)
+          python -m build server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            client/*.vsix
+            server/dist/*
+          if-no-files-found: error
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            client/*.vsix
+            server/dist/*
+          generate_release_notes: true
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: server/dist
+  open-vsx:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ vars.PUBLISH_OPEN_VSX == 'true' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Publish both packages
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          for f in client/*.vsix; do npx --yes ovsx publish "$f" -p "$OVSX_PAT"; done

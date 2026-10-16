@@ -3,7 +3,7 @@
 The one place that says what exists, what is planned and what is wrong. Every row keeps its ID for
 good, so a row can be named in a request ("do F41", "fix I12"). Updated at every milestone.
 
-Last updated: 2026-10-16, main at 75a25dc (history rewritten under the owner's name).
+Last updated: 2026-10-16 (evening); see the Release rows F71–F77.
 
 **ID:** F = feature (any status), I = issue or limitation, D = decision waiting on the owner.
 
@@ -82,9 +82,9 @@ Last updated: 2026-10-16, main at 75a25dc (history rewritten under the owner's n
 | F69 | Release | Licence, PyPI package, Neovim/Emacs docs | 🟡 Partial | Superseded by F71 (licence, PyPI metadata) and F75 (editor docs). |
 | F70 | Navigation | Hover lists the assignments the index can see | 🔵 Planned | Offered 2026-10-10; only the "initialized to" label (F02) was built. |
 | F71 | Release | Licence and identity: Apache-2.0 + NOTICE, publisher `elegantuvm`, extension `elegantuvm`, Python ≥ 3.11, AI-USE/CONTRIBUTING/SECURITY/CHANGELOG, icon, LICENSE/NOTICE in the .vsix and the wheel | ✅ Done | 2026-10-16: files, .vsix and wheel checks, and the one-time author rewrite (363 commits) pushed to the private remote. |
-| F72 | Release | Launch fixes on real projects: I19, I21, I22, I16, I18 | 🔵 Planned | One regression test per issue. Next after F71. |
-| F73 | Release | Corpus shakedown on 3–5 public testbenches and the evidence page (compliance, lint/topology results, false-positive counts); re-measure the README table (I29) | 🔵 Planned | The answer to "built with AI" is published evidence. |
-| F74 | Release | Linux install story: first run behind proxies or offline, `linux-x64` .vsix with a wheelhouse plus a generic fallback, bundled grammar check | 🔵 Planned | Linux x86_64 first; other platforms later (F57). |
+| F72 | Release | Launch fixes on real projects: I19, I21, I22, I16, I18 | ✅ Done | 2026-10-16: I19, I21, I22 fixed with tests; I18 verified by existing tests; I16 not reproducible on the corpus (every discovery include failure names a file absent from the tree). |
+| F73 | Release | Corpus shakedown on 3–5 public testbenches and the evidence page (compliance, lint/topology results, false-positive counts); re-measure the README table (I29) | 🟡 Partial | Corpus (14 repos, 19 cases) re-run 2026-10-16: no regressions; topologies now expand on OpenTitan/UVMF/tvip-axi. Evidence page and README numbers next. |
+| F74 | Release | Linux install story: first run behind proxies or offline, `linux-x64` .vsix with a wheelhouse plus a generic fallback | ✅ Done | 2026-10-16: `npm run package:linux-x64` (7.9 MB, 10 pinned wheels, Python 3.11–3.14) installs with `--no-index`; `uvm.pipArgs`; python3.11+ probing. Verified offline in a fresh venv. |
 | F75 | Release | Launch docs: getting started, feature tour GIF, no-telemetry statement, offline/allowlist notes; README retitled | 🔵 Planned | |
 | F76 | Release | Release automation: GitHub Actions for tests, `.vsix` per target, PyPI trusted publishing, Open VSX; accounts (Marketplace via Entra ID before the 1 Dec 2026 PAT retirement, Open VSX namespace, PyPI, elegantuvm.dev) | 🔵 Planned | Accounts are the owner's. Soft launch target: mid-November 2026. |
 | F77 | Release | Public launch sequence: DAC 2027 Engineering Track abstract (11 Jan 2027), FOSDEM devroom talk, posts (LinkedIn, SemiWiki, El Correo Libre, Verification Academy), v0.2 before DVCon U.S. (1–4 Mar 2027) | 🔵 Planned | Research and timeline: durable `research/2026-10-16-release-value/plan-release-value.md`. |
@@ -107,13 +107,13 @@ Last updated: 2026-10-16, main at 75a25dc (history rewritten under the owner's n
 | I13 | Folding | First fold or highlight in a UVM library file takes ~0.25 s under the index lock | ⚪ Accepted | Once per library root. |
 | I14 | Formatting | Before the first index finishes, a file the library includes from outside its UVM directory is not yet known as library code | ⚪ Accepted | Documented in the README. |
 | I15 | Index | Code in inactive `` `ifdef `` branches is not indexed | ⚪ Accepted | Defines come from the filelist and `uvm.defines`. |
-| I16 | Index | Discovery mode warns `CouldNotOpenIncludeFile` for a header that elaboration resolves through inferred include dirs | 🔴 Open | Make the index infer the same dirs. |
+| I16 | Index | Discovery mode warns `CouldNotOpenIncludeFile` for a header that elaboration resolves through inferred include dirs | ⚪ Accepted | Not reproducible 2026-10-16: on the corpus all 84 such warnings name files absent from the checkout, and elaboration fails on them too. Reopen with a case. |
 | I17 | Index | Macros and `$unit` imports are not carried across filelist files | 🔴 Open | Prerequisite for F44. |
-| I18 | Index | A UTF-8 BOM hides a `` `define `` on line 1 | 🔴 Open | Not re-verified since f4. |
-| I19 | Lint | `unknown-base` fires on `extends T` (a type parameter) | 🔴 Open | |
+| I18 | Index | A UTF-8 BOM hides a `` `define `` on line 1 | ✅ Done | Verified 2026-10-16: three BOM tests pass (`test_fixes.py`). |
+| I19 | Lint | `unknown-base` fires on `extends T` (a type parameter) | ✅ Done | Fixed 2026-10-16 (F72). |
 | I20 | Views | Topology and config_db matching are static: loops creating arrays, runtime names, knobs set in derived tests show as conditional | ⚪ Accepted | Design limit; F55 and F61 improve it. |
-| I21 | Views | Topology stops at the test when the env is created through a class type parameter (OpenTitan `ENV_T`, UVMF) | 🔴 Open | Prerequisite for F44. |
-| I22 | Lint | config-db-no-set is disabled by any non-literal set; typedef'd `uvm_config_db` (`uvm_config_int`) not recognised | 🔴 Open | From the feature-2 triage backlog. |
+| I21 | Views | Topology stops at the test when the env is created through a class type parameter (OpenTitan `ENV_T`, UVMF) | ✅ Done | Fixed 2026-10-16 (F72): creates resolve with the chain's bindings. OpenTitan uart 1 → 42 nodes. |
+| I22 | Lint | config-db-no-set is disabled by any non-literal set; typedef'd `uvm_config_db` (`uvm_config_int`) not recognised | ✅ Done | Fixed 2026-10-16 (F72): a computed-name set covers only gets of its type; UVM's and project typedefs of `uvm_config_db` count. |
 | I23 | Elaboration | Skipped in discovery mode when a module or package is defined more than once | ⚪ Accepted | Set `uvm.filelists`. |
 | I24 | Elaboration | `-y`/`+libext+` and simulator compatibility switches are not passed to slang | ⚪ Accepted | slang is also stricter than most simulators. |
 | I25 | MCP | Unsaved editor text is not visible; a new subdirectory with sources costs a full reindex | ⚪ Accepted | Separate process by design. |

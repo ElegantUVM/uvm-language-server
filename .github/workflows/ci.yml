@@ -1,0 +1,56 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  server:
+    name: server (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the server and its test dependencies
+        run: python -m pip install -e "./server[test]"
+      - name: Test
+        run: cd server && python -m pytest -q -p no:cacheprovider
+  client:
+    name: client and packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: cd client && npm ci
+      - name: Typecheck and test
+        run: cd client && npm run typecheck && npm test
+      - name: Package (generic and linux-x64, with the notices checks)
+        env:
+          UVMLS_PYTHON: python
+        run: cd client && npm run package:all
+      - name: Wheel and sdist
+        run: python -m pip install build && python -m build server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: |
+            client/*.vsix
+            server/dist/*
+          if-no-files-found: error
