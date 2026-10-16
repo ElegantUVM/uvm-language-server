@@ -8,9 +8,21 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0 is reached.
 ### Added
 - Apache License 2.0; NOTICE, THIRD_PARTY_NOTICES, AI-USE, CONTRIBUTING and SECURITY documents.
 - Marketplace identity: publisher `elegantuvm`, extension `elegantuvm`.
+- A `linux-x64` package that carries the server's Python wheels, so first-run setup needs no network;
+  `uvm.pipArgs` for a mirror or proxy on the generic package; `python3.11`–`python3.14` are probed after `python3`.
+- `python -m uvmls --version` / `uvmls --version`.
+- config_db calls through a typedef count: UVM's `uvm_config_int`, `uvm_config_string`, `uvm_config_object`,
+  `uvm_config_wrapper`, and a project's `typedef uvm_config_db #(T) t_db;`.
 
 ### Changed
 - The server requires Python 3.11 or newer (pyslang 12 dropped 3.10).
+- First-run setup no longer upgrades pip.
+
+### Fixed
+- The topology follows an env (or any component) created through a class type parameter of a base test
+  (OpenTitan's `ENV_T`, UVMF): trees that stopped at the test now expand (OpenTitan uart 1 → 42 nodes).
+- `unknown-base` no longer fires on `extends T` when `T` is a type parameter of the class.
+- A `uvm_config_db` set whose field name is computed only silences `config-db-no-set` for gets of its own type.
 
 ## [0.1.0] - unreleased preview
 

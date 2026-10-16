@@ -10,6 +10,14 @@ Free, open-source, UVM-aware SystemVerilog support for VS Code, built on the [sl
 - **Elaboration diagnostics.** slang compiles and elaborates the whole design in a background process when you save (`uvm.elaboration`), and reports what a simulator's elaboration would: type errors, unknown members, wrong argument counts, missing modules or packages. Errors raised inside a macro point at your code, not the macro. Errors the UVM library reports on its own are left out, while errors your code causes inside it (a constructor without a parent, a wrong type parameter) are reported, pointing at your type. The status bar shows the result; **UVM: Elaborate Now** runs it on demand.
 - **MCP server for agents.** The extension registers `python -m uvmls mcp` with VS Code (**MCP: List Servers** shows "UVM Language Server"), so Copilot and other agents in the editor can ask the same index: classes by UVM role, a test's topology with its factory overrides applied, the effective type of every create, config_db sets and gets with their status, lint, slang elaboration, definition, hover, signature help, sequences and their start sites. It runs as a separate process on the first workspace folder with the `uvm` settings as its flags and reads the files on disk (unsaved editor text is not visible); it is read-only and refuses paths outside the workspace. `uvm.mcp.enabled` turns it off. The same command works without VS Code, for Claude Code or Claude Desktop.
 
+## Install
+
+Python 3.11 or newer is needed; on first start the extension offers to create its own environment with `pyslang` and
+`pygls`, or set `uvm.pythonPath`. The Linux x86_64 package installs from the wheels it ships, with no network access;
+elsewhere `uvm.pipArgs` passes a mirror or proxy to pip. **No telemetry:** nothing is collected or sent. Free and open
+source under the Apache License 2.0; sources, issues and the CLI/MCP documentation are on
+[GitHub](https://github.com/ElegantUVM/uvm-language-server).
+
 ## Quick fixes and UVM lint
 
 Use the lightbulb or **Quick Fix…** (`Ctrl+.`) on a finding. Existing checks cover `create-unregistered`, `utils-mismatch`, `create-no-parent`, `create-virtual`, `unknown-base`, `config-db-no-set` and `config-db-type-mismatch`. Optional or conditional config_db gets with no set are informational; required gets are warnings. A dynamic field name in a set suppresses the no-set check. Matching is static and cannot resolve every runtime scope or value.

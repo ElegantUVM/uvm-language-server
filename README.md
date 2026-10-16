@@ -179,7 +179,40 @@ Resources: `uvm://stats`, `uvm://topology` and `uvm://topology/{test}`, `uvm://c
 
 What to expect: every location has 1-based lines and character columns and a path relative to the workspace root (the CLI's `--json` keeps its 0-based byte columns). List tools take `limit` (default 200, at most 2000) and `offset` and return `items`, `total` and `truncated`. The server reads the files on disk: unsaved editor text is not visible, and the index refreshes itself when a file changes (checked before a tool call, at most once a second; a changed file re-parses the roots that include it, a file created or deleted or a changed filelist rebuilds everything, `reindex` forces it). Runtime values are not evaluated: the topology and config_db answers are the same static views as in the editor. Nothing writes files or runs code; `elaborate` compiles with slang in the `elab-worker` subprocess with the same 120 s limit as the editor (a run that cannot start, fails or overruns it is an error result), later tool calls wait for it, and `ping` is answered meanwhile. A path in an argument or a `uvm://file/` URI must lie under a workspace root once symlinks are resolved, so a link inside the workspace to a file outside it is refused. Starting costs one index (0.3 s for the example with the bundled UVM; see the performance table), and the first call after a file change pays one root re-parse. The protocol is the initialize handshake of revisions 2024-11-05 to 2025-11-25 (echoed, else 2025-11-25); the stateless 2026-07-28 revision's `server/discover` is refused so such clients fall back to it. Logs go to stderr.
 
-## Try it
+## Install
+
+**VS Code.** Install **ElegantUVM** (`elegantuvm.elegantuvm`) from the Visual Studio Marketplace, or from
+[Open VSX](https://open-vsx.org/) in VSCodium, Cursor, Windsurf and Theia. On Linux x86_64 you get a package that
+carries the server's Python wheels and the Verible formatter; other platforms get the generic package.
+
+**Python.** The server needs Python 3.11 or newer. On first start the extension offers to create its own
+environment (**Set Up…** in the status bar): it looks for `python3`, then `python3.14` … `python3.11` (Enterprise
+Linux keeps `python3` old), and installs `pyslang` and `pygls` into a private venv. Or point `uvm.pythonPath` at
+an interpreter that already has them.
+
+**Offline and behind a proxy.** The Linux x86_64 package installs its dependencies from the wheels it ships, with
+no network access at all. Elsewhere, give pip a mirror or a proxy with `uvm.pipArgs` (for example
+`["--index-url", "https://mirror.example/simple", "--trusted-host", "mirror.example"]`), or build a wheelhouse on a
+connected machine and point the extension at an environment made from it:
+
+```bash
+pip download -d wheels --only-binary=:all: --python-version 3.12 --platform manylinux_2_28_x86_64 --platform any "pyslang>=12" "pygls>=2,<3"
+python3.12 -m venv ~/uvmls-venv && ~/uvmls-venv/bin/pip install --no-index --find-links wheels "pyslang>=12" "pygls>=2,<3"
+# then: "uvm.pythonPath": "~/uvmls-venv/bin/python"
+```
+
+**Pinned installs and allowlists.** Every release is also attached to the GitHub release as `.vsix` files:
+`code --install-extension elegantuvm-linux-x64-<version>.vsix` installs exactly that version (VS Code does not
+auto-update VSIX installs). Organisations that allowlist extensions can list `elegantuvm.elegantuvm`, optionally with a
+version, in `extensions.allowed`.
+
+**No telemetry.** The extension and the server collect nothing and send nothing; the only network access is the
+first-run `pip install` you consent to (see SECURITY.md).
+
+**Command line and other editors.** `pip install uvmls` gives the `uvmls` language server on stdio (Neovim, Emacs,
+Helix, …) and `python -m uvmls lint | elab | graph | topology | configdb | stats | mcp` (see CI and MCP server below).
+
+## Try it (from source)
 
 ```bash
 # Python side (once)
@@ -192,7 +225,7 @@ cd client && npm install && npm run build && cd ..
 Then open this folder in VS Code and press **F5** ("Run extension on the ALU example").
 A second VS Code window opens on `examples/alu_tb`. Open any `.svh` file and click the graph icon in the editor title bar.
 
-To install it like a normal extension instead: `cd client && npm run package`, then **Extensions → … → Install from VSIX** and pick `client/elegantuvm-0.1.0.vsix`.
+To install it like a normal extension instead: `cd client && npm run package` (generic) or `npm run package:linux-x64` (with the wheels), then **Extensions → … → Install from VSIX** and pick `client/elegantuvm-0.1.0.vsix` or `client/elegantuvm-linux-x64-0.1.0.vsix`.
 On first start the extension offers to create its own Python environment with pyslang and pygls.
 
 Command line on the example:
