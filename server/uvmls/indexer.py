@@ -134,6 +134,9 @@ DECLARATION_KINDS = {  # the block items that are not statements
     K.PortDeclaration,
 }
 CONFIG_DB_OPS = {"set", "get", "exists", "wait_modified"}
+# uvm_config_db.svh's typedefs, by the type they specialize uvm_config_db with.
+UVM_CONFIG_TYPEDEFS = {"uvm_config_int": "uvm_bitstream_t", "uvm_config_string": "string",
+                       "uvm_config_object": "uvm_object", "uvm_config_wrapper": "uvm_object_wrapper"}
 RESOURCE_DB_OPS = {"set": "set", "read_by_name": "get", "read_by_type": "get",
                    "set_default": "set", "set_override": "set"}
 
@@ -1489,12 +1492,18 @@ class Extractor:
                 in_loop=ctx.in_loop, range=r, nargs=len(args)))
             return
 
-        # uvm_config_db #(T)::set/get(...)
-        if segs[0].name in ("uvm_config_db", "uvm_resource_db") and len(segs) >= 2:
-            db = segs[0].name
-            type_text = ", ".join(segs[0].args)
+        # uvm_config_db #(T)::set/get(...), also through a typedef: UVM's own uvm_config_int, or a
+        # project's `typedef uvm_config_db #(T) t_db;` (resolved by the workspace, which has the typedefs).
+        db = segs[0].name if segs[0].name in ("uvm_config_db", "uvm_resource_db") else None
+        type_text = ", ".join(segs[0].args)
+        if db is None and len(segs) == 2 and not segs[0].args and last in CONFIG_DB_OPS and 3 <= len(args) <= 4:
+            if segs[0].name in UVM_CONFIG_TYPEDEFS:
+                db, type_text = "uvm_config_db", UVM_CONFIG_TYPEDEFS[segs[0].name]
+            elif re.fullmatch(r"\w+", segs[0].name):
+                db, type_text = "typedef", segs[0].name
+        if db is not None and len(segs) >= 2:
             op = None
-            if db == "uvm_config_db" and last in CONFIG_DB_OPS:
+            if db in ("uvm_config_db", "typedef") and last in CONFIG_DB_OPS:
                 op = last
                 ctx_arg, inst_arg, field_arg = (args + [None] * 4)[:3]
                 value = compact(args[3]) if len(args) > 3 else ""

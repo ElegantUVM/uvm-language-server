@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from . import naturaldocs
-from .model import ClassInfo, ConfigDbCall, DesignUnit, OverrideCall, Param, Range, Typedef, Variable
+from .model import ClassInfo, ConfigDbCall, CreateCall, DesignUnit, OverrideCall, Param, Range, Typedef, Variable
 from .uvm import BUILTIN_CLASSES, COMPONENT_ROLES, ROLE_ORDER, builtin_params, is_tlm_port
 from .workspace import BUILTIN_TYPES, Spec, Workspace, bind_params, parse_type_text, split_args
 
@@ -286,6 +286,17 @@ def topology(ws: Workspace, test: str | None = None) -> dict:
     return copy.deepcopy(effective_type(ws, test).topology)  # callers must not edit the cached one
 
 
+def _chain_creates(ws: Workspace, cls: ClassInfo) -> list[tuple[ClassInfo, dict[str, str], CreateCall]]:
+    """Every create the class or an ancestor makes, base first, with the class that makes it and
+    that class's type parameters as this class binds them."""
+    out = []
+    for entry in reversed(ws.chain(cls)):
+        owner = entry.spec.cls
+        if owner is not None:
+            out += [(owner, entry.bindings, cr) for cr in ws.calls_of(owner).creates]
+    return out
+
+
 def effective_type(ws: Workspace, test: str | None = None) -> EffectiveTypes:
     key = test or ""
     if key not in ws._effective_type_cache:
@@ -359,10 +370,13 @@ def _build_effective_type(ws: Workspace, test: str | None) -> EffectiveTypes:
                     node["ports"].append({"name": v.name, "type": v.type_text, **_loc(v.range)})
         by_target: dict[str, tuple] = {}
         objects = []
-        for cr in chain_calls.creates:
+        for owner, bindings, cr in _chain_creates(ws, cls):
             cspec = None
             if cr.type is not None:
-                cspec = ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls)
+                # As the class that writes the call sees the type, with the chain's type parameters
+                # bound: `ENV_T::type_id::create(...)` in a base test is this test's env.
+                cspec = ws.resolve_type_ref(cr.type, owner, bindings) or \
+                    ws.resolve_spec(cr.type.name, cr.type.scope, cr.type.args, cls)
             elif cr.target_base:
                 hit = ws.find_member(cls, cr.target_base)
                 if hit and isinstance(hit[1], Variable):

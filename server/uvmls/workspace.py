@@ -6,7 +6,7 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .indexer import EOL_RE, Indexer, argument_spans, mask
 from .model import (
@@ -473,6 +473,32 @@ class Workspace:
             base = self.base_spec(cls)
             if base is not None:
                 self.subclasses.setdefault(base.key, []).append(cls)
+            cs = self.calls.get(cls.qualname)
+            if cs is not None and any(c.db == "typedef" for c in cs.config_db):
+                cs.config_db = self._through_config_db_typedefs(cs.config_db, cls.package, cls.imports)
+        for u in self.units:
+            if any(c.db == "typedef" for c in u.config_db):
+                u.config_db = self._through_config_db_typedefs(u.config_db, None, ())
+
+    def _through_config_db_typedefs(self, calls: list[ConfigDbCall], package, imports) -> list[ConfigDbCall]:
+        """Calls the indexer recorded as `name::get(...)` with `name` possibly a typedef of
+        uvm_config_db #(T): those that are become uvm_config_db calls of T; the rest were
+        something else's static methods."""
+        out = []
+        for c in calls:
+            if c.db != "typedef":
+                out.append(c)
+                continue
+            name, args = c.type_text, []
+            for _ in range(8):  # a typedef of a typedef
+                td = self.find_typedef(name, package, None, imports)
+                if td is None or td.target is None:
+                    break
+                name, args = td.target.name, td.target.args
+                if name == "uvm_config_db":
+                    out.append(replace(c, db="uvm_config_db", type_text=", ".join(args)))
+                    break
+        return out
 
     # -- lookup --------------------------------------------------------------
 

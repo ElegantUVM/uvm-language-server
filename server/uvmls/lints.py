@@ -304,11 +304,16 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
     # config_db: a get nothing sets (worth a warning when the code needs the value), or a get
     # of another type than what is set.
     report = config_db_report(ws)
-    dynamic_sets = any(e["op"] == "set" for e in report["dynamic"])
+    # A set whose field name is computed may set any field of its type, and only of its type.
+    dynamic_sets = [e for e in report["dynamic"] if e["op"] == "set"]
+
+    def maybe_set(g) -> bool:
+        return any(e["type"] == g["type"] or e["canon"] is None or e["canon"] == g["canon"] for e in dynamic_sets)
+
     for row in report["fields"]:
         for g in row["gets"]:
             r = _range(g)
-            if not row["sets"] and not dynamic_sets:
+            if not row["sets"] and not maybe_set(g):
                 near = near_misses(report, g)
                 said = f"uvm_config_db get of '{row['field']}' ({g['type']}) has no matching set in the indexed sources"
                 if g["optional"]:
@@ -366,7 +371,9 @@ def lint(ws: Workspace) -> dict[str, list[Diag]]:
             add(cls.range, f"{cls.name} is {'a component' if kind == 'component' else 'not a component'} "
                            f"but is registered with {used}; use `{use}", "warning", "utils-mismatch",
                 cls=cls.qualname)
-        if cls.base is not None and ws.base_spec(cls) is None and not cls.base.name.startswith("uvm_"):
+        # `extends T` with T a type parameter of the class is bound by whoever specializes it.
+        if cls.base is not None and ws.base_spec(cls) is None and not cls.base.name.startswith("uvm_") and \
+                not (cls.base.scope is None and any(p.is_type and p.name == cls.base.name for p in cls.params)):
             add(cls.base.range or cls.range, f"base class '{cls.base.name}' was not found in the indexed sources",
                 "info", "unknown-base", cls=cls.qualname)
         for cr in ws.calls_of(cls).creates:
