@@ -36,3 +36,13 @@ def test_manifests_agree_on_licence_version_and_python_floor():
     extension = (ROOT / "client" / "src" / "extension.ts").read_text()
     assert "sys.version_info >= (3, 11)" in extension
     assert not re.search(r"Python 3\.10", extension)
+
+
+def test_cli_reports_its_version(capsys):
+    import pytest
+    from uvmls import __version__, cli
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--version"])
+    assert e.value.code == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"uvmls {__version__} (pyslang ")

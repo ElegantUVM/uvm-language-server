@@ -19,6 +19,7 @@ import json
 import os
 import sys
 
+from . import __version__
 from .elab import displayed, elaborate, request_for, skip_reason, uvm_label
 from .lints import lint
 from .model import Diag, Range
@@ -114,9 +115,18 @@ def findings(ws: Workspace) -> list[Diag]:
     return uniq
 
 
+def pyslang_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("pyslang")
+    except Exception:  # not installed as a distribution
+        return "unknown"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m uvmls", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--version", action="version", version=f"uvmls {__version__} (pyslang {pyslang_version()})")
     ap.add_argument("command", choices=["graph", "topology", "configdb", "lint", "stats", "elab", "mcp"])
     ap.add_argument("dir", nargs="?", default=".", help="workspace directory (default: .)")
     ap.add_argument("-f", dest="filelist", action="append", default=[], help="filelist (.f)")

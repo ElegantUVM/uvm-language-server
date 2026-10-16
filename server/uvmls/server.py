@@ -1517,7 +1517,10 @@ async def uvm_elaborate(ls: UvmLanguageServer, params):
 
 def main(argv=None):
     import argparse
+    from . import __version__
+    from .cli import pyslang_version
     ap = argparse.ArgumentParser(prog="uvmls", description="UVM / SystemVerilog language server")
+    ap.add_argument("--version", action="version", version=f"uvmls {__version__} (pyslang {pyslang_version()})")
     ap.add_argument("--stdio", action="store_true", help="talk LSP over stdin/stdout (default)")
     ap.add_argument("--tcp", type=int, help="listen on this TCP port instead")
     ap.add_argument("--log", help="write a debug log to this file")
