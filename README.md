@@ -210,6 +210,8 @@ version, in `extensions.allowed`.
 **No telemetry.** The extension and the server collect nothing and send nothing; the only network access is the
 first-run `pip install` you consent to (see SECURITY.md).
 
+**First steps.** [docs/getting-started.md](docs/getting-started.md) walks through setup, the project settings, the views and a first quick fix on the bundled example.
+
 **Command line and other editors.** `pip install uvmls` gives the `uvmls` language server on stdio (Neovim, Emacs,
 Helix, …) and `python -m uvmls lint | elab | graph | topology | configdb | stats | mcp` (see CI and MCP server below).
 
