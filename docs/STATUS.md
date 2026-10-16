@@ -3,7 +3,7 @@
 The one place that says what exists, what is planned and what is wrong. Every row keeps its ID for
 good, so a row can be named in a request ("do F41", "fix I12"). Updated at every milestone.
 
-Last updated: 2026-10-16, main at d9c1074 plus the uncommitted launch work (F71).
+Last updated: 2026-10-16, main at 75a25dc (history rewritten under the owner's name).
 
 **ID:** F = feature (any status), I = issue or limitation, D = decision waiting on the owner.
 
@@ -81,7 +81,7 @@ Last updated: 2026-10-16, main at d9c1074 plus the uncommitted launch work (F71)
 | F68 | Waveforms | Topology node → interface signals in Surfer (WCP) | 🔵 Planned | ~5 days. |
 | F69 | Release | Licence, PyPI package, Neovim/Emacs docs | 🟡 Partial | Superseded by F71 (licence, PyPI metadata) and F75 (editor docs). |
 | F70 | Navigation | Hover lists the assignments the index can see | 🔵 Planned | Offered 2026-10-10; only the "initialized to" label (F02) was built. |
-| F71 | Release | Licence and identity: Apache-2.0 + NOTICE, publisher `elegantuvm`, extension `elegantuvm`, Python ≥ 3.11, AI-USE/CONTRIBUTING/SECURITY/CHANGELOG, icon, LICENSE/NOTICE in the .vsix and the wheel | 🟡 Partial | Files written 2026-10-16; the one-time git author rewrite to the real name (D05) is still to run before the first public push. |
+| F71 | Release | Licence and identity: Apache-2.0 + NOTICE, publisher `elegantuvm`, extension `elegantuvm`, Python ≥ 3.11, AI-USE/CONTRIBUTING/SECURITY/CHANGELOG, icon, LICENSE/NOTICE in the .vsix and the wheel | ✅ Done | 2026-10-16: files, .vsix and wheel checks, and the one-time author rewrite (363 commits) pushed to the private remote. |
 | F72 | Release | Launch fixes on real projects: I19, I21, I22, I16, I18 | 🔵 Planned | One regression test per issue. Next after F71. |
 | F73 | Release | Corpus shakedown on 3–5 public testbenches and the evidence page (compliance, lint/topology results, false-positive counts); re-measure the README table (I29) | 🔵 Planned | The answer to "built with AI" is published evidence. |
 | F74 | Release | Linux install story: first run behind proxies or offline, `linux-x64` .vsix with a wheelhouse plus a generic fallback, bundled grammar check | 🔵 Planned | Linux x86_64 first; other platforms later (F57). |
@@ -121,10 +121,10 @@ Last updated: 2026-10-16, main at d9c1074 plus the uncommitted launch work (F71)
 | I27 | LSP | In a symlinked workspace, edits through the link go to a separate (ephemeral) index | ⚪ Accepted | Same as before f4; works, just indexed twice. |
 | I28 | Tests | `test_elaboration_off_results_do_not_outlive_a_fix` flaky under `-n 8` | 🔴 Open | Not seen in recent runs; re-check. |
 | I29 | Docs | README "Measured performance" table needs re-measuring after the recent merges | 🔴 Open | Small. |
-| I30 | Repo | Old fully merged branches (`feature3`, `f4-parity`, `f4-rebase`, `f4-fix`, `fix-resolution`) | 🔴 Open | Delete on the owner's OK (D04). |
+| I30 | Repo | Old fully merged branches (`feature3`, `f4-parity`, `f4-rebase`, `f4-fix`, `fix-resolution`) | ✅ Done | Deleted 2026-10-16 (D04). |
 | D01 | Release | Licence and distribution | ✅ Done | Decided 2026-10-16 after a six-pass research study: free and open source, Apache-2.0, open-core-ready, no charging in the first 12 months. F69 is now F71/F76. |
 | D02 | Roadmap | What to build next | ✅ Done | Launch first (F71–F76), then F40 and F41 for v0.2 in February 2027. |
 | D03 | Debug | Provide 5–10 hung-simulation logs and answer the 4 open questions | 🔴 Open | Unblocks F43–F47. |
-| D04 | Repo | Delete the old merged branches (I30) | 🔴 Open | Do it together with the author rewrite (D05); the rewrite touches every branch. |
+| D04 | Repo | Delete the old merged branches (I30) | ✅ Done | Deleted with the author rewrite, 2026-10-16. |
 | D05 | Release | Public identity | ✅ Done | Brand ElegantUVM, published under the owner's real name (Vishal B), GitHub noreply e-mail; history to be rewritten once before the first public push. |
 | D06 | Release | Ownership: a wholly personal project | 🔴 Open | Nothing blocks going public. |
