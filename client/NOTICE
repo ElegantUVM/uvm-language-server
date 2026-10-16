@@ -1,0 +1,34 @@
+ElegantUVM (uvm-language-server)
+Copyright 2026 Vishal B
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+product except in compliance with the License. A copy of the License is in the LICENSE
+file and at http://www.apache.org/licenses/LICENSE-2.0.
+
+This product bundles the Accellera UVM 1.2 reference implementation, licensed under the
+Apache License, Version 2.0. Its LICENSE and NOTICE files are in
+server/uvmls/third_party/uvm-1.2/. That NOTICE file states:
+
+    Portions of the UVM Reference Library were developed by Mentor Graphics Corporation.
+    Copyright (c) 2007-2012, Mentor Graphics Corporation. All rights reserved.
+
+    Portions of the UVM Reference Library were developed by Cadence Design Systems, Inc.
+    Copyright (c) 2007-2014, Cadence Design Systems, Inc. All rights reserved.
+
+    Portions of the UVM Reference Library were developed by Synopsys, Inc.
+    Copyright (c) 2006-2014, Synopsys, Inc. All rights reserved.
+
+    Portions of the UVM Reference Library were developed by Cypress Semiconductor Corp.
+    Copyright (c) 2012, Cypress Semiconductor Corp. All rights reserved.
+
+Packaged .vsix files also ship the unmodified verible-verilog-format binary from Verible
+(Apache License 2.0; Copyright The Verible Authors; https://github.com/chipsalliance/verible)
+with its LICENSE file, and the npm packages listed in THIRD_PARTY_NOTICES.txt, among them
+elkjs, used under the Eclipse Public License 2.0 (source: https://github.com/kieler/elkjs).
+
+The language server depends on pyslang (MIT), pygls (Apache License 2.0) and lsprotocol
+(MIT), installed from PyPI; their licence files ship in their own distributions.
+
+ElegantUVM is an independent project. It is not affiliated with or endorsed by Accellera
+Systems Initiative, IEEE, AMIQ EDA, Sigasi or the Verible authors. "UVM" and
+"SystemVerilog" are used descriptively to name the standards this tool understands.

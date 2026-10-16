@@ -1,6 +1,6 @@
-# UVM Language Server
+# ElegantUVM
 
-A UVM-aware SystemVerilog language server and VS Code extension built on [slang](https://github.com/MikePopoloski/slang) (through `pyslang`).
+A free, open-source, UVM-aware SystemVerilog language server and VS Code extension built on [slang](https://github.com/MikePopoloski/slang) (through `pyslang`).
 The goal is a DVT-class experience for UVM testbenches that is open, fast, and visual.
 
 ## What works today
@@ -33,10 +33,10 @@ Format Selection expands to complete touched lines. An end at the start of a lat
 ```json
 {
   "[systemverilog]": {
-    "editor.defaultFormatter": "uvmls.uvm-language-server"
+    "editor.defaultFormatter": "elegantuvm.elegantuvm"
   },
   "[verilog]": {
-    "editor.defaultFormatter": "uvmls.uvm-language-server"
+    "editor.defaultFormatter": "elegantuvm.elegantuvm"
   }
 }
 ```
@@ -95,7 +95,7 @@ Use the code shown in Problems or `uvmls lint`; separate several codes with comm
 |---|---|---|
 | `filelist` | required | Simulator filelist, relative to the caller's workspace. |
 | `uvm-home` | empty | UVM installation directory; otherwise use `$UVM_HOME`, a project UVM or the bundled UVM 1.2. |
-| `python-version` | `3.12` | Python version for the server (3.10 or newer). |
+| `python-version` | `3.12` | Python version for the server (3.11 or newer). |
 | `elab` | `false` | Also elaborate and merge its diagnostics into the same SARIF run. |
 | `fail-on` | `warning` | `warning` fails on warnings or errors, matching `lint`'s exit code. `error` fails only on errors; `never` does not fail on findings. Notes never fail. |
 
@@ -192,7 +192,7 @@ cd client && npm install && npm run build && cd ..
 Then open this folder in VS Code and press **F5** ("Run extension on the ALU example").
 A second VS Code window opens on `examples/alu_tb`. Open any `.svh` file and click the graph icon in the editor title bar.
 
-To install it like a normal extension instead: `cd client && npm run package`, then **Extensions → … → Install from VSIX** and pick `client/uvm-language-server-0.1.0.vsix`.
+To install it like a normal extension instead: `cd client && npm run package`, then **Extensions → … → Install from VSIX** and pick `client/elegantuvm-0.1.0.vsix`.
 On first start the extension offers to create its own Python environment with pyslang and pygls.
 
 Command line on the example:
@@ -211,12 +211,12 @@ Tests: `cd server && ../.venv/bin/python -m pytest -q`. The example tests run on
 
 Quick-fix performance checks are opt-in: from `server/`, run `UVMLS_PERF=1 ../.venv/bin/python -m pytest -q -s -k large_project_code_action_budgets`. The test generates a 2,000-class project on the built-in model and checks handler times without indexing waits. To generate the project separately, run `../.venv/bin/python tools/gen_big.py /tmp/uvmls-big`.
 
-Python 3.10 is the oldest version supported, and pip gives it pyslang 11. `tests/test_py_compat.py` catches syntax newer than 3.10 on any Python; the full check runs the tests on 3.10, for example:
+Python 3.11 is the oldest version supported (pyslang 12 requires it). `tests/test_py_compat.py` catches syntax newer than 3.11 on any Python; the full check runs the tests on 3.11, for example:
 
 ```bash
-micromamba create -y -p /tmp/py310 -c conda-forge python=3.10 pip
-/tmp/py310/bin/python -m pip install pyslang 'pygls>=2,<3' pytest
-cd server && /tmp/py310/bin/python -m pytest -q
+micromamba create -y -p /tmp/py311 -c conda-forge python=3.11 pip
+/tmp/py311/bin/python -m pip install pyslang 'pygls>=2,<3' pytest
+cd server && /tmp/py311/bin/python -m pytest -q
 ```
 
 ## Layout

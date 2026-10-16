@@ -23,9 +23,20 @@ const webview = fs.readFileSync(path.join(client, "dist", "webview.js"), "utf8")
 if (!webview.includes("Copyright (c) 2017 Kiel University")) {
   problems.push("dist/webview.js lost elkjs's copyright headers");
 }
+// The extension's own LICENSE, NOTICE and CHANGELOG are copies of the repository's; vsce packages
+// the copies (LICENSE as extension/LICENSE.txt, the changelog for the listing's Changelog tab).
+for (const name of ["LICENSE", "NOTICE", "CHANGELOG.md"]) {
+  const own = path.join(client, name);
+  const root = path.join(client, "..", name);
+  if (!fs.existsSync(own)) problems.push(`client/${name} is missing (copy it from the repository root)`);
+  else if (fs.readFileSync(own, "utf8") !== fs.readFileSync(root, "utf8")) {
+    problems.push(`client/${name} differs from ${name} at the repository root`);
+  }
+}
 const listed = execFileSync("unzip", ["-Z1", vsix], { encoding: "utf8" }).split("\n");
 const binary = `extension/${VERIBLE_DIR}/verible-verilog-format`;
-for (const file of ["extension/THIRD_PARTY_NOTICES.txt", "extension/server/uvmls/third_party/uvm-1.2/LICENSE.txt",
+for (const file of ["extension/LICENSE.txt", "extension/NOTICE", "extension/changelog.md", "extension/THIRD_PARTY_NOTICES.txt",
+  "extension/server/uvmls/third_party/uvm-1.2/LICENSE.txt",
   "extension/server/uvmls/third_party/uvm-1.2/NOTICE.txt", binary, `extension/${VERIBLE_DIR}/LICENSE`,
   `extension/${VERIBLE_DIR}/VERSION`]) {
   if (!listed.includes(file)) problems.push(`${path.basename(vsix)} has no ${file}`);

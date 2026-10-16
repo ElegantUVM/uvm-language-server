@@ -114,7 +114,7 @@ reports; factory override resolution is irrelevant to the callable's declared si
   comparison to distinguish these from project configuration changes.
 - Use VS Code's **Format Document** (`editor.action.formatDocument`) and **Format Selection**
   (`editor.action.formatSelection`); no new `uvm.*` command or client-side provider. Document choosing
-  `uvmls.uvm-language-server` with `editor.defaultFormatter` under `[systemverilog]`/`[verilog]` when
+  `elegantuvm.elegantuvm` with `editor.defaultFormatter` under `[systemverilog]`/`[verilog]` when
   other extensions are installed. `editor.formatOnSave` remains an explicit editor preference;
   do not change either default on the user's behalf. No arbitrary formatter-argument setting in v1.
 - Add `test_formatting.py` using `test_lsp.Client`, `test_code_actions.Doc` and its edit-application

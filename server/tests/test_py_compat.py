@@ -1,6 +1,6 @@
-"""The code parses on Python 3.10, the oldest version pyproject.toml declares. On 3.10 and 3.11 the
+"""The code parses on Python 3.11, the oldest version pyproject.toml declares. On 3.11 the
 interpreter itself is the check; on newer ones these tests catch the newer syntax that slips in most
-easily. Running the whole suite on 3.10 is the full check (README, Tests)."""
+easily. Running the whole suite on 3.11 is the full check (README, Tests)."""
 
 import ast
 import io
@@ -12,11 +12,11 @@ from pathlib import Path
 SERVER = Path(__file__).resolve().parent.parent
 SOURCES = sorted(p for d in ("uvmls", "tests", "tools") for p in (SERVER / d).rglob("*.py"))
 SOURCES += sorted((SERVER.parent / "tools").rglob("*.py"))
-OLDEST = (3, 10)
+OLDEST = (3, 11)
 
 
 def newer_syntax(source: str) -> list[str]:
-    """What in a module Python 3.10 cannot parse, as "line N: what"."""
+    """What in a module Python 3.11 cannot parse, as "line N: what"."""
     try:
         ast.parse(source, feature_version=OLDEST)
     except SyntaxError as e:
@@ -73,7 +73,6 @@ def test_newer_syntax_is_found():
                    "f'''{x  # why\n}'''",  # a comment
                    "f'''{a + \\\nb}'''",  # a line continuation
                    "f'{a\n+ b}'",  # a line break in a single-quoted f-string
-                   "try:\n    pass\nexcept* ValueError:\n    pass",
                    "type T = int"]:
         assert newer_syntax(source), source
     for source in ["f\"\\n{x}\" + rf'\\d{x}' + f'{{x}} {x:\\\\>5}'",  # escapes outside the expression

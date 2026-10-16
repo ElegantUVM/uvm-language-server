@@ -1,6 +1,6 @@
-# UVM Language Server
+# ElegantUVM
 
-UVM-aware SystemVerilog support for VS Code, built on the [slang](https://github.com/MikePopoloski/slang) compiler front end.
+Free, open-source, UVM-aware SystemVerilog support for VS Code, built on the [slang](https://github.com/MikePopoloski/slang) compiler front end.
 
 - **One-click class graph.** Click the graph button in the editor title bar (or press `Ctrl+Alt+G`). You get inheritance, composition, factory creates and overrides, with UVM roles (driver, monitor, agent, …) recognised automatically.
 - **Component topology.** The `uvm_test_top` tree for any test, built from `type_id::create()` calls. Factory overrides are applied, conditional components are marked, and TLM `connect()` calls are drawn.

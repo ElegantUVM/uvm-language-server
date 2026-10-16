@@ -1,13 +1,38 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "uvmls"
 version = "0.1.0"
 description = "UVM-aware SystemVerilog language server built on slang"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Vishal B" }]
+readme = "README.md"
+keywords = ["uvm", "systemverilog", "verilog", "language-server", "lsp", "lint", "slang", "eda", "verification", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
 dependencies = ["pyslang>=9", "pygls>=2.0,<3", "lsprotocol>=2025.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/ElegantUVM/uvm-language-server"
+Documentation = "https://github.com/ElegantUVM/uvm-language-server#readme"
+Repository = "https://github.com/ElegantUVM/uvm-language-server.git"
+Issues = "https://github.com/ElegantUVM/uvm-language-server/issues"
+Changelog = "https://github.com/ElegantUVM/uvm-language-server/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]

@@ -14,7 +14,7 @@ const FIRST_INDEX = 90000;
 const UI_TIMEOUT = 30000;
 const LABEL = "UVM Language Server";  // the provider's definition label (client/src/mcp.ts)
 const CHANNEL = "UVM MCP";
-const EXTENSION_ID = "uvmls.uvm-language-server";
+const EXTENSION_ID = "elegantuvm.elegantuvm";
 
 function prepareWorkspace(env = process.env) {
   for (const key of ["E2E_ROOT", "ALU_TB", "UVM_PYTHON", "VSWEB_LOGS"]) {

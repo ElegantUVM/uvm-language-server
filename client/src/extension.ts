@@ -101,14 +101,14 @@ async function installDependencies(ctx: vscode.ExtensionContext): Promise<boolea
     async (progress) => {
       let base: string | undefined;
       for (const cand of process.platform === "win32" ? ["py", "python"] : ["python3", "python"]) {
-        const r = await run(cand, ["-c", "import sys; assert sys.version_info >= (3, 10)"]);
+        const r = await run(cand, ["-c", "import sys; assert sys.version_info >= (3, 11)"]);
         if (r.ok) {
           base = cand;
           break;
         }
       }
       if (!base) {
-        vscode.window.showErrorMessage("UVM: Python 3.10 or newer was not found on PATH.");
+        vscode.window.showErrorMessage("UVM: Python 3.11 or newer was not found on PATH.");
         return false;
       }
       fs.mkdirSync(path.dirname(venv), { recursive: true });
@@ -131,7 +131,7 @@ async function installDependencies(ctx: vscode.ExtensionContext): Promise<boolea
 
 function setupNeeded() {
   status.text = "$(warning) UVM: set up Python";
-  status.tooltip = "UVM Language Server needs Python 3.10+ with pyslang and pygls. Click to set it up.";
+  status.tooltip = "UVM Language Server needs Python 3.11+ with pyslang and pygls. Click to set it up.";
   status.command = "uvm.setup";
 }
 
@@ -153,7 +153,7 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
   let python = await findPython(ctx);
   if (!python) {
     setupNeeded();
-    const message = "UVM Language Server needs Python 3.10+ with the pyslang and pygls packages.";
+    const message = "UVM Language Server needs Python 3.11+ with the pyslang and pygls packages.";
     if (!interactive) {
       // A passive hint at startup. Never wait on it: a toast can end up hidden in the
       // notification centre, and a later click must still be able to run setup.
