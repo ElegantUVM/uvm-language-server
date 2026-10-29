@@ -5,7 +5,7 @@ reproducible: [`tools/corpus/`](../tools/corpus/README.md) holds the list of rep
 the filelists we wrote, `run_baseline.sh` and this run's `results/2026-10-16/summary.json`; the tables are
 `tools/corpus_evidence.py` over that file.
 
-**Run:** 2026-10-16, server at commit `2aa6fdf` (the launch fixes), Python 3.14.4, pyslang 12.0.0, WSL2 on a
+**Run:** 2026-10-16, server at commit `65e7935` (the launch fixes), Python 3.14.4, pyslang 12.0.0, WSL2 on a
 16-core machine, two cases at a time. Each row is one `python -m uvmls` process per command (`stats`, `lint`,
 `elab`, `topology`, `graph`), measured by `/usr/bin/time`; "Index" is the cold index of the whole project with the
 bundled Accellera UVM 1.2, "RSS" the peak memory of that process.
