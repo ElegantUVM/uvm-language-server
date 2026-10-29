@@ -84,7 +84,7 @@ export function writeNotices(metafiles, out) {
       }
     } else if (VENDORED_WHEEL_LICENCES[name]) {
       const vendored = path.join(client, "third_party", VENDORED_WHEEL_LICENCES[name]);
-      parts.push(`--- ${path.basename(vendored)} (the wheel carries no licence file; this is the project's LICENSE)\n\n` +
+      parts.push(`--- ${path.basename(vendored)} (the wheel carries no licence file; this is the upstream project's own LICENSE, from https://github.com/wjakob/nanobind)\n\n` +
         `${fs.readFileSync(vendored, "utf8").trim()}\n`);
     } else {
       throw new Error(`${files[0]} carries no licence file to ship in ${out}`);

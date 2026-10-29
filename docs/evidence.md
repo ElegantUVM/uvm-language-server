@@ -1,9 +1,9 @@
 # Measured on real projects
 
 What ElegantUVM reports on public UVM testbenches, so you can judge it on evidence. Everything here is
-reproducible: the corpus tooling (repositories at pinned commits, the filelists we wrote, `run_baseline.sh`)
-is described in the project's durable corpus manifest and will be published with the repository; the tables are
-`tools/corpus_evidence.py` over the run's `summary.json`.
+reproducible: [`tools/corpus/`](../tools/corpus/README.md) holds the list of repositories at their pinned commits,
+the filelists we wrote, `run_baseline.sh` and this run's `results/2026-10-16/summary.json`; the tables are
+`tools/corpus_evidence.py` over that file.
 
 **Run:** 2026-10-16, server at commit `2aa6fdf` (the launch fixes), Python 3.14.4, pyslang 12.0.0, WSL2 on a
 16-core machine, two cases at a time. Each row is one `python -m uvmls` process per command (`stats`, `lint`,
@@ -111,7 +111,7 @@ The run before the launch fixes (server at `2bbf7c9`, 2026-10-09) differs in exa
 
 ## Limits of this evidence
 
-The corpus is nine filelist benches and ten discovery folders from six public projects; it exercises UVM
+The corpus is nine filelist benches and ten discovery folders from seven public projects; it exercises UVM
 testbench structure well and register models, assertions and DPI poorly (the checkouts lack the generated and
 vendor parts). "No finding we would call a bug" is our reading of the reports, not a proof. The index is
 syntax-level by design (README, "Why syntax-level indexing"), so name resolution has known gaps listed in

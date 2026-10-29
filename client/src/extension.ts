@@ -171,7 +171,10 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
   let python = await findPython(ctx);
   if (!python) {
     setupNeeded();
-    const message = "UVM Language Server needs Python 3.11+ with the pyslang and pygls packages.";
+    const configured = vscode.workspace.getConfiguration("uvm").get<string>("pythonPath");
+    const message = configured
+      ? `uvm.pythonPath is "${expandPath(configured)}" but it cannot import pyslang and pygls.`
+      : "UVM Language Server needs Python 3.11+ with the pyslang and pygls packages.";
     if (!interactive) {
       // A passive hint at startup. Never wait on it: a toast can end up hidden in the
       // notification centre, and a later click must still be able to run setup.
@@ -196,6 +199,15 @@ async function startClient(ctx: vscode.ExtensionContext, interactive: boolean): 
     );
     if (choice === "Install automatically" && (await installDependencies(ctx))) {
       python = await findPython(ctx);
+      if (!python && configured) {
+        // The configured interpreter is still unusable; the environment just created is what was asked for.
+        const managed = path.join(managedVenv(ctx), VENV_BIN);
+        if (await canImport(managed, serverDir(ctx))) {
+          python = managed;
+          void vscode.window.showInformationMessage(
+            `UVM: using the extension's own environment instead of uvm.pythonPath ("${expandPath(configured)}").`);
+        }
+      }
     } else if (choice === "Choose Python…") {
       vscode.commands.executeCommand("workbench.action.openSettings", "uvm.pythonPath");
     }

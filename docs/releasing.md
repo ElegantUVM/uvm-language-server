@@ -31,12 +31,15 @@ Everything in this section is the publisher's own account work; none of it is in
    variable `PUBLISH_OPEN_VSX` = `true`. Then *Settings → General → Danger Zone → Change visibility →
    Public*. A public repository has free Actions minutes, allows environments on the free plan,
    lets the lint self-test upload SARIF to code scanning, and lets `vsce` rewrite the README's
-   relative image links to the repository.
+   relative image links to the repository. Once it is public, enable *Settings → Code security →
+   Private vulnerability reporting* (SECURITY.md sends reporters there; it is off by default), and in
+   `docs/STATUS.md` mark D07 and F76 done with the date.
 
 ## Each release
 
-1. `CHANGELOG.md`: turn `## [Unreleased]` into `## [X.Y.Z] - YYYY-MM-DD` and add an empty
-   `## [Unreleased]` above it.
+1. `CHANGELOG.md`: move the `## [Unreleased]` items into a `## [X.Y.Z] - YYYY-MM-DD` section (for 0.1.0, replace
+   `unreleased` in its heading with the date) and leave an empty `## [Unreleased]` above it. Copy the file to
+   `client/CHANGELOG.md`; the tests and the package check require the two to match.
 2. Set the same version in `client/package.json` (`version`) and `server/pyproject.toml`
    (`version`). The tag must be `v` + that version.
 3. Commit, tag and push:
@@ -66,4 +69,6 @@ Everything in this section is the publisher's own account work; none of it is in
 ## Versions
 
 `0.y.z` until the LSP surface is stable. Bump `y` for features, `z` for fixes. The server and the
-extension always carry the same version, and the extension pins the server it installs to it.
+extension always carry the same version, and the extension pins the server it installs to it. The
+manifest sets `preview: true` for the 0.y.z series (the Marketplace shows a Preview badge); drop it
+with the 1.0.0 bump.

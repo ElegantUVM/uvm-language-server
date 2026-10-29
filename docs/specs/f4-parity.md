@@ -1,9 +1,11 @@
 # f4-parity spec: formatting, signature help, highlights and folding
 
-Written 2026-10-06 after reading the Feature 3 spec and the saved `roadmap-beat-dvt` notes.
+*The brief given to the coding agent for this feature (see `AI-USE.md`), kept as the record of what was asked for.*
+
+Written 2026-10-06 after reading the earlier feature spec and the author's roadmap notes.
 The requested baseline is `main` at 8a4ba31; the working copy inspected for this spec is 55bbbf1,
 which also contains Feature 3 and its hardening. Roadmap: "Other quick wins" (signature help,
-estimated 1.5 days) and "Gaps on our side" (wire Verible, estimated 1 day). The saved notes give no
+estimated 1.5 days) and "Gaps on our side" (wire Verible, estimated 1 day). The roadmap notes give no
 separate estimate for highlights/folding. Three independent batches, each shippable on its own:
 implement -> independent check -> refix -> review -> VS Code replica e2e -> install.
 
@@ -349,9 +351,8 @@ Tests for C.1/C.2 ship with those P0 items even if keyword highlights are deferr
   Keep the current plain, factual voice and label limitations; no unsupported superiority claims.
 - Python 3.10 stays supported, including pyslang 11; run `tests/test_py_compat.py`. No new package
   installation for this feature's tests. Run focused files while iterating, then the existing full
-  server suite and `npm run -s typecheck && npm run -s build && npm test` in `client/`. Preserve
-  `UNLICENSED`, existing notices and the node_modules symlink without committing it. No personal
-  or organisation names in new text, fixtures or commit messages.
+  server suite and `npm run -s typecheck && npm run -s build && npm test` in `client/`. Keep the
+  existing notices unchanged and do not commit the node_modules symlink.
 - Commit per item (A.1, A.2, A.3, B.1, B.2, B.3, C.1, C.2, C.3), each with its relevant tests and
   README changes. Match `Area: what changed`, a body explaining behaviour and why, and end with:
   `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.

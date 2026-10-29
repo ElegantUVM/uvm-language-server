@@ -124,8 +124,8 @@ Nothing changes in the language analyses. This is packaging, path handling and C
   `check-notices.mjs --target <t>` and contains that target's wheels and Verible only.
 - CI green on ubuntu (3.11–3.14), windows-latest and macos-latest (3.12), including the three `setup-<os>` jobs.
 - `cd server && python -m pytest -q` passes on Windows and macOS runners.
-- No change in any lint, topology, config_db or graph output on the corpus (`durable/corpus/run_baseline.sh`
-  against `results/launch-timing/summary.json`: "changes: none").
+- No change in any lint, topology, config_db or graph output on the corpus (`tools/corpus/run_baseline.sh -c tools/corpus/results/2026-10-16/summary.json`:
+  "changes: none").
 
 ## Out of scope
 

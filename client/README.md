@@ -15,16 +15,19 @@ Free, open-source, UVM-aware SystemVerilog support for VS Code, built on the [sl
 ## Install
 
 Python 3.11 or newer is needed; on first start the extension offers to create its own environment with `pyslang` and
-`pygls`, or set `uvm.pythonPath`. The Linux x86_64 package installs from the wheels it ships, with no network access;
-elsewhere `uvm.pipArgs` passes a mirror or proxy to pip. **No telemetry:** nothing is collected or sent. Free and open
-source under the Apache License 2.0; sources, issues and the CLI/MCP documentation are on
-[GitHub](https://github.com/ElegantUVM/uvm-language-server).
+`pygls` (**Set Up…**, then **Install automatically**), or set `uvm.pythonPath`. Trust the folder when VS Code asks: the
+extension starts a Python process, so it stays disabled in Restricted Mode. On Debian and Ubuntu install `python3-venv`
+first. The Linux x86_64 package installs from the wheels it ships (Python 3.11 to 3.14), with no network access; elsewhere
+`uvm.pipArgs` passes a mirror or proxy to pip. Tested on Linux x86_64 (Remote-SSH and WSL included); on macOS and Windows
+the generic package is expected to work but is not yet tested, and Verible is not bundled there (set `uvm.formatter.path`).
+**No telemetry:** nothing is collected or sent. Free and open source under the Apache License 2.0; sources, issues and the
+CLI/MCP documentation are on [GitHub](https://github.com/ElegantUVM/uvm-language-server).
 
 ## Quick fixes and UVM lint
 
-Use the lightbulb or **Quick Fix…** (`Ctrl+.`) on a finding. Existing checks cover `create-unregistered`, `utils-mismatch`, `create-no-parent`, `create-virtual`, `unknown-base`, `config-db-no-set` and `config-db-type-mismatch`. Optional or conditional config_db gets with no set are informational; required gets are warnings. A dynamic field name in a set suppresses the no-set check. Matching is static and cannot resolve every runtime scope or value.
+Use the lightbulb or **Quick Fix…** (`Ctrl+.`) on a finding. The eleven checks are `create-unregistered`, `utils-mismatch`, `create-no-parent`, `create-virtual`, `unknown-base`, `config-db-no-set`, `config-db-type-mismatch`, `factory-ctor`, `create-new`, `utils-param` and `phase-no-super`. Optional or conditional config_db gets with no set are informational; required gets are warnings. A dynamic field name in a set suppresses the no-set check. Matching is static and cannot resolve every runtime scope or value.
 
-Four more checks help repair common UVM mistakes:
+Four of them need a word of explanation:
 
 - `factory-ctor`: a registered class cannot accept its factory's constructor calls (error); add a compatible constructor or an object's missing name default when possible. The selected UVM library and defines determine the required calls.
 - `create-new`: direct `new(name, parent)` bypasses the factory for a registered project component (warning); change it to `type_id::create`.

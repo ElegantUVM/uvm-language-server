@@ -1,4 +1,4 @@
-"""Turn a corpus run's summary.json (durable corpus tooling, run_baseline.sh) into the Markdown tables
+"""Turn a corpus run's summary.json (written by tools/corpus/run_baseline.sh) into the Markdown tables
 the README's "Measured on real projects" section and docs/evidence.md show.
 
     python tools/corpus_evidence.py SUMMARY.json [--full]

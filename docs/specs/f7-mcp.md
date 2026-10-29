@@ -1,5 +1,7 @@
 # f7 spec: MCP server over the live UVM index
 
+*The brief given to the coding agent for this feature (see `AI-USE.md`), kept as the record of what was asked for.*
+
 Written 2026-10-09 against main 2bbf7c9; corrected the same day after an independent review of every
 code pointer and protocol claim. Roadmap item "MCP server over the same index, so AI assistants can
 query real facts" (differentiator: DVT's MCP server has 40 tools, is separately licensed, and has no

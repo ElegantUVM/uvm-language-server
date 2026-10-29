@@ -186,15 +186,21 @@ What to expect: every location has 1-based lines and character columns and a pat
 
 **VS Code.** Install **ElegantUVM** (`elegantuvm.elegantuvm`) from the Visual Studio Marketplace, or from
 [Open VSX](https://open-vsx.org/) in VSCodium, Cursor, Windsurf and Theia. On Linux x86_64 you get a package that
-carries the server's Python wheels and the Verible formatter; other platforms get the generic package.
+carries the server's Python wheels and the Verible formatter; other platforms get the generic package. It is tested
+on Linux x86_64 (Remote-SSH and WSL included). On macOS and Windows the generic package is expected to work but is
+not yet tested: first-run setup installs `pyslang` and `pygls` from PyPI (or through `uvm.pipArgs`), and Verible is not
+bundled there (set `uvm.formatter.path`).
 
 **Python.** The server needs Python 3.11 or newer. On first start the extension offers to create its own
-environment (**Set Up…** in the status bar): it looks for `python3`, then `python3.14` … `python3.11` (Enterprise
-Linux keeps `python3` old), and installs `pyslang` and `pygls` into a private venv. Or point `uvm.pythonPath` at
-an interpreter that already has them.
+environment (**UVM: set up Python** in the status bar, or **Set Up…** in the notification, then **Install
+automatically**): it looks for `python3`, then `python3.14` … `python3.11` (Enterprise Linux keeps `python3` old), and
+installs `pyslang` and `pygls` into a private venv. Or point `uvm.pythonPath` at an interpreter that already has them.
+On Debian and Ubuntu the `venv` module is a separate package: install `python3-venv` (or `python3.12-venv` for a
+versioned interpreter) first. Trust the folder when VS Code asks: the extension starts a Python process, so it stays
+disabled in Restricted Mode.
 
-**Offline and behind a proxy.** The Linux x86_64 package installs its dependencies from the wheels it ships, with
-no network access at all. Elsewhere, give pip a mirror or a proxy with `uvm.pipArgs` (for example
+**Offline and behind a proxy.** The Linux x86_64 package installs its dependencies from the wheels it ships (Python
+3.11 to 3.14), with no network access at all; with a newer Python it installs from the index like the other platforms. Elsewhere, give pip a mirror or a proxy with `uvm.pipArgs` (for example
 `["--index-url", "https://mirror.example/simple", "--trusted-host", "mirror.example"]`), or build a wheelhouse on a
 connected machine and point the extension at an environment made from it:
 
@@ -236,18 +242,19 @@ On first start the extension offers to create its own Python environment with py
 Command line on the example:
 
 ```bash
+source .venv/bin/activate
 cd examples/alu_tb
-PYTHONPATH=../../server ../../.venv/bin/python -m uvmls topology -f alu_tb.f --test alu_error_test
-PYTHONPATH=../../server ../../.venv/bin/python -m uvmls lint -f alu_tb.f
-PYTHONPATH=../../server ../../.venv/bin/python -m uvmls elab -f alu_tb.f
-PYTHONPATH=../../server ../../.venv/bin/python -m uvmls lint -f alu_tb.f --sarif uvmls.sarif
+PYTHONPATH=../../server python -m uvmls topology -f alu_tb.f --test alu_error_test
+PYTHONPATH=../../server python -m uvmls lint -f alu_tb.f
+PYTHONPATH=../../server python -m uvmls elab -f alu_tb.f
+PYTHONPATH=../../server python -m uvmls lint -f alu_tb.f --sarif uvmls.sarif
 ```
 
 `--sarif FILE` leaves text output and exit codes unchanged and can accompany `--json`. With `--sarif -`, stdout contains only SARIF; text diagnostics go to stderr. Source URIs are relative to the workspace directory (the optional directory argument, default `.`), with absolute file URIs for diagnostics outside it. Fingerprints use the path, code and source line with whitespace collapsed, so unrelated edits do not change them.
 
-Tests: `cd server && ../.venv/bin/python -m pytest -q`. The example tests run on the built-in model, the bundled UVM 1.2, or both. With `UVM_HOME` set, the real-library navigation test uses that UVM instead of the bundled one.
+Tests: `source .venv/bin/activate && cd server && python -m pytest -q`. The example tests run on the built-in model, the bundled UVM 1.2, or both. With `UVM_HOME` set, the real-library navigation test uses that UVM instead of the bundled one.
 
-Quick-fix performance checks are opt-in: from `server/`, run `UVMLS_PERF=1 ../.venv/bin/python -m pytest -q -s -k large_project_code_action_budgets`. The test generates a 2,000-class project on the built-in model and checks handler times without indexing waits. To generate the project separately, run `../.venv/bin/python tools/gen_big.py /tmp/uvmls-big`.
+Quick-fix performance checks are opt-in: from `server/`, run `UVMLS_PERF=1 python -m pytest -q -s -k large_project_code_action_budgets` with the venv active. The test generates a 2,400-class project on the built-in model and checks handler times without indexing waits. To generate the project separately, run `python tools/gen_big.py --classes 2400 /tmp/uvmls-big`.
 
 Python 3.11 is the oldest version supported (pyslang 12 requires it). `tests/test_py_compat.py` catches syntax newer than 3.11 on any Python; the full check runs the tests on 3.11, for example:
 
@@ -292,7 +299,7 @@ examples/alu_tb/               a complete small UVM testbench (it elaborates cle
 ### Why syntax-level indexing
 
 The indexer works on slang's syntax trees, not on an elaborated design. That makes it fast, tolerant of code that does not compile yet, and incremental: an edit re-parses only the root file that includes the edited file.
-UVM macros matter here. Without definitions, slang drops `` `uvm_fatal(...) `` and the statement after `if (...) `uvm_fatal(...)` silently becomes the `if` body.
+UVM macros matter here. Without definitions, slang drops `` `uvm_fatal(...) ``, and the statement after an `` if (...) `uvm_fatal(...) `` silently becomes the `if` body.
 By default the real macros come from the bundled UVM 1.2. A file that uses them without `` `include "uvm_macros.svh" `` gets them predefined, because simulators usually have them in scope already.
 With the bundled copy turned off, the shim in `server/uvmls/shim/` keeps every UVM macro's name and arity with a minimal body. Factory registration is visible through the same `type_id` typedef the real macros produce, so the rest of the code does not care which one is in use.
 
@@ -328,19 +335,18 @@ On this machine (WSL2, Python 3.14.4, pyslang 12.0; the synthetic-project rows w
 | ALU example, re-index after editing one file: bundled UVM 1.2 / built-in model | 0.014 s / 0.004 s |
 | Synthetic project: 2,400 files, 2,400 classes, full index: bundled UVM 1.2 / built-in model | 7.2 s / 2.3 s |
 | Same project, re-index after editing one file (median of five edits): bundled UVM 1.2 / built-in model | 0.05 s / 0.04 s |
-| Same project, class graph / topology (800 instances) | 0.07 s / 0.02 s |
-| Webview first render, same project (package overview) | 1.1 s; drill-down 0.2 s; all 2,000 classes in one diagram 11 s |
+| Same project, class graph / topology (800 instances; the 2,000-class generation, 2026-10-04) | 0.07 s / 0.02 s |
+| Webview first render, same project (package overview; the 2,000-class generation, 2026-10-04) | 1.1 s; drill-down 0.2 s; all classes in one diagram 11 s |
 | Elaboration, ALU example with the bundled UVM 1.2: compile + elaborate (with slang's analysis pass) / through the server's worker process / `elab -f` CLI | 0.11 s / 0.20 s / 0.20 s |
 | Elaboration, synthetic project (no top module, no UVM copy of its own), `elab -f` CLI | 5.8 s on 2026-10-29 (1.2 s when first measured; being investigated, STATUS I32) |
 | Hover while the synthetic project elaborates | median 0.4 ms as when idle, slowest 14 ms (it runs in its own process) |
 | Peak memory of the elaboration process: ALU example / synthetic project | 0.1 GB / 2.6 GB (freed when it exits) |
 
-The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound until it has run on a production testbench. Its full-index and edit rows are CPU seconds of the single-threaded index (`time.process_time`, the same as wall time on an idle machine); a garbage-collection pass lands on some edits and adds up to 0.02 s to one.
+The synthetic project is regular and much smaller per file than a real one. Treat these as a lower bound for a large real-world testbench; the cold-index times and peak memory on public projects in [docs/evidence.md](docs/evidence.md) are the closest measurement so far. Its full-index and edit rows are CPU seconds of the single-threaded index (`time.process_time`, the same as wall time on an idle machine); a garbage-collection pass lands on some edits and adds up to 0.02 s to one.
 
 ## Where this stands against DVT
 
-Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this project only starts to cover: a UVM Browser, ConfigDB and Factory Overrides views, **runtime-accurate UVM elaboration** (it handles loops and conditions), an AI assistant with an agentic mode, and an MCP server (40 tools, licensed separately; it has no config_db, factory-override or sequence tools, which `uvmls mcp` has, and ours needs no IDE).
-"Outshine DVT in every way" is not a realistic near-term target. Being better on specific axes is:
+AMIQ's DVT IDE is the established commercial tool for this job. Going by its public documentation as of October 2026, it already ships, in VS Code, things this project only starts to cover: a UVM browser, config_db and factory-override views, UVM elaboration that follows loops and conditions, an AI assistant, and an MCP server. ElegantUVM does not try to match it feature for feature. It aims to be better on four specific axes:
 
 1. **Speed and zero setup.** Sub-second incremental updates, and reading the simulator filelist as-is.
 2. **Visual exploration.** A live, searchable class graph and topology that update as you type, with drill-down that scales.
@@ -351,11 +357,11 @@ Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this pr
 
 [docs/STATUS.md](docs/STATUS.md) is the full, current list of what is done, planned, shelved and known to be wrong, with stable IDs.
 
-1. Run it on one or two real testbenches and fix what breaks: macros, `ifdef` configurations, parameterized classes.
-2. Topology precision: resolve `config_db` scopes against instance paths (which `set` reaches which `get`), propagate simple constant knobs (`is_active = UVM_PASSIVE`), and handle loop-created arrays of components.
-3. Sequence ↔ sequencer view (`start()`, `` `uvm_do_on ``, `p_sequencer`) and a register-model view.
-4. Rename and semantic tokens. Scale work: cache parsed roots on disk, and move the identifier/body walks to C++ (a fork of slang-server, or pyslang visitors).
-5. MCP server over the same index, so AI assistants can query real facts ("where is this agent's config set?"): shipped, see [MCP server](#mcp-server); an in-editor chat participant is a separate item.
+1. Topology precision: resolve `config_db` scopes against instance paths (which `set` reaches which `get`), propagate simple constant knobs (`is_active = UVM_PASSIVE`), and handle loop-created arrays of components.
+2. Sequence ↔ sequencer view (`start()`, `` `uvm_do_on ``, `p_sequencer`) and a register-model view.
+3. Rename and type-resolved references on a scope model (F40 and F41 in the status table), then semantic tokens.
+4. Scale work: cache parsed roots on disk, and move the identifier and body walks to C++ (pyslang visitors, or a fork of slang-server).
+5. An in-editor chat participant over the [MCP server](#mcp-server)'s tools.
 6. Optional full elaboration with slang when the design compiles, to replace the static topology with an exact one.
 
 ## Known limitations
@@ -366,9 +372,12 @@ Be clear-eyed about it. AMIQ's DVT IDE already ships, in VS Code, things this pr
 - If a document contains identical lines, an unrelated edit can disable quick fixes for fresh diagnostics on those lines in clients that do not return diagnostic `data` with code-action requests. VS Code returns it and is not affected.
 - Code inside inactive `` `ifdef `` branches is not indexed. Defines come from the filelist and `uvm.defines`.
 - The bundled library is UVM 1.2. A project on UVM 1.1d or IEEE 1800.2 should set `uvm.uvmHome` (or `$UVM_HOME`) or list its own `uvm_pkg.sv` in the filelist; otherwise navigation and the class graph show the 1.2 declarations.
-- Every full re-index (startup, a settings change, a file created or deleted) parses the UVM library again (about 0.27 s), and every root that includes `uvm_macros.svh` preprocesses the real macro headers: on the synthetic project a full index takes 2.6 s with the bundled UVM against 1.6 s with the built-in model.
+- Every full re-index (startup, a settings change, a file created or deleted) parses the UVM library again (about 0.27 s), and every root that includes `uvm_macros.svh` preprocesses the real macro headers: on the synthetic project a full index takes 7.2 s with the bundled UVM against 2.3 s with the built-in model (the table above).
 - Other SystemVerilog extensions lint every file VS Code opens, the bundled UVM sources included, and Verible keeps those warnings until it restarts. Go to Definition into UVM opens a file, and so does hovering a UVM name when the *SystemVerilog* extension (`eirikpre.systemverilog`) is installed, because its hover reads the line the definition points at. With Verible's default rules, `uvm_component.svh` alone has 303 style warnings. The Problems filter `!**/uvmls/third_party/**` hides them. To stop them instead, set `"verible.arguments": ["--rules_config_search"]`: Verible then reads `.rules.verible_lint` files, and the one in `server/uvmls/third_party/` turns its lint rules off for the bundled UVM. Your own files keep Verible's defaults, unless your project has a `.rules.verible_lint` of its own, which Verible then applies to them.
 - With `uvm.useBundledUvm` off, the built-in model knows only the common UVM base classes and a few of their members, has no UVM sources to navigate into, and cannot be elaborated.
 - Elaboration gets the same files, include directories and defines as the index, plus the filelist's `-timescale`. Other options, such as `-y`/`+libext+` library directories or a simulator's compatibility switches, are not passed to slang, which is also stricter than most simulators about non-standard code. A design that depends on them can show errors its simulator would not.
 - Elaboration is skipped in discovery mode when a module, interface or program, or a package, would be defined more than once: in several files, or in one file that several roots include (usually several testbenches in one workspace); set `uvm.filelists`. Discovery leaves out of the compile any `.svh`/`.vh` header that nothing includes and that holds no module, interface, program or package (an old copy, a template). A file that exists only in an unsaved editor cannot be a compilation root.
-- No license has been chosen yet (`UNLICENSED` in the manifests); pick one before publishing. The bundled UVM 1.2 is Apache-2.0; its `LICENSE.txt` and `NOTICE.txt` ship next to it and must stay there. The npm packages bundled into the extension (elkjs under EPL-2.0, the vscode-languageclient family under MIT, and their ISC/MIT dependencies) ship their licence texts in `THIRD_PARTY_NOTICES.txt`, which every client build regenerates; `npm run package` fails if it, elkjs's copyright headers or the UVM licence would be missing from the .vsix. The bundled Verible formatter (the Linux x86_64 static build of release v0.0-4296-g0f262651) is Apache-2.0: `client/scripts/fetch-verible.mjs` downloads the pinned tarball, checks its SHA-256 and the binary's own SHA-256 (also on every reuse of the cache in `~/.cache/uvmls/verible/`, so a tampered cache is fetched again); the licence text is vendored in `client/third_party/verible-LICENSE`; set `UVMLS_VERIBLE_TARBALL` to a local copy of the tarball to package fully offline, and `npm run package` also fails if the binary, its LICENSE or its notice entry would be missing from the .vsix.
+
+## Licence and third-party notices
+
+ElegantUVM is free and open source under the Apache License 2.0 (`LICENSE` and `NOTICE` at the repository root; the same files ship in the pip package and in the .vsix). The bundled UVM 1.2 is Apache-2.0; its `LICENSE.txt` and `NOTICE.txt` ship next to it and must stay there. The npm packages bundled into the extension (elkjs under EPL-2.0, the vscode-languageclient family under MIT, and their ISC/MIT dependencies) ship their licence texts in `THIRD_PARTY_NOTICES.txt`, which every client build regenerates; `npm run package` fails if it, elkjs's copyright headers or the UVM licence would be missing from the .vsix. The bundled Verible formatter (the Linux x86_64 static build of release v0.0-4296-g0f262651) is Apache-2.0: `client/scripts/fetch-verible.mjs` downloads the pinned tarball, checks its SHA-256 and the binary's own SHA-256 (also on every reuse of the cache in `~/.cache/uvmls/verible/`, so a tampered cache is fetched again); the licence text is vendored in `client/third_party/verible-LICENSE`; set `UVMLS_VERIBLE_TARBALL` to a local copy of the tarball to package fully offline, and `npm run package` also fails if the binary, its LICENSE or its notice entry would be missing from the .vsix. The SystemVerilog and Verilog syntax grammars in `client/syntaxes/` are MIT (`client/third_party/verilog-hdl-LICENSE` names their authors). The linux-x64 package also ships the server's Python wheels unmodified from PyPI, listed with their licences in the same `THIRD_PARTY_NOTICES.txt`.

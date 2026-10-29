@@ -16,13 +16,14 @@ For security problems see SECURITY.md instead of opening a public issue.
 
 ## Development setup
 
-See the README's "Development" section. In short: a Python 3.11+ virtual environment with
+See "Try it (from source)" in the README. In short: a Python 3.11+ virtual environment with
 `pyslang`, `pygls` and `pytest`; `cd client && npm install && npm run build`; press F5 in
 VS Code to run the extension in a development host.
 
 Tests: `cd server && ../.venv/bin/python -m pytest -q` (Python) and `cd client && npm test`
-(client). The end-to-end drivers in `e2e/` need the VS Code web replica described in
-`docs/`; they are run before each release, not on every change.
+(client). The browser-driven drivers in `e2e/` need Playwright and a VS Code web build listening
+on 127.0.0.1:9888 with the extension installed; the header comment of each driver lists the
+environment variables it reads. They are run before each release, not on every change.
 
 ## Pull requests
 

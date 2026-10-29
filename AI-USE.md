@@ -34,11 +34,12 @@ Software Foundation's generative-tooling guidance.
 Do not take the correctness of a UVM analysis on trust, ours or anyone's. The evidence we
 publish:
 
-- the test suite (`server/tests`, `client/tests`, `e2e/`) runs in CI on every change;
+- the unit and protocol tests (`server/tests`, `client/tests`) run in CI on every change, and the
+  browser-driven end-to-end drivers in `e2e/` are run before each release;
 - parsing and elaboration are slang's, not ours — the extension inherits slang's SystemVerilog
   conformance and reports slang's own diagnostics unchanged;
 - the UVM analyses are static and documented, including their known limits
-  (`docs/STATUS.md`, rows I01–I30), so a wrong answer is a bug to report, not a surprise;
+  (the I rows of `docs/STATUS.md`), so a wrong answer is a bug to report, not a surprise;
 - results on public testbenches are published with each release (see the README's
   "Measured" section).
 

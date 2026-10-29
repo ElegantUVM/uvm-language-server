@@ -1,0 +1,20 @@
+# name|mode|workspace dir (corpus-relative)|filelist (corpus-relative, empty = discovery)|elab tops (comma list)|topology test (empty = default)
+opentitan_uart|filelist|repos/opentitan|filelists/opentitan_uart.f|tb,uart_bind,sec_cm_prim_onehot_check_bind|
+opentitan_i2c|filelist|repos/opentitan|filelists/opentitan_i2c.f|tb,i2c_bind,sec_cm_prim_onehot_check_bind|
+opentitan_aes|filelist|repos/opentitan|filelists/opentitan_aes.f|tb,aes_bind,aes_cov_bind,sec_cm_prim_sparse_fsm_flop_bind,sec_cm_prim_onehot_check_bind,aes_err_injection_bind|
+cv32e40p|filelist|repos/core-v-verif|filelists/cv32e40p.f|uvmt_cv32e40p_tb|
+caliptra_sha512|filelist|repos/caliptra-rtl|filelists/caliptra_sha512.f|hdl_top,hvl_top|
+tvip_axi|filelist|repos/tvip-axi|filelists/tvip_axi.f|top|
+yuu_ahb|filelist|repos/yuu_ahb|filelists/yuu_ahb.f|top|
+apb_ral|filelist|repos/UVM-APB_RAL|filelists/apb_ral.f|top|
+uvm_examples_ahb2|filelist|repos/UVM-Examples/projects/ahb2_uvm_tb|filelists/uvm_examples_ahb2.f|top|
+disc_opentitan_uart_dv|discovery|repos/opentitan/hw/ip/uart/dv|||
+disc_opentitan_hw|discovery|repos/opentitan/hw|||
+disc_cv32e40p|discovery|repos/core-v-verif|||
+disc_caliptra_sha512|discovery|repos/caliptra-rtl/src/sha512|||
+disc_caliptra_soc_ifc|discovery|repos/caliptra-rtl/src/soc_ifc|||
+disc_caliptra_src|discovery|repos/caliptra-rtl/src|||
+disc_tvip_axi|discovery|repos/tvip-axi|||
+disc_yuu_ahb|discovery|repos/yuu_ahb|||
+disc_uvm_examples|discovery|repos/UVM-Examples|||
+disc_apb_ral|discovery|repos/UVM-APB_RAL|||

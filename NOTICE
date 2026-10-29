@@ -27,11 +27,19 @@ with its LICENSE file, and the npm packages listed in THIRD_PARTY_NOTICES.txt, a
 elkjs, used under the Eclipse Public License 2.0 (source: https://github.com/kieler/elkjs).
 The extension also ships the SystemVerilog and Verilog TextMate grammars of the
 Verilog-HDL/SystemVerilog/Bluespec SystemVerilog extension 1.29.0 (MIT License; Copyright (c)
-2016-2022 Masahiro H; https://github.com/mshr-h/vscode-verilog-hdl-support) in client/syntaxes/,
-with the licence in client/third_party/verilog-hdl-LICENSE.
+2016-2022 Masahiro H; https://github.com/mshr-h/vscode-verilog-hdl-support) in client/syntaxes/.
+That extension's SystemVerilog grammar derives from VSCode-SystemVerilog (MIT License; Copyright (c)
+2018 Eirik Prestegårdshus; https://github.com/eirikpre/VSCode-SystemVerilog) and its Verilog grammar
+from the TextMate verilog.tmbundle (https://github.com/textmate/verilog.tmbundle, under its
+permissive licence). All three notices are in client/third_party/verilog-hdl-LICENSE.
 
 The language server depends on pyslang (MIT), pygls (Apache License 2.0) and lsprotocol
-(MIT), installed from PyPI; their licence files ship in their own distributions.
+(MIT). The generic .vsix and the PyPI package install them from PyPI. The linux-x64 .vsix
+ships, unmodified from PyPI, the wheels of those packages and of their dependencies (attrs,
+cattrs, typing_extensions and nanobind's backend wheel, which carries nanobind's BSD-3-Clause
+licence in client/third_party/nanobind-LICENSE); every licence text is in THIRD_PARTY_NOTICES.txt.
+The built-in UVM macro shim in server/uvmls/shim/ is derived from the Accellera UVM reference
+implementation (Apache License 2.0) and says so in its header.
 
 ElegantUVM is an independent project. It is not affiliated with or endorsed by Accellera
 Systems Initiative, IEEE, AMIQ EDA, Sigasi or the Verible authors. "UVM" and

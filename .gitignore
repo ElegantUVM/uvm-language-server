@@ -9,3 +9,7 @@ server/uvmls/third_party/verible/
 client/THIRD_PARTY_NOTICES.txt
 client/*.vsix
 .local-backups/
+tools/corpus/repos
+tools/corpus/results/latest/
+server/dist/
+server/*.egg-info/

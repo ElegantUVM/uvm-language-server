@@ -6,10 +6,13 @@ your own testbench. Settings are listed with their defaults in VS Code under **S
 ## 1. Install and set up Python
 
 Install **ElegantUVM** from the Marketplace or Open VSX (see [Install](../README.md#install) for offline and
-pinned installs). Open a folder with SystemVerilog in it. The status bar shows **UVM: set up Python** and a
-notification offers **Set Up…**: accept it, and the extension creates a private virtual environment with
-`pyslang` and `pygls` (from the wheels it ships on Linux x86_64, else with `pip`). The status bar then shows
-**UVM: indexing** and, when done, **UVM: N classes**. Nothing else is needed for a first look.
+pinned installs). Open a folder with SystemVerilog in it and trust it when VS Code asks: the extension starts a
+Python process, so it stays disabled in Restricted Mode. The status bar shows **UVM: set up Python** and a
+notification offers **Set Up…**: click it, then **Install automatically** in the dialog, and the extension creates a
+private virtual environment with `pyslang` and `pygls` (from the wheels it ships on Linux x86_64 for Python 3.11 to
+3.14, else with `pip`). On Debian and Ubuntu install `python3-venv` first; the `venv` module is a separate package
+there. The status bar then shows **UVM: indexing** and, when done, **UVM: N classes**. Nothing else is needed for a
+first look.
 
 If you already have an interpreter with `pyslang` and `pygls`, set `uvm.pythonPath` instead.
 
@@ -37,20 +40,23 @@ own `.vscode/settings.json` already sets `uvm.filelists` to `alu_tb.f`.
   box to focus on it; the details panel lists members you can click to open.
 - **Topology.** **UVM: Show Component Topology**, then choose a test. The `uvm_test_top` tree with the
   test's factory overrides applied. In the example, `alu_error_test` shows the driver replaced by
-  `alu_error_driver`; `alu_passive_test` shows only the monitor under the agent.
+  `alu_error_driver`. The view is static: in `alu_passive_test` the driver and sequencer are still drawn, dashed, as
+  conditional on `m_cfg.is_active == UVM_ACTIVE`, because a knob a derived test sets is not propagated (I20 in
+  `docs/STATUS.md`).
 - **config_db.** **UVM: Show config_db Cross-Reference**: every `set` and `get` by field, with reads that
   have no set and type mismatches flagged. In the editor, the code lens above a `get` names its candidate
   sets, and F12 on the field literal jumps between them.
 - **Inlay hints.** In `alu_agent.svh`, a `type_id::create` shows `→ alu_error_driver` once
-  `uvm.inlayHintsTest` is `alu_error_test`; `req: alu_seq_item` appears on the first use of the driver's
-  parameter-typed members.
+  `uvm.inlayHintsTest` is `alu_error_test`. In `alu_driver.svh`, `req: alu_seq_item` appears on the uses of `req`
+  in `run_phase`, the driver's parameter-typed member.
 
 ## 4. Fix something
 
 Lint diagnostics appear as you type. To see a quick fix on the example, open `agent/alu_monitor.svh` and
 replace `` `uvm_component_utils(alu_monitor) `` with `` `uvm_object_utils(alu_monitor) ``: the `utils-mismatch`
-warning appears, and the light bulb (`Ctrl+.`) offers the right macro. Delete the registration macro entirely
-and the `create-unregistered` fix adds it back. **Fix All** (`source.fixAll.uvm`) applies every safe fix in
+warning appears, and the light bulb (`Ctrl+.`) offers the right macro. Delete the macro entirely and the
+`create-unregistered` warning appears on the `alu_monitor::type_id::create` call in `agent/alu_agent.svh` (open it
+from the Problems panel); its light-bulb fix edits `alu_monitor.svh` and adds the macro back. **Fix All** (`source.fixAll.uvm`) applies every safe fix in
 the file; `// uvm-lint: ignore` waives one line.
 
 Elaboration runs on save (`uvm.elaboration`): slang compiles the whole design and reports what a simulator's
@@ -82,5 +88,5 @@ The GitHub Action and the MCP server for AI assistants are described in the [REA
   **UVM: Restart Language Server**.
 - Unknown-base or missing-include warnings on a file that compiles: the filelist is not set or a define is
   missing; `uvm.defines` adds project defines, and the quick fix on a missing include adds its directory.
-- A slow first index on a large project is expected (about 13 s for 2,400 classes); later edits are
-  incremental.
+- A slow first index on a large project is expected (about 7 s for 2,400 classes with the bundled UVM 1.2, about
+  2 s with the built-in model; see the README's performance table); later edits are incremental.

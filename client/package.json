@@ -3,6 +3,7 @@
   "displayName": "ElegantUVM - UVM-aware SystemVerilog",
   "description": "UVM-aware SystemVerilog: one-click class graph, component topology with factory overrides, config_db cross-reference, UVM lint with quick fixes, slang elaboration diagnostics and an MCP server for AI agents. Free and open source, built on slang.",
   "version": "0.1.0",
+  "preview": true,
   "publisher": "elegantuvm",
   "license": "Apache-2.0",
   "author": {
