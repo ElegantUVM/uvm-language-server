@@ -2,6 +2,8 @@
 
 Free, open-source, UVM-aware SystemVerilog support for VS Code, built on the [slang](https://github.com/MikePopoloski/slang) compiler front end.
 
+![Feature tour: hover, a lint quick fix, the class graph, the topology and the config_db cross-reference on the ALU example](https://github.com/ElegantUVM/uvm-language-server/raw/main/docs/media/feature-tour.gif)
+
 - **One-click class graph.** Click the graph button in the editor title bar (or press `Ctrl+Alt+G`). You get inheritance, composition, factory creates and overrides, with UVM roles (driver, monitor, agent, …) recognised automatically.
 - **Component topology.** The `uvm_test_top` tree for any test, built from `type_id::create()` calls. Factory overrides are applied, conditional components are marked, and TLM `connect()` calls are drawn.
 - **config_db cross-reference.** Every `set` and `get`, matched by field and type. A `get` that nothing sets, or a set/get type mismatch, is flagged in the editor.
@@ -56,8 +58,8 @@ Use the diagnostic code, with commas between multiple codes. After code the dire
 Point `uvm.filelists` at the same `.f` files your simulator uses, or leave it empty and every SystemVerilog file in the workspace is indexed with include paths inferred; simulator output folders such as `work/` are skipped, and `uvm.exclude` leaves out more.
 The UVM library comes from `uvm.uvmHome` when set, else from `$UVM_HOME`, else from the project's own `uvm_pkg.sv` when it compiles one, and otherwise from the Accellera UVM 1.2 that ships with the extension. Turn off `uvm.useBundledUvm` to use a lightweight built-in UVM model instead.
 
-Base syntax highlighting comes from a SystemVerilog syntax extension such as *Verilog-HDL/SystemVerilog* (`mshr-h.veriloghdl`); this extension adds UVM-specific highlighting on top rather than replacing it.
+Syntax highlighting for SystemVerilog and Verilog is built in (the grammars of the *Verilog-HDL/SystemVerilog* extension, MIT), with UVM-specific highlighting injected on top. If that extension is installed as well, both grammars are the same and either one applies.
 With Verible installed, set `"verible.arguments": ["--rules_config_search"]` to keep its style warnings about the bundled UVM sources out of Problems: the extension ships a `.rules.verible_lint` that turns Verible's lint off for them, and your own files keep Verible's defaults.
 
 The bundled UVM 1.2 is Accellera's, under the Apache License 2.0. Its `LICENSE.txt` and `NOTICE.txt` are in `server/uvmls/third_party/uvm-1.2/` inside the extension.
-The npm packages bundled into the extension's JavaScript are listed with their licence texts in `THIRD_PARTY_NOTICES.txt`: elkjs, under the Eclipse Public License 2.0 (source code at https://github.com/kieler/elkjs), the vscode-languageclient packages (MIT), semver and minimatch (ISC), and brace-expansion and balanced-match (MIT).
+The SystemVerilog and Verilog grammars in `syntaxes/` are from the Verilog-HDL/SystemVerilog extension 1.29.0 (MIT; `third_party/verilog-hdl-LICENSE`). The npm packages bundled into the extension's JavaScript are listed with their licence texts in `THIRD_PARTY_NOTICES.txt`: elkjs, under the Eclipse Public License 2.0 (source code at https://github.com/kieler/elkjs), the vscode-languageclient packages (MIT), semver and minimatch (ISC), and brace-expansion and balanced-match (MIT).

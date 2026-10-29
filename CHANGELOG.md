@@ -7,6 +7,9 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0 is reached.
 
 ### Added
 - Apache License 2.0; NOTICE, THIRD_PARTY_NOTICES, AI-USE, CONTRIBUTING and SECURITY documents.
+- Built-in SystemVerilog and Verilog syntax highlighting (the Verilog-HDL/SystemVerilog grammars, MIT), so the
+  extension works on its own; the UVM highlighting is still injected on top.
+- A feature-tour GIF and stills in `docs/media/`, recorded on the ALU example.
 - Marketplace identity: publisher `elegantuvm`, extension `elegantuvm`.
 - A `linux-x64` package that carries the server's Python wheels, so first-run setup needs no network;
   `uvm.pipArgs` for a mirror or proxy on the generic package; `python3.11`–`python3.14` are probed after `python3`.

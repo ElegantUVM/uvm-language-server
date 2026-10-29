@@ -3,6 +3,8 @@
 A free, open-source, UVM-aware SystemVerilog language server and VS Code extension built on [slang](https://github.com/MikePopoloski/slang) (through `pyslang`).
 The goal is a DVT-class experience for UVM testbenches that is open, fast, and visual.
 
+![Feature tour: hover, a lint quick fix, the class graph, the topology and the config_db cross-reference on the ALU example](docs/media/feature-tour.gif)
+
 ## What works today
 
 | Area | Feature |

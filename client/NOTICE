@@ -25,6 +25,10 @@ Packaged .vsix files also ship the unmodified verible-verilog-format binary from
 (Apache License 2.0; Copyright The Verible Authors; https://github.com/chipsalliance/verible)
 with its LICENSE file, and the npm packages listed in THIRD_PARTY_NOTICES.txt, among them
 elkjs, used under the Eclipse Public License 2.0 (source: https://github.com/kieler/elkjs).
+The extension also ships the SystemVerilog and Verilog TextMate grammars of the
+Verilog-HDL/SystemVerilog/Bluespec SystemVerilog extension 1.29.0 (MIT License; Copyright (c)
+2016-2022 Masahiro H; https://github.com/mshr-h/vscode-verilog-hdl-support) in client/syntaxes/,
+with the licence in client/third_party/verilog-hdl-LICENSE.
 
 The language server depends on pyslang (MIT), pygls (Apache License 2.0) and lsprotocol
 (MIT), installed from PyPI; their licence files ship in their own distributions.

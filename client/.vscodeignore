@@ -10,3 +10,4 @@ server/**/__pycache__/**
 server/tests/**
 server/.venv/**
 **/*.ts
+media/feature-tour.gif

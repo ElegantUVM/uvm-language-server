@@ -39,9 +39,12 @@ const binary = `extension/${VERIBLE_DIR}/verible-verilog-format`;
 for (const file of ["extension/LICENSE.txt", "extension/NOTICE", "extension/changelog.md", "extension/THIRD_PARTY_NOTICES.txt",
   "extension/server/uvmls/third_party/uvm-1.2/LICENSE.txt",
   "extension/server/uvmls/third_party/uvm-1.2/NOTICE.txt", binary, `extension/${VERIBLE_DIR}/LICENSE`,
-  `extension/${VERIBLE_DIR}/VERSION`]) {
+  `extension/${VERIBLE_DIR}/VERSION`, "extension/syntaxes/systemverilog.tmLanguage.json",
+  "extension/syntaxes/verilog.tmLanguage.json", "extension/third_party/verilog-hdl-LICENSE"]) {
   if (!listed.includes(file)) problems.push(`${path.basename(vsix)} has no ${file}`);
 }
+// The feature-tour GIF is for the listing and the README, not for the package.
+if (listed.some((f) => f.endsWith(".gif"))) problems.push(`${path.basename(vsix)} ships a GIF`);
 // A platform package ships every pinned wheel, each listed in the notices; the generic one ships none.
 const wheels = listed.filter((f) => f.startsWith("extension/server/wheels/") && f.endsWith(".whl"));
 if (target === "linux-x64") {
