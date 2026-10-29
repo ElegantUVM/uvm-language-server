@@ -1,6 +1,6 @@
 # f7 spec: MCP server over the live UVM index
 
-Written 2026-10-09 against main b610a22; corrected the same day after an independent review of every
+Written 2026-10-09 against main 2bbf7c9; corrected the same day after an independent review of every
 code pointer and protocol claim. Roadmap item "MCP server over the same index, so AI assistants can
 query real facts" (differentiator: DVT's MCP server has 40 tools, is separately licensed, and has no
 config_db, factory-override or sequence tools). Scope: one batch, shippable on its own: implement ->

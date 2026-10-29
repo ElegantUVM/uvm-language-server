@@ -1,7 +1,7 @@
 # f4-parity spec: formatting, signature help, highlights and folding
 
 Written 2026-10-06 after reading the Feature 3 spec and the saved `roadmap-beat-dvt` notes.
-The requested baseline is `main` at eb05215; the working copy inspected for this spec is d65a5a7,
+The requested baseline is `main` at 8a4ba31; the working copy inspected for this spec is 55bbbf1,
 which also contains Feature 3 and its hardening. Roadmap: "Other quick wins" (signature help,
 estimated 1.5 days) and "Gaps on our side" (wire Verible, estimated 1 day). The saved notes give no
 separate estimate for highlights/folding. Three independent batches, each shippable on its own:

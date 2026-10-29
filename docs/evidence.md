@@ -5,7 +5,7 @@ reproducible: the corpus tooling (repositories at pinned commits, the filelists 
 is described in the project's durable corpus manifest and will be published with the repository; the tables are
 `tools/corpus_evidence.py` over the run's `summary.json`.
 
-**Run:** 2026-10-16, server at commit `af31edf` (the launch fixes), Python 3.14.4, pyslang 12.0.0, WSL2 on a
+**Run:** 2026-10-16, server at commit `2aa6fdf` (the launch fixes), Python 3.14.4, pyslang 12.0.0, WSL2 on a
 16-core machine, two cases at a time. Each row is one `python -m uvmls` process per command (`stats`, `lint`,
 `elab`, `topology`, `graph`), measured by `/usr/bin/time`; "Index" is the cold index of the whole project with the
 bundled Accellera UVM 1.2, "RSS" the peak memory of that process.
@@ -101,7 +101,7 @@ sparse checkout does not contain produce `CouldNotOpenIncludeFile`.
 
 ## Against the previous run
 
-The run before the launch fixes (server at `b610a22`, 2026-10-09) differs in exactly two ways, both intended:
+The run before the launch fixes (server at `2bbf7c9`, 2026-10-09) differs in exactly two ways, both intended:
 
 - one `unknown-base` finding fewer on cv32e40p (svlib's `class ... #(type T) extends T`; STATUS I19);
 - the topologies that stopped at the test now expand, because creates through a base test's type parameter
