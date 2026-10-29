@@ -128,6 +128,6 @@ Last updated: 2026-10-16 (evening); see the Release rows F71–F77.
 | D02 | Roadmap | What to build next | ✅ Done | Launch first (F71–F76), then F40 and F41 for v0.2 in February 2027. |
 | D03 | Debug | Provide 5–10 hung-simulation logs and answer the 4 open questions | 🔴 Open | Unblocks F43–F47. |
 | D04 | Repo | Delete the old merged branches (I30) | ✅ Done | Deleted with the author rewrite, 2026-10-16. |
-| D05 | Release | Public identity | ✅ Done | Brand ElegantUVM, published under the owner's real name (Vishal B), GitHub noreply e-mail; history to be rewritten once before the first public push. |
+| D05 | Release | Public identity | ✅ Done | Brand ElegantUVM, published under the owner's real name (Vishal B), GitHub noreply e-mail; history rewritten before the first public push (2026-10-16 and 2026-10-29). |
 | D06 | Release | Ownership: a wholly personal project | ✅ Done | Confirmed 2026-10-29. Nothing blocks going public. |
 | D07 | Release | Accounts: Marketplace publisher `elegantuvm`, Open VSX namespace `elegantuvm`, PyPI project `uvmls` with a pending trusted publisher (release.yml, environment `pypi`), the domain elegantuvm.dev; then make the repository public | 🔴 Open | Owner's actions, step by step in `docs/releasing.md` (2026-10-29). The only thing left before the soft launch. |
