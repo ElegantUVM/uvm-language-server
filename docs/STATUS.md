@@ -128,6 +128,6 @@ Last updated: 2026-11-05; see the Release rows F71–F77 and D05–D07.
 | D02 | Roadmap | What to build next | ✅ Done | Launch first (F71–F76), then F40 and F41 for v0.2 in February 2027. |
 | D03 | Debug | Hung-simulation logs from public projects or contributors (5–10) to design the hang tools against | 🔴 Open | Unblocks F43–F47. |
 | D04 | Repo | Delete the old merged branches (I30) | ✅ Done | Deleted 2026-10-16. |
-| D05 | Release | Public identity | ✅ Done | Brand ElegantUVM; published under the author's name (Vishal B) with a GitHub noreply e-mail. |
+| D05 | Release | Public identity | ✅ Done | Brand ElegantUVM; published under the author's name (Vishal Bhartiya; GitHub `vishal-bhartiya`, repository in the `ElegantUVM` organisation) with a GitHub noreply e-mail. |
 | D06 | Release | Go/no-go for the public launch | ✅ Done | Decided 2026-10-29: go. Only D07 remains. |
 | D07 | Release | Accounts: Marketplace publisher `elegantuvm`, Open VSX namespace `elegantuvm`, PyPI project `uvmls` with a pending trusted publisher (release.yml, environment `pypi`), the domain elegantuvm.dev; then make the repository public | 🟡 In progress | Step by step in `docs/releasing.md` (2026-10-29). 2026-11-05: the repository moved to the `ElegantUVM` GitHub organisation (same URL; the maintainer's personal account is `vishal-bhartiya`), the `pypi` environment exists, and CI runs again on the organisation's Actions minutes. Open: Marketplace publisher, Open VSX namespace and token, PyPI pending publisher, public visibility. |
