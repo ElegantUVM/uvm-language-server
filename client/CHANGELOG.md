@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0 is reached.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-05
+
 ### Changed
 
 - New extension icon: a chip marked "elegant UVM". Its master is `docs/media/icon.svg`, built with
