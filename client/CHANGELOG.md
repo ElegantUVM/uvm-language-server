@@ -5,7 +5,7 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0 is reached.
 
 ## [Unreleased]
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-11-05
 
 The first public preview. Everything below is in `docs/STATUS.md` with its known limits.
 
