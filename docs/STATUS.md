@@ -3,7 +3,7 @@
 The one place that says what exists, what is planned and what is wrong. Every row keeps its ID for
 good, so a row can be named in a request ("do F41", "fix I12"). Updated at every milestone.
 
-Last updated: 2026-10-29; see the Release rows F71–F77 and D05–D07.
+Last updated: 2026-11-05; see the Release rows F71–F77 and D05–D07.
 
 **ID:** F = feature (any status), I = issue or limitation, D = decision (the maintainer's).
 
@@ -130,4 +130,4 @@ Last updated: 2026-10-29; see the Release rows F71–F77 and D05–D07.
 | D04 | Repo | Delete the old merged branches (I30) | ✅ Done | Deleted 2026-10-16. |
 | D05 | Release | Public identity | ✅ Done | Brand ElegantUVM; published under the author's name (Vishal B) with a GitHub noreply e-mail. |
 | D06 | Release | Go/no-go for the public launch | ✅ Done | Decided 2026-10-29: go. Only D07 remains. |
-| D07 | Release | Accounts: Marketplace publisher `elegantuvm`, Open VSX namespace `elegantuvm`, PyPI project `uvmls` with a pending trusted publisher (release.yml, environment `pypi`), the domain elegantuvm.dev; then make the repository public | 🔴 Open | Step by step in `docs/releasing.md` (2026-10-29). The only thing left before the soft launch. |
+| D07 | Release | Accounts: Marketplace publisher `elegantuvm`, Open VSX namespace `elegantuvm`, PyPI project `uvmls` with a pending trusted publisher (release.yml, environment `pypi`), the domain elegantuvm.dev; then make the repository public | 🟡 In progress | Step by step in `docs/releasing.md` (2026-10-29). 2026-11-05: the repository moved to the `ElegantUVM` GitHub organisation (same URL; the maintainer's personal account is `vishal-bhartiya`), the `pypi` environment exists, and CI runs again on the organisation's Actions minutes. Open: Marketplace publisher, Open VSX namespace and token, PyPI pending publisher, public visibility. |
