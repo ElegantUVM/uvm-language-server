@@ -2,9 +2,9 @@
 # builds both .vsix packages and the wheel, attaches them to a GitHub release, publishes the wheel to
 # PyPI through trusted publishing (configure the publisher on PyPI: owner ElegantUVM, repository
 # uvm-language-server, workflow release.yml, environment pypi) and the extension to Open VSX (secret
-# OVSX_PAT). The Visual Studio Marketplace is published by hand with Entra ID sign-in
-# (`npx @vscode/vsce publish --packagePath <vsix> --azure-credential` after `az login`), because
-# the global Azure DevOps tokens vsce needs in CI are retired from 1 December 2026.
+# OVSX_PAT), and, when the variable PUBLISH_MARKETPLACE is true, to the Visual Studio Marketplace
+# through Trusted Publishing (OIDC; a policy on the publisher's Trusted Publishing tab names owner
+# ElegantUVM, repository uvm-language-server, workflow release.yml). No Marketplace token is stored.
 name: Release
 on:
   push:
@@ -90,3 +90,19 @@ jobs:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
           for f in client/*.vsix; do npx --yes ovsx publish "$f" -p "$OVSX_PAT"; done
+  marketplace:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ vars.PUBLISH_MARKETPLACE == 'true' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Publish both packages (Trusted Publishing)
+        run: npx --yes @vscode/vsce@4.1.0 publish --oidc --packagePath client/*.vsix

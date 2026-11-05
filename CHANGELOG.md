@@ -5,6 +5,13 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0 is reached.
 
 ## [Unreleased]
 
+### Changed
+
+- New extension icon: a chip marked "elegant UVM". Its master is `docs/media/icon.svg`, built with
+  `tools/make_icon.py`.
+- Releases publish to the Visual Studio Marketplace from the release workflow through Trusted
+  Publishing, without a stored token.
+
 ## [0.1.0] - 2026-11-05
 
 The first public preview. Everything below is in `docs/STATUS.md` with its known limits.

@@ -1,8 +1,7 @@
 # Releasing
 
 How a version of ElegantUVM reaches the Visual Studio Marketplace, Open VSX and PyPI. The build and
-most of the publishing are done by `.github/workflows/release.yml` on a `v*` tag; the Marketplace
-step is done by hand.
+the publishing are done by `.github/workflows/release.yml` on a `v*` tag.
 
 ## One-time setup
 
@@ -10,14 +9,13 @@ Everything in this section is the publisher's own account work; none of it is in
 
 1. **Visual Studio Marketplace publisher.** Sign in at <https://marketplace.visualstudio.com/manage>
    with a Microsoft account and create the publisher with ID `elegantuvm` (it must equal `publisher`
-   in `client/package.json`) and display name `ElegantUVM`.
-   - For publishing from a laptop before **1 December 2026**: create an Azure DevOps organisation
-     if you have none (<https://dev.azure.com>), then a Personal Access Token with *Organization: All
-     accessible organizations* and the scope *Marketplace → Manage*. Keep it in a password manager;
-     global PATs are retired on that date.
-   - After that date, or for CI: follow "secure automated publishing with Microsoft Entra ID" on
-     <https://code.visualstudio.com/api/working-with-extensions/publishing-extension> and publish
-     with `npx @vscode/vsce publish --packagePath <vsix> --azure-credential` after `az login`.
+   in `client/package.json`) and display name `ElegantUVM`. Then open the publisher's **Trusted
+   Publishing** tab and create a policy: repository owner `ElegantUVM`, repository
+   `uvm-language-server`, workflow `release.yml`, no environment. Set the repository variable
+   `PUBLISH_MARKETPLACE` = `true`. The release workflow then publishes with `vsce publish --oidc`; no
+   token is stored anywhere. (Azure DevOps personal access tokens are not needed: global PATs are
+   retired on 1 December 2026, and creating an Azure DevOps organisation now asks for an Azure
+   subscription.)
 2. **Open VSX.** Sign in at <https://open-vsx.org> with the `ElegantUVM` GitHub account, sign the
    Eclipse publisher agreement (needs an Eclipse account whose GitHub username is set), generate an
    access token under *User settings → Access tokens*, then
@@ -54,15 +52,13 @@ Everything in this section is the publisher's own account work; none of it is in
    `elegantuvm-linux-x64-X.Y.Z.vsix` (with the server's wheels for offline setup) and the wheel and
    sdist of `uvmls`, attaches all of them to a GitHub release with generated notes, publishes the
    wheel to PyPI through trusted publishing and both `.vsix` files to Open VSX.
-5. Marketplace, by hand. Download the two `.vsix` files from the GitHub release, then:
-
-   ```sh
-   npx --yes @vscode/vsce publish --packagePath elegantuvm-X.Y.Z.vsix elegantuvm-linux-x64-X.Y.Z.vsix -p "$VSCE_PAT"
-   ```
-
-   (or `--azure-credential` instead of `-p` after `az login`). Both packages share the version; the
-   Marketplace serves the `linux-x64` one to Linux x86_64 clients and the generic one elsewhere.
-   The listing's README, changelog, icon and licence come from the package.
+5. Marketplace: the `marketplace` job publishes both packages when `PUBLISH_MARKETPLACE` is true.
+   Fallback by hand (used for 0.1.0): download the two `.vsix` files from the GitHub release and
+   upload them at <https://marketplace.visualstudio.com/manage/publishers/elegantuvm>, the generic
+   one with *New extension → Visual Studio Code*, then the `linux-x64` one with *⋯ → Update* once
+   the first has finished verifying. Both packages share the version; the Marketplace serves the
+   `linux-x64` one to Linux x86_64 clients and the generic one elsewhere. The listing's README,
+   changelog, icon and licence come from the package.
 6. Check: `pip install uvmls==X.Y.Z && uvmls --version`; install the extension from the Marketplace
    in a clean VS Code profile and open `examples/alu_tb`; open the Open VSX page and the PyPI page.
 

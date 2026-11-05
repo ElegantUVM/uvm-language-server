@@ -1,58 +1,81 @@
-"""Draw the extension icon (client/media/icon.png): a small UVM class hierarchy on a dark tile.
+"""Build the extension icon: docs/media/icon.svg (the master, lettering as outlines) and client/media/icon.png.
 
-Run with the dev venv, which has Pillow:  .venv/bin/python tools/make_icon.py
-Deterministic, so re-running produces the same bytes."""
-from __future__ import annotations
+The design is a chip: a dark die marked "elegant" (Playfair Display Bold Italic) and "UVM" (IBM Plex
+Mono Bold), a pin-1 dot and blue pins, on a white tile. Both typefaces are under the SIL Open Font
+License 1.1; only their glyph outlines end up in the icon, no font files are shipped.
 
+Usage, with fonttools and cairosvg installed (pip install fonttools cairosvg):
+    python tools/make_icon.py <IBMPlexMono-Bold.ttf> <PlayfairDisplay-BoldItalic.ttf>
+Both fonts are on Google Fonts (fonts.google.com/specimen/IBM+Plex+Mono, .../Playfair+Display).
+"""
 import sys
-from pathlib import Path
-
-from PIL import Image, ImageDraw
-
-SIZE = 256
-BG = (20, 26, 38)        # the gallery banner colour, #141a26
-BASE = (45, 212, 191)    # teal: the base class and inheritance edges
-LEAF = (251, 191, 36)    # amber: the leaves (the user's components)
-INK = (20, 26, 38)
+from fontTools.ttLib import TTFont
+from fontTools.pens.svgPathPen import SVGPathPen
+from fontTools.pens.transformPen import TransformPen
+from fontTools.pens.boundsPen import BoundsPen
 
 
-def rounded_tile(draw: ImageDraw.ImageDraw) -> None:
-    draw.rounded_rectangle((0, 0, SIZE - 1, SIZE - 1), radius=52, fill=BG)
+def text_path(font_file, text, size, cx, baseline, target_width=None):
+    """Outline `text` centred on cx, with its baseline at `baseline`; stretch it to target_width if given."""
+    font = TTFont(font_file)
+    gs, cmap, hmtx = font.getGlyphSet(), font.getBestCmap(), font["hmtx"]
+    upm = font["head"].unitsPerEm
+    names = [cmap[ord(ch)] for ch in text]
+    advance = sum(hmtx[n][0] for n in names)
+    sx = sy = size / upm
+    if target_width:
+        # stretch like textLength/lengthAdjust="spacingAndGlyphs": scale x so the ink box spans target_width
+        bp = BoundsPen(gs)
+        x = 0
+        for n in names:
+            gs[n].draw(TransformPen(bp, (1, 0, 0, 1, x, 0)))
+            x += hmtx[n][0]
+        xmin, _, xmax, _ = bp.bounds
+        sx = target_width / (xmax - xmin)
+        left = cx - target_width / 2 - xmin * sx
+    else:
+        left = cx - advance * sx / 2
+    pen = SVGPathPen(gs)
+    x = 0
+    for n in names:
+        gs[n].draw(TransformPen(pen, (sx, 0, 0, -sy, left + x * sx, baseline)))
+        x += hmtx[n][0]
+    return pen.getCommands()
 
 
-def node(draw: ImageDraw.ImageDraw, cx: int, cy: int, w: int, h: int, fill: tuple[int, int, int]) -> None:
-    """A UML class box: a header band and a body, as the class graph draws them."""
-    x0, y0, x1, y1 = cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2
-    draw.rounded_rectangle((x0, y0, x1, y1), radius=10, fill=fill)
-    band = y0 + h // 3
-    draw.line((x0 + 8, band, x1 - 8, band), fill=INK, width=4)
-    for i in range(2):  # two "member" lines in the body
-        y = band + 16 + i * 14
-        draw.line((x0 + 14, y, x1 - 14 - i * 18, y), fill=INK, width=4)
-
-
-def inheritance(draw: ImageDraw.ImageDraw, x0: int, y0: int, x1: int, y1: int) -> None:
-    """An edge from a subclass (x0, y0) up to its base (x1, y1) with a hollow triangle head."""
-    draw.line((x0, y0, x1, y1 + 22), fill=BASE, width=6)
-    head = [(x1, y1), (x1 - 14, y1 + 24), (x1 + 14, y1 + 24)]
-    draw.polygon(head, outline=BASE, fill=BG, width=5)
-
-
-def main(out: Path) -> None:
-    img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    rounded_tile(draw)
-    base = (SIZE // 2, 72)
-    leaves = [(72, 184), (SIZE - 72, 184)]
-    for lx, ly in leaves:
-        inheritance(draw, lx, ly - 34, base[0] + (-26 if lx < base[0] else 26), base[1] + 34)
-    node(draw, *base, 112, 68, BASE)
-    for lx, ly in leaves:
-        node(draw, lx, ly, 104, 68, LEAF)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out, format="PNG", optimize=True)
-    print(f"wrote {out} ({SIZE}x{SIZE})")
+def build(mono, serif):
+    d0, d1, plen, pw = 48, 208, 20, 16
+    span = d1 - d0
+    k = span / 144
+    mid, step = (d0 + d1) / 2, span / 4.5
+    pins = []
+    for c in (mid - step, mid, mid + step):
+        x = c - pw / 2
+        pins += [(x, d0 - plen, pw, plen + 2), (x, d1 - 2, pw, plen + 2), (d0 - plen, x, plen + 2, pw), (d1 - 2, x, plen + 2, pw)]
+    pin_svg = "".join(f'<rect x="{x:.2f}" y="{y:.2f}" width="{w}" height="{h}" rx="2.5" fill="#2f5bd3"/>' for x, y, w, h in pins)
+    elegant = text_path(serif, "elegant", 24 * k, 128, d0 + 46 * k + 3)
+    uvm = text_path(mono, "UVM", 62 * k, 128, d0 + 110 * k + 3, target_width=122 * k)
+    dot = d0 + 22 * k
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+<title>ElegantUVM</title>
+<defs><linearGradient id="die" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1d2230"/><stop offset="1" stop-color="#11141c"/></linearGradient></defs>
+<rect width="256" height="256" rx="56" fill="#ffffff"/>
+<rect x="3" y="3" width="250" height="250" rx="53" fill="none" stroke="#d8dce6" stroke-width="6"/>
+{pin_svg}
+<rect x="{d0}" y="{d0}" width="{span}" height="{span}" rx="6" fill="url(#die)"/>
+<circle cx="{dot:.2f}" cy="{dot:.2f}" r="{5.5 * k:.2f}" fill="#ffffff"/>
+<path fill="#9fb4ff" d="{elegant}"/>
+<path fill="#ffffff" d="{uvm}"/>
+</svg>
+"""
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "client" / "media" / "icon.png")
+    from pathlib import Path
+    import cairosvg
+
+    root = Path(__file__).resolve().parent.parent
+    svg = build(*sys.argv[1:3])
+    (root / "docs/media/icon.svg").write_text(svg)
+    cairosvg.svg2png(bytestring=svg.encode(), write_to=str(root / "client/media/icon.png"), output_width=256, output_height=256)
+    print("wrote docs/media/icon.svg and client/media/icon.png")
