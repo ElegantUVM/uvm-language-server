@@ -30,14 +30,26 @@ function python() {
   return process.env.UVMLS_PYTHON || (fs.existsSync(venv) ? venv : "python3");
 }
 
-/** pip download for each supported Python version into `dir` (a version's wheels can overlap). */
-function download(dir) {
+/**
+ * pip download for each supported Python version into `dir` (a version's wheels can overlap).
+ * `requirements` are ranges when re-locking; when fetching they are the lock's exact pins with `noDeps`,
+ * so a newer release on PyPI cannot replace a pinned wheel.
+ */
+function download(dir, requirements = REQUIREMENTS, noDeps = false) {
   for (const version of PYTHON_VERSIONS) {
     console.log(`pip download for Python ${version} (linux x86_64)`);
-    execFileSync(python(), ["-m", "pip", "download", "-q", "-d", dir, "--only-binary=:all:",
+    execFileSync(python(), ["-m", "pip", "download", "-q", "-d", dir, "--only-binary=:all:", ...(noDeps ? ["--no-deps"] : []),
       "--python-version", version, "--implementation", "cp", "--abi", "abi3", "--abi", `cp${version.replace(".", "")}`,
-      "--abi", "none", ...PLATFORMS.flatMap((p) => ["--platform", p]), ...REQUIREMENTS], { stdio: "inherit" });
+      "--abi", "none", ...PLATFORMS.flatMap((p) => ["--platform", p]), ...requirements], { stdio: "inherit" });
   }
+}
+
+/** `name==version` for every wheel in the lock (wheel file names start with `name-version-`). */
+export function pinnedRequirements(lock) {
+  return [...new Set(lock.files.map((e) => {
+    const [name, version] = e.name.split("-");
+    return `${name}==${version}`;
+  }))].sort();
 }
 
 export function readLock() {
@@ -58,7 +70,7 @@ export function fetchWheels() {
     fs.mkdirSync(CACHE, { recursive: true });
     const work = fs.mkdtempSync(path.join(CACHE, "fetch-"));
     try {
-      download(work);
+      download(work, pinnedRequirements(lock), true);
       for (const entry of missing) {
         const got = path.join(work, entry.name);
         if (!fs.existsSync(got)) {
